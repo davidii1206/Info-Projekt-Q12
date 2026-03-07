@@ -4,6 +4,7 @@
 #include <vector>
 #include "Window/Window.h"
 #include "Core/Timer.h"
+#include "Core/PhysicsServer.h"
 
 class Renderer;
 class World;
@@ -18,9 +19,10 @@ public:
 private:
     void ProcessEvents();
 
-    Window m_Window;
+    Window                    m_Window;
     std::unique_ptr<Renderer> m_Renderer;
-    std::unique_ptr<World> m_World;
-    Timer m_Timer;
-    bool m_Running = true;
+    PhysicsServer             m_Physics;   // vor m_World — World braucht den Pointer
+    std::unique_ptr<World>    m_World;
+    Timer                     m_Timer;
+    bool                      m_Running = true;
 };
