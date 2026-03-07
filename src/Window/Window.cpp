@@ -2,7 +2,6 @@
 #include <SDL3/SDL.h>
 #include <spdlog/spdlog.h>
 #include <array>
-#include <glad/glad.h>
 
 Window* CreateWindow(Window& win) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -10,13 +9,7 @@ Window* CreateWindow(Window& win) {
         return nullptr;
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-
-    Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE;
+    Uint32 flags = SDL_WINDOW_RESIZABLE;
     if (win.mode == WindowMode::Fullscreen) {
         flags |= SDL_WINDOW_FULLSCREEN;
     } 
@@ -36,15 +29,6 @@ Window* CreateWindow(Window& win) {
         return nullptr;
     }
 
-    win.context = SDL_GL_CreateContext(win.handle);
-    if (!win.context) {
-        spdlog::error("[Window] SDL_GL_CreateContext Error: {}", SDL_GetError());
-        SDL_DestroyWindow(win.handle);
-        win.handle = nullptr;
-        return nullptr;
-    }
-
-    SDL_GL_SetSwapInterval(win.vsync ? 1 : 0);
     win.hasFocus = true;
 
     return &win;
@@ -53,10 +37,8 @@ Window* CreateWindow(Window& win) {
 void DestroyWindow(Window* win) {
     if (!win) return;
 
-    if (win->context) SDL_GL_DestroyContext(win->context);
     if (win->handle) SDL_DestroyWindow(win->handle);
 
-    win->context = nullptr;
     win->handle = nullptr;
 
     SDL_Quit();
@@ -85,8 +67,6 @@ void SetResolution(Window* win, int width, int height) {
 }
 
 void SetVsync(Window* win, bool enabled) {
-    if (!win || !win->context) return;
-    SDL_GL_SetSwapInterval(enabled ? 1 : 0);
     win->vsync = enabled;
 }
 

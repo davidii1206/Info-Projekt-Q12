@@ -3,7 +3,6 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
-#include <glad/glad.h>
 
 #ifdef _WIN32
 #undef CreateWindow
@@ -18,7 +17,6 @@ struct Window {
     WindowMode mode;
     bool vsync;
     SDL_Window* handle = nullptr;
-    SDL_GLContext context = nullptr;
     bool hasFocus;
 };
 
