@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "../Graphics/Renderer.h"
 #include "../Gameplay/World.h"
+#include "../Networking/NetworkDebugUI.h"
 #include "Input.h"
 #include "AssetManager.h"
 #include <imgui.h>
@@ -37,14 +38,17 @@ void Application::Run() {
         Input::Update();
         ProcessEvents();
 
+        m_Network.Update();
         m_World->Update(m_Timer.GetDeltaTime());
 
         m_Renderer->BeginFrame();
-        
+
         ImGui::Begin("Bugmin Debugger");
         ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
         if (ImGui::Button("Exit")) m_Running = false;
         ImGui::End();
+
+        NetDebug::Draw(m_Network);
 
         m_Renderer->EndFrame();
     }
