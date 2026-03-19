@@ -4,9 +4,6 @@
 #include "../Gameplay/TestScene.h"
 #include "Input.h"
 #include "AssetManager.h"
-#include "../Graphics/API/GPUBuffer.h"
-#include "../Graphics/API/GraphicsPipeline.h"
-#include "../Graphics/ShapeGenerator.h"
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <spdlog/spdlog.h>
@@ -32,11 +29,10 @@ Application::Application() {
 
 Application::~Application() {
     m_TestScene.reset();
-
     m_World.reset();
-    AssetManager::Shutdown();
     m_Renderer.reset();
     DestroyWindow(&m_Window);
+    AssetManager::Shutdown();
 }
 
 void Application::Run() {

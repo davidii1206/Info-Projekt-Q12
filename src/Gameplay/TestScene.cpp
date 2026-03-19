@@ -9,7 +9,7 @@
 TestScene::TestScene(Renderer* renderer) {
     m_WindowHandle = renderer->GetWindow()->handle;
     m_Camera = std::make_unique<Camera>();
-    m_Camera->m_Position = {0, 0, 0}; // Start slightly back in the Sponza hall
+    m_Camera->m_Position = {0, 0, 0};
 
     // Attempt to load a scene
     m_Scene = AssetManager::LoadScene("assets/SponzaModel.glb");
