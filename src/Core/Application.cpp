@@ -1,14 +1,17 @@
 #include "Application.h"
 #include "../Graphics/Renderer.h"
 #include "../Gameplay/World.h"
+#include "../Gameplay/TestScene.h"
 #include "Input.h"
 #include "AssetManager.h"
+#include "../Graphics/API/GPUBuffer.h"
+#include "../Graphics/API/GraphicsPipeline.h"
+#include "../Graphics/ShapeGenerator.h"
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <spdlog/spdlog.h>
 
 Application::Application() {
-    AssetManager::Init();
     m_Window.title = "Bugmin Engine";
     m_Window.width = 1280;
     m_Window.height = 720;
@@ -21,14 +24,19 @@ Application::Application() {
     }
 
     m_Renderer = std::make_unique<Renderer>(&m_Window);
+    AssetManager::Init(m_Renderer->GetDevice());
     m_World = std::make_unique<World>();
+
+    m_TestScene = std::make_unique<TestScene>(m_Renderer.get());
 }
 
 Application::~Application() {
+    m_TestScene.reset();
+
     m_World.reset();
+    AssetManager::Shutdown();
     m_Renderer.reset();
     DestroyWindow(&m_Window);
-    AssetManager::Shutdown();
 }
 
 void Application::Run() {
@@ -38,15 +46,20 @@ void Application::Run() {
         ProcessEvents();
 
         m_World->Update(m_Timer.GetDeltaTime());
+        if (m_TestScene) m_TestScene->Update(m_Timer.GetDeltaTime());
 
-        m_Renderer->BeginFrame();
-        
-        ImGui::Begin("Bugmin Debugger");
-        ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
-        if (ImGui::Button("Exit")) m_Running = false;
-        ImGui::End();
+        if (m_Renderer->BeginFrame()) {
+            if (m_TestScene) m_TestScene->Render(m_Renderer.get());
 
-        m_Renderer->EndFrame();
+            ImGui::Begin("Bugmin Debugger");
+            ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
+            if (ImGui::Button("Exit")) m_Running = false;
+            ImGui::End();
+
+            if (m_TestScene) m_TestScene->OnImGui();
+
+            m_Renderer->EndFrame();
+        }
     }
 }
 

@@ -1,0 +1,3075 @@
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/main.cpp
+#include "Core/Application.h"
+#include <spdlog/spdlog.h>
+int main(int argc, char* argv[]) {
+try {
+Application app;
+app.Run();
+} catch (const std::exception& e) {
+spdlog::error("An error occured during the booting of the application: {}", e.what());
+return 1;
+}
+return 0;
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Window/Window.h
+#pragma once
+#include <SDL3/SDL.h>
+#include <glm/glm.hpp>
+#include <string>
+#include <vector>
+/**
+* @file Window.h
+* @brief Window management and event polling.
+*/
+#ifdef _WIN32
+#undef CreateWindow
+#endif
+/**
+* @brief Window display modes.
+*/
+enum class WindowMode { Windowed, Borderless, Fullscreen };
+/**
+* @brief Structure holding SDL window state.
+*/
+struct Window {
+uint32_t width;
+uint32_t height;
+std::string title;
+WindowMode mode;
+bool vsync;
+SDL_Window* handle = nullptr;
+bool hasFocus;
+};
+/**
+* @brief Creates a system window.
+* @param win Reference to window configuration.
+* @return Pointer to the configured window.
+*/
+Window* CreateWindow(Window& win);
+void DestroyWindow(Window* win);
+void SetWindowMode(Window* win, WindowMode mode);
+void SetResolution(Window* win, int width, int height);
+void SetVsync(Window* win, bool enabled);
+std::vector<SDL_Event> PollEvents();
+bool WindowHasFocus(const Window* win);
+glm::ivec2 GetWindowSize(const Window* win);
+glm::vec2 GetMousePos();
+void SetMousePos(Window* win, float x, float y);
+void HideCursor();
+void ShowCursor();
+void SetRelativeMouseMode(Window* win, bool enabled);
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Window/Window.cpp
+#include "Window.h"
+#include <SDL3/SDL.h>
+#include <spdlog/spdlog.h>
+#include <array>
+Window* CreateWindow(Window& win) {
+if (!SDL_Init(SDL_INIT_VIDEO)) {
+spdlog::error("[Window] SDL_Init Error: {}", SDL_GetError());
+return nullptr;
+}
+Uint32 flags = SDL_WINDOW_RESIZABLE;
+if (win.mode == WindowMode::Fullscreen) {
+flags |= SDL_WINDOW_FULLSCREEN;
+}
+else if (win.mode == WindowMode::Borderless) {
+flags |= SDL_WINDOW_BORDERLESS;
+}
+win.handle = SDL_CreateWindow(
+win.title.c_str(),
+win.width,
+win.height,
+flags
+);
+if (!win.handle) {
+spdlog::error("[Window] SDL_CreateWindow Error: {}", SDL_GetError());
+return nullptr;
+}
+win.hasFocus = true;
+return &win;
+}
+void DestroyWindow(Window* win) {
+if (!win) return;
+if (win->handle) SDL_DestroyWindow(win->handle);
+win->handle = nullptr;
+SDL_Quit();
+}
+void SetWindowMode(Window* win, WindowMode mode) {
+if (!win) return;
+Uint32 flags = 0;
+switch (mode) {
+case WindowMode::Windowed: flags = 0; break;
+case WindowMode::Borderless: flags = SDL_WINDOW_BORDERLESS; break;
+case WindowMode::Fullscreen: flags = SDL_WINDOW_FULLSCREEN; break;
+}
+SDL_SetWindowFullscreen(win->handle, flags);
+win->mode = mode;
+}
+void SetResolution(Window* win, int width, int height) {
+if (!win || !win->handle) return;
+SDL_SetWindowSize(win->handle, width, height);
+win->width = width;
+win->height = height;
+}
+void SetVsync(Window* win, bool enabled) {
+win->vsync = enabled;
+}
+std::vector<SDL_Event> PollEvents() {
+std::vector<SDL_Event> events;
+SDL_Event event;
+while(SDL_PollEvent(&event)) {
+events.push_back(event);
+}
+return events;
+}
+bool WindowHasFocus(const Window* win) {
+if (!win) return false;
+return win->hasFocus;
+}
+glm::ivec2 GetWindowSize(const Window* win) {
+if (!win) return glm::ivec2(0);
+return glm::ivec2(win->width, win->height);
+}
+glm::vec2 GetMousePos() {
+float x, y;
+SDL_GetMouseState(&x, &y);
+return glm::vec2{x, y};
+}
+void SetMousePos(Window* win, float x, float y) {
+SDL_WarpMouseInWindow(win->handle, x, y);
+}
+void HideCursor() {
+SDL_HideCursor();
+}
+void ShowCursor() {
+SDL_ShowCursor();
+}
+void SetRelativeMouseMode(Window* win, bool enabled) {
+SDL_SetWindowRelativeMouseMode(win->handle, enabled ? true : false);
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/Renderer.h
+#pragma once
+#include <SDL3/SDL.h>
+#include <glm/glm.hpp>
+#include "Window/Window.h"
+#include "API/FrameGraph.h"
+#include "API/PipelineLibrary.h"
+#include "GlobalUniforms.h"
+struct SDL_GPUDevice;
+struct SDL_GPUCommandBuffer;
+struct SDL_GPURenderPass;
+struct SDL_GPUTexture;
+/**
+* @brief Core rendering class managing the SDL3 GPU device and frame lifecycle.
+*/
+class Renderer {
+public:
+Renderer(Window* window);
+~Renderer();
+/**
+* @brief Prepares for a new frame by acquiring a command buffer.
+* @return True if acquisition succeeded, false otherwise.
+*/
+bool BeginFrame();
+/**
+* @brief Updates the global uniforms for the current frame.
+*/
+void UpdateGlobalUniforms(const GlobalUniforms& uniforms);
+/**
+* @brief Executes the frame graph and submits the command buffer.
+*/
+void EndFrame();
+/** @brief Adds a pass to the current frame's execution graph. */
+void AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth = true, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr);
+SDL_GPUDevice* GetDevice() const { return m_Device; }
+Window* GetWindow() const { return m_Window; }
+PipelineLibrary* GetPipelines() const { return m_PipelineLibrary.get(); }
+GPUBuffer* GetGlobalUBO() const { return m_GlobalUBO.get(); }
+private:
+Window* m_Window;
+SDL_GPUDevice* m_Device;
+SDL_GPUCommandBuffer* m_CurrentCommandBuffer;
+SDL_GPUTexture* m_CurrentSwapchainTexture;
+std::unique_ptr<FrameGraph> m_FrameGraph;
+std::unique_ptr<PipelineLibrary> m_PipelineLibrary;
+std::unique_ptr<GPUBuffer> m_GlobalUBO;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/Camera.h
+#pragma once
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+/**
+* @class Camera
+* @brief A simple 3D orbiting camera for testing purposes.
+*/
+class Camera {
+public:
+Camera() : m_Position(0.0f, 2.0f, 5.0f), m_Yaw(-90.0f), m_Pitch(0.0f) {
+UpdateVectors();
+}
+void Update(float deltaTime) {
+}
+void Rotate(float xOffset, float yOffset) {
+m_Yaw += xOffset * m_Sensitivity;
+m_Pitch -= yOffset * m_Sensitivity;
+if (m_Pitch > 89.0f) m_Pitch = 89.0f;
+if (m_Pitch < -89.0f) m_Pitch = -89.0f;
+UpdateVectors();
+}
+void Move(glm::vec3 direction, float deltaTime) {
+float velocity = m_MovementSpeed * deltaTime;
+m_Position += direction * velocity;
+}
+void UpdateVectors() {
+glm::vec3 front;
+front.x = cos(glm::radians(m_Yaw)) * cos(glm::radians(m_Pitch));
+front.y = sin(glm::radians(m_Pitch));
+front.z = sin(glm::radians(m_Yaw)) * cos(glm::radians(m_Pitch));
+m_Front = glm::normalize(front);
+m_Right = glm::normalize(glm::cross(m_Front, m_WorldUp));
+m_Up = glm::normalize(glm::cross(m_Right, m_Front));
+}
+glm::mat4 GetViewMatrix() const {
+return glm::lookAt(m_Position, m_Position + m_Front, m_Up);
+}
+glm::mat4 GetProjectionMatrix(float aspect) const {
+if (m_Orthographic) {
+float orthoHeight = 10.0f;
+float orthoWidth = orthoHeight * aspect;
+// Reverse-Z ortho: swap near and far
+return glm::ortho(-orthoWidth, orthoWidth, -orthoHeight, orthoHeight, m_Far, m_Near);
+}
+// Reverse-Z perspective: swap near and far planes
+return glm::perspective(glm::radians(m_FOV), aspect, m_Far, m_Near);
+}
+// Camera parameters
+glm::vec3 m_Position;
+glm::vec3 m_Front;
+glm::vec3 m_Up;
+glm::vec3 m_Right;
+glm::vec3 m_WorldUp = {0.0f, 1.0f, 0.0f};
+float m_Yaw;
+float m_Pitch;
+float m_FOV = 45.0f;
+float m_Near = 0.1f;
+float m_Far = 1000.0f;
+bool m_Orthographic = false;
+float m_MovementSpeed = 5.0f;
+float m_Sensitivity = 0.1f;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/Renderer.cpp
+#include "Renderer.h"
+#include <spdlog/spdlog.h>
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
+#include <imgui_impl_sdlgpu3.h>
+Renderer::Renderer(Window* window)
+: m_Window(window), m_Device(nullptr), m_CurrentCommandBuffer(nullptr),
+m_CurrentSwapchainTexture(nullptr)
+{
+m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, "vulkan");
+if (!m_Device) {
+spdlog::warn("Vulkan not available or failed to init, falling back to default GPU driver.");
+m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, nullptr);
+}
+if (!m_Device) {
+spdlog::critical("Failed to create SDL GPU Device: {}", SDL_GetError());
+return;
+}
+if (!SDL_ClaimWindowForGPUDevice(m_Device, m_Window->handle)) {
+spdlog::critical("Failed to claim window for SDL GPU Device: {}", SDL_GetError());
+return;
+}
+spdlog::info("SDL3 GPU Renderer Initialized! Backend: {}", SDL_GetGPUDeviceDriver(m_Device));
+m_FrameGraph = std::make_unique<FrameGraph>(m_Device);
+m_PipelineLibrary = std::make_unique<PipelineLibrary>(m_Device);
+m_GlobalUBO = std::make_unique<GPUBuffer>(m_Device, BufferUsage::Uniform, sizeof(GlobalUniforms) + 256); // Extra space for alignment safety
+IMGUI_CHECKVERSION();
+ImGui::CreateContext();
+ImGui_ImplSDL3_InitForSDLGPU(m_Window->handle);
+ImGui_ImplSDLGPU3_InitInfo init_info = {};
+init_info.Device = m_Device;
+init_info.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(m_Device, m_Window->handle);
+ImGui_ImplSDLGPU3_Init(&init_info);
+}
+Renderer::~Renderer() {
+ImGui_ImplSDLGPU3_Shutdown();
+ImGui_ImplSDL3_Shutdown();
+ImGui::DestroyContext();
+m_GlobalUBO.reset();
+m_PipelineLibrary.reset();
+m_FrameGraph.reset();
+if (m_Device) {
+SDL_ReleaseWindowFromGPUDevice(m_Device, m_Window->handle);
+SDL_DestroyGPUDevice(m_Device);
+}
+}
+bool Renderer::BeginFrame() {
+m_CurrentCommandBuffer = SDL_AcquireGPUCommandBuffer(m_Device);
+if (!m_CurrentCommandBuffer) return false;
+if (!SDL_WaitAndAcquireGPUSwapchainTexture(m_CurrentCommandBuffer, m_Window->handle, &m_CurrentSwapchainTexture, nullptr, nullptr)) {
+m_CurrentSwapchainTexture = nullptr;
+SDL_SubmitGPUCommandBuffer(m_CurrentCommandBuffer);
+m_CurrentCommandBuffer = nullptr;
+return false;
+}
+ImGui_ImplSDLGPU3_NewFrame();
+ImGui_ImplSDL3_NewFrame();
+ImGui::NewFrame();
+return true;
+}
+void Renderer::UpdateGlobalUniforms(const GlobalUniforms& uniforms) {
+if (m_CurrentCommandBuffer) {
+m_GlobalUBO->Upload(&uniforms, sizeof(GlobalUniforms), 0, m_CurrentCommandBuffer);
+}
+}
+void Renderer::AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth, std::function<void(SDL_GPUCommandBuffer*)> preFunc) {
+m_FrameGraph->AddPass(name, target, func, needsDepth, preFunc);
+}
+void Renderer::EndFrame() {
+if (!m_CurrentCommandBuffer) return;
+int w, h;
+SDL_GetWindowSizeInPixels(m_Window->handle, &w, &h);
+m_FrameGraph->Execute(m_CurrentCommandBuffer, m_CurrentSwapchainTexture, (uint32_t)w, (uint32_t)h);
+m_FrameGraph->Reset();
+ImGui::Render();
+ImDrawData* drawData = ImGui::GetDrawData();
+if (drawData && m_CurrentCommandBuffer) {
+ImGui_ImplSDLGPU3_PrepareDrawData(drawData, m_CurrentCommandBuffer);
+if (m_CurrentSwapchainTexture) {
+SDL_GPUColorTargetInfo colorTarget = {};
+colorTarget.texture = m_CurrentSwapchainTexture;
+colorTarget.load_op = SDL_GPU_LOADOP_LOAD;
+colorTarget.store_op = SDL_GPU_STOREOP_STORE;
+SDL_GPURenderPass* uiPass = SDL_BeginGPURenderPass(m_CurrentCommandBuffer, &colorTarget, 1, nullptr);
+if (uiPass) {
+ImGui_ImplSDLGPU3_RenderDrawData(drawData, m_CurrentCommandBuffer, uiPass);
+SDL_EndGPURenderPass(uiPass);
+}
+}
+}
+SDL_SubmitGPUCommandBuffer(m_CurrentCommandBuffer);
+m_CurrentCommandBuffer = nullptr;
+m_CurrentSwapchainTexture = nullptr;
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/GlobalUniforms.h
+#pragma once
+#include <glm/glm.hpp>
+/**
+* @struct GlobalUniforms
+* @brief Standardized uniform buffer for shared scene data.
+*
+* This buffer should be updated once per frame and bound to slot 0
+* in all shaders that require scene-wide information.
+*/
+#include <glm/glm.hpp>
+#include "Lights.h"
+/**
+* @struct GlobalUniforms
+* @brief Standardized uniform buffer for shared scene data.
+*/
+struct alignas(16) GlobalUniforms {
+glm::mat4 view; // 0
+glm::mat4 proj; // 64
+glm::mat4 viewProj; // 128
+glm::mat4 sunVP; // 192
+glm::vec4 sunColor; // 256
+glm::vec4 sunDir; // 272
+glm::vec4 cameraPos; // 288
+float time; // 304
+uint32_t numLights; // 308
+float deltaTime; // 312
+uint32_t frameCount; // 316
+glm::vec2 resolution; // 320
+uint32_t padding[2]; // 328
+Light lights[16]; // 336
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/ShapeGenerator.cpp
+#include "ShapeGenerator.h"
+ShapeData ShapeGenerator::CreateTriangle(float size, const glm::vec4& color) {
+ShapeData data;
+float half = size * 0.5f;
+data.vertices = {
+{ { 0.0f, half, 0.0f }, color },
+{ { half, -half, 0.0f }, color },
+{ {-half, -half, 0.0f }, color }
+};
+data.indices = { 0, 1, 2 };
+return data;
+}
+ShapeData ShapeGenerator::CreateCube(float size, const glm::vec4& color) {
+ShapeData data;
+float h = size * 0.5f;
+data.vertices = {
+// Front
+{ {-h, -h, h}, color }, { { h, -h, h}, color }, { { h, h, h}, color }, { {-h, h, h}, color },
+// Back
+{ {-h, -h, -h}, color }, { { h, -h, -h}, color }, { { h, h, -h}, color }, { {-h, h, -h}, color }
+};
+data.indices = {
+// front
+0, 1, 2, 2, 3, 0,
+// top
+3, 2, 6, 6, 7, 3,
+// back
+7, 6, 5, 5, 4, 7,
+// bottom
+4, 5, 1, 1, 0, 4,
+// left
+4, 0, 3, 3, 7, 4,
+// right
+1, 5, 6, 6, 2, 1
+};
+return data;
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/Lights.h
+#pragma once
+#include <glm/glm.hpp>
+#include <cstdint>
+enum class LightType : uint32_t {
+Directional = 0,
+Point = 1,
+Spot = 2
+};
+struct alignas(16) Light {
+glm::vec3 position; // 0
+uint32_t type; // 12
+glm::vec3 direction; // 16
+float range; // 28
+glm::vec3 color; // 32
+float intensity; // 44
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/Model.h
+#pragma once
+#include <string>
+#include <vector>
+#include <memory>
+#include <glm/glm.hpp>
+#include "API/GPUBuffer.h"
+#include "API/Texture.h"
+/**
+* @struct ModelVertex
+* @brief Standard vertex layout for GLTF-loaded models.
+*/
+struct ModelVertex {
+glm::vec3 position;
+glm::vec3 normal;
+glm::vec2 texCoords;
+glm::vec4 color = {1.0f, 1.0f, 1.0f, 1.0f};
+glm::vec3 tangent = {0.0f, 0.0f, 0.0f};
+};
+/**
+* @struct Material
+* @brief Simple material definition for GLTF models.
+*/
+struct Material {
+std::string name;
+std::shared_ptr<Texture> baseColorTexture;
+std::shared_ptr<Texture> normalTexture;
+std::shared_ptr<Texture> metallicRoughnessTexture;
+glm::vec4 baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
+float metallicFactor = 1.0f;
+float roughnessFactor = 1.0f;
+};
+/**
+* @struct MeshSection
+* @brief A subset of a mesh with a specific material.
+*/
+struct MeshSection {
+uint32_t firstIndex;
+uint32_t indexCount;
+uint32_t materialIndex;
+};
+/**
+* @struct GPUMaterial
+* @brief GPU-side representation of a material for SSBO storage.
+*/
+struct GPUMaterial {
+glm::vec4 baseColorFactor;
+float metallicFactor;
+float roughnessFactor;
+int32_t baseColorTextureIndex; // -1 if no texture
+int32_t normalTextureIndex; // -1 if no texture
+};
+/**
+* @class Model
+* @brief Represents a 3D model with one or more meshes and materials.
+*
+* Performance:
+* - Uses indexed drawing with GPU buffers.
+* - Centralized vertex and index buffers for all meshes in the model.
+* - Materials are stored in an SSBO for efficient access.
+*/
+class Model {
+public:
+Model(SDL_GPUDevice* device, const std::vector<ModelVertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections, const std::vector<Material>& materials);
+~Model();
+/** @brief Returns the vertex buffer. */
+GPUBuffer* GetVertexBuffer() const { return m_VertexBuffer.get(); }
+/** @brief Returns the index buffer. */
+GPUBuffer* GetIndexBuffer() const { return m_IndexBuffer.get(); }
+/** @brief Returns the material storage buffer (SSBO). */
+GPUBuffer* GetMaterialBuffer() const { return m_MaterialBuffer.get(); }
+/** @brief Returns all mesh sections. */
+const std::vector<MeshSection>& GetSections() const { return m_Sections; }
+/** @brief Returns all materials. */
+const std::vector<Material>& GetMaterials() const { return m_Materials; }
+private:
+std::unique_ptr<GPUBuffer> m_VertexBuffer;
+std::unique_ptr<GPUBuffer> m_IndexBuffer;
+std::unique_ptr<GPUBuffer> m_MaterialBuffer;
+std::vector<MeshSection> m_Sections;
+std::vector<Material> m_Materials;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/Model.cpp
+#include "Model.h"
+Model::Model(SDL_GPUDevice* device, const std::vector<ModelVertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections, const std::vector<Material>& materials)
+: m_Sections(sections), m_Materials(materials)
+{
+m_VertexBuffer = std::make_unique<GPUBuffer>(device, BufferUsage::Vertex, (uint32_t)(vertices.size() * sizeof(ModelVertex)));
+m_VertexBuffer->Upload(vertices.data(), (uint32_t)(vertices.size() * sizeof(ModelVertex)));
+m_IndexBuffer = std::make_unique<GPUBuffer>(device, BufferUsage::Index, (uint32_t)(indices.size() * sizeof(uint32_t)));
+m_IndexBuffer->Upload(indices.data(), (uint32_t)(indices.size() * sizeof(uint32_t)));
+// Initialize Material SSBO
+std::vector<GPUMaterial> gpuMaterials;
+for (const auto& mat : materials) {
+GPUMaterial gm;
+gm.baseColorFactor = mat.baseColorFactor;
+gm.metallicFactor = mat.metallicFactor;
+gm.roughnessFactor = mat.roughnessFactor;
+gm.baseColorTextureIndex = -1; // TODO: Map to texture array index if used
+gm.normalTextureIndex = -1;
+gpuMaterials.push_back(gm);
+}
+if (!gpuMaterials.empty()) {
+m_MaterialBuffer = std::make_unique<GPUBuffer>(device, BufferUsage::Compute, (uint32_t)(gpuMaterials.size() * sizeof(GPUMaterial)));
+m_MaterialBuffer->Upload(gpuMaterials.data(), (uint32_t)(gpuMaterials.size() * sizeof(GPUMaterial)));
+}
+}
+Model::~Model() {}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/ShapeGenerator.h
+#pragma once
+#include <glm/glm.hpp>
+#include <vector>
+#include <cstdint>
+/**
+* @struct ShapeVertex
+* @brief Standard vertex layout for basic geometric shapes.
+*/
+struct ShapeVertex {
+glm::vec3 position; ///< x, y, z coordinates.
+glm::vec4 color; ///< r, g, b, a normalized (0.0 to 1.0).
+};
+/**
+* @struct ShapeData
+* @brief Container for generated geometry data.
+*/
+struct ShapeData {
+std::vector<ShapeVertex> vertices;
+std::vector<uint32_t> indices;
+};
+/**
+* @class ShapeGenerator
+* @brief Static utility for generating procedural geometric primitives.
+*/
+class ShapeGenerator {
+public:
+/**
+* @brief Generates a simple 2D triangle.
+* @param size The height/width scale of the triangle.
+* @param color The color applied to all vertices.
+* @return ShapeData containing vertices and indices.
+*/
+static ShapeData CreateTriangle(float size, const glm::vec4& color = {1.0f, 1.0f, 1.0f, 1.0f});
+/**
+* @brief Generates a 3D unit cube.
+* @param size The side length of the cube.
+* @param color The color applied to all vertices.
+* @return ShapeData containing vertices and indices.
+*/
+static ShapeData CreateCube(float size, const glm::vec4& color = {1.0f, 1.0f, 1.0f, 1.0f});
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/Shader.h
+#pragma once
+#include <SDL3/SDL_gpu.h>
+#include <string>
+#include <vector>
+/**
+* @enum ShaderStage
+* @brief Defines which stage of the graphics pipeline the shader belongs to.
+*/
+enum class ShaderStage {
+Vertex,
+Fragment
+};
+/**
+* @struct ShaderResourceLayout
+* @brief Describes the resources used by a shader.
+*
+* SDL3 GPU requires knowing exactly how many resources a shader will bind
+* at creation time.
+*/
+struct ShaderResourceLayout {
+uint32_t numSamplers = 0;
+uint32_t numStorageTextures = 0;
+uint32_t numStorageBuffers = 0;
+uint32_t numUniformBuffers = 0;
+};
+/**
+* @class Shader
+* @brief Wrapper for SDL_GPUShader objects.
+*
+* Handles loading binary shader code (SPIR-V, DXBC, or MSL) from disk
+* and creating the GPU-side shader module.
+*/
+class Shader {
+public:
+/**
+* @brief Loads and creates a shader from a binary file.
+* @param device Pointer to the active SDL_GPUDevice.
+* @param filePath Path to the binary shader file.
+* @param stage Whether this is a vertex or fragment shader.
+* @param layout Description of the resources this shader uses.
+*/
+Shader(SDL_GPUDevice* device, const std::string& filePath, ShaderStage stage, const ShaderResourceLayout& layout);
+~Shader();
+/** @brief Gets the native SDL shader handle. */
+SDL_GPUShader* GetHandle() const { return m_Shader; }
+/** @brief Gets the shader stage. */
+ShaderStage GetStage() const { return m_Stage; }
+private:
+SDL_GPUDevice* m_Device;
+SDL_GPUShader* m_Shader;
+ShaderStage m_Stage;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/PipelineLibrary.h
+#pragma once
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include "GraphicsPipeline.h"
+/**
+* @class PipelineLibrary
+* @brief Manages the lifecycle and caching of GraphicsPipelines.
+*
+* This library allows developers to register pipelines under unique names
+* and retrieve them during the rendering phase, ensuring that expensive
+* pipeline state objects are only created once.
+*/
+class PipelineLibrary {
+public:
+PipelineLibrary(SDL_GPUDevice* device);
+~PipelineLibrary();
+/**
+* @brief Registers a new pipeline in the library.
+* @param name Unique identifier for the pipeline.
+* @param config The configuration used to build the pipeline.
+* @param renderTargetFormat Pixel format of the target (usually swapchain).
+* @return Pointer to the created pipeline.
+*/
+GraphicsPipeline* CreatePipeline(const std::string& name, const PipelineConfig& config, SDL_GPUTextureFormat renderTargetFormat);
+/**
+* @brief Retrieves a previously registered pipeline.
+* @param name The unique name of the pipeline.
+* @return Pointer to the pipeline, or nullptr if not found.
+*/
+GraphicsPipeline* GetPipeline(const std::string& name) const;
+private:
+SDL_GPUDevice* m_Device;
+std::unordered_map<std::string, std::unique_ptr<GraphicsPipeline>> m_Pipelines;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/Shader.cpp
+#include "Shader.h"
+#include <SDL3/SDL.h>
+#include <spdlog/spdlog.h>
+#include <fstream>
+Shader::Shader(SDL_GPUDevice* device, const std::string& filePath, ShaderStage stage, const ShaderResourceLayout& layout)
+: m_Device(device), m_Shader(nullptr), m_Stage(stage)
+{
+// Load binary file
+std::ifstream file(filePath, std::ios::ate | std::ios::binary);
+if (!file.is_open()) {
+spdlog::error("Failed to open shader file: {}", filePath);
+return;
+}
+size_t fileSize = (size_t)file.tellg();
+std::vector<uint8_t> buffer(fileSize);
+file.seekg(0);
+file.read((char*)buffer.data(), fileSize);
+file.close();
+// Determine shader format based on device capabilities
+SDL_GPUShaderFormat format = SDL_GetGPUShaderFormats(m_Device);
+SDL_GPUShaderFormat chosenFormat = SDL_GPU_SHADERFORMAT_INVALID;
+// Preference: SPIRV (Vulkan) -> DXBC (D3D11) -> MSL (Metal)
+if (format & SDL_GPU_SHADERFORMAT_SPIRV) {
+chosenFormat = SDL_GPU_SHADERFORMAT_SPIRV;
+} else if (format & SDL_GPU_SHADERFORMAT_DXBC) {
+chosenFormat = SDL_GPU_SHADERFORMAT_DXBC;
+} else if (format & SDL_GPU_SHADERFORMAT_MSL) {
+chosenFormat = SDL_GPU_SHADERFORMAT_MSL;
+}
+SDL_GPUShaderCreateInfo desc = {};
+desc.code_size = fileSize;
+desc.code = buffer.data();
+desc.entrypoint = "main";
+desc.format = chosenFormat;
+desc.stage = (stage == ShaderStage::Vertex) ? SDL_GPU_SHADERSTAGE_VERTEX : SDL_GPU_SHADERSTAGE_FRAGMENT;
+desc.num_samplers = layout.numSamplers;
+desc.num_storage_textures = layout.numStorageTextures;
+desc.num_storage_buffers = layout.numStorageBuffers;
+desc.num_uniform_buffers = layout.numUniformBuffers;
+m_Shader = SDL_CreateGPUShader(m_Device, &desc);
+if (!m_Shader) {
+spdlog::error("Failed to create GPU Shader from {}: {}", filePath, SDL_GetError());
+} else {
+spdlog::info("Shader created successfully: {}", filePath);
+}
+}
+Shader::~Shader() {
+if (m_Shader) {
+SDL_ReleaseGPUShader(m_Device, m_Shader);
+}
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/Texture.cpp
+#include "Texture.h"
+#include <SDL3/SDL.h>
+#include <spdlog/spdlog.h>
+#include <stb_image.h>
+void SetupSampler(SDL_GPUSamplerCreateInfo& samplerDesc, TextureFilter filter) {
+samplerDesc.min_filter = (filter == TextureFilter::Linear) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+samplerDesc.mag_filter = (filter == TextureFilter::Linear) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
+samplerDesc.mipmap_mode = (filter == TextureFilter::Linear) ? SDL_GPU_SAMPLERMIPMAPMODE_LINEAR : SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+samplerDesc.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+samplerDesc.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+samplerDesc.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+samplerDesc.max_anisotropy = 1.0f;
+samplerDesc.min_lod = 0.0f;
+samplerDesc.max_lod = 1000.0f;
+}
+Texture::Texture(SDL_GPUDevice* device, const std::string& filePath, TextureFilter filter)
+: m_Device(device), m_Texture(nullptr), m_Sampler(nullptr), m_Width(0), m_Height(0)
+{
+int width, height, channels;
+stbi_set_flip_vertically_on_load(false);
+unsigned char* pixels = stbi_load(filePath.c_str(), &width, &height, &channels, 4);
+if (!pixels) {
+spdlog::error("Failed to load image: {} - {}", filePath, stbi_failure_reason());
+return;
+}
+m_Width = (uint32_t)width;
+m_Height = (uint32_t)height;
+SDL_GPUTextureCreateInfo textureDesc = {};
+textureDesc.type = SDL_GPU_TEXTURETYPE_2D;
+textureDesc.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+textureDesc.width = m_Width;
+textureDesc.height = m_Height;
+textureDesc.layer_count_or_depth = 1;
+textureDesc.num_levels = 1;
+textureDesc.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+m_Texture = SDL_CreateGPUTexture(m_Device, &textureDesc);
+if (!m_Texture) {
+spdlog::error("Failed to create GPU Texture for {}: {}", filePath, SDL_GetError());
+stbi_image_free(pixels);
+return;
+}
+SDL_GPUTransferBufferCreateInfo stagingDesc = {};
+stagingDesc.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+stagingDesc.size = m_Width * m_Height * 4;
+SDL_GPUTransferBuffer* stagingBuffer = SDL_CreateGPUTransferBuffer(m_Device, &stagingDesc);
+void* mappedData = SDL_MapGPUTransferBuffer(m_Device, stagingBuffer, false);
+std::memcpy(mappedData, pixels, stagingDesc.size);
+SDL_UnmapGPUTransferBuffer(m_Device, stagingBuffer);
+SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_Device);
+SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmd);
+SDL_GPUTextureTransferInfo source = {};
+source.transfer_buffer = stagingBuffer;
+source.offset = 0;
+SDL_GPUTextureRegion destination = {};
+destination.texture = m_Texture;
+destination.w = m_Width;
+destination.h = m_Height;
+destination.d = 1;
+SDL_UploadToGPUTexture(copyPass, &source, &destination, false);
+SDL_EndGPUCopyPass(copyPass);
+SDL_SubmitGPUCommandBuffer(cmd);
+SDL_ReleaseGPUTransferBuffer(m_Device, stagingBuffer);
+stbi_image_free(pixels);
+SDL_GPUSamplerCreateInfo samplerDesc = {};
+SetupSampler(samplerDesc, filter);
+m_Sampler = SDL_CreateGPUSampler(m_Device, &samplerDesc);
+spdlog::info("Texture loaded successfully: {} ({}x{})", filePath, m_Width, m_Height);
+}
+Texture::Texture(SDL_GPUDevice* device, unsigned char* pixels, uint32_t width, uint32_t height, TextureFilter filter)
+: m_Device(device), m_Texture(nullptr), m_Sampler(nullptr), m_Width(width), m_Height(height)
+{
+SDL_GPUTextureCreateInfo textureDesc = {};
+textureDesc.type = SDL_GPU_TEXTURETYPE_2D;
+textureDesc.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+textureDesc.width = m_Width;
+textureDesc.height = m_Height;
+textureDesc.layer_count_or_depth = 1;
+textureDesc.num_levels = 1;
+textureDesc.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+m_Texture = SDL_CreateGPUTexture(m_Device, &textureDesc);
+if (!m_Texture) {
+spdlog::error("Failed to create GPU Texture from raw data ({}x{}): {}", m_Width, m_Height, SDL_GetError());
+return;
+}
+SDL_GPUTransferBufferCreateInfo stagingDesc = {};
+stagingDesc.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+stagingDesc.size = m_Width * m_Height * 4;
+SDL_GPUTransferBuffer* stagingBuffer = SDL_CreateGPUTransferBuffer(m_Device, &stagingDesc);
+void* mappedData = SDL_MapGPUTransferBuffer(m_Device, stagingBuffer, false);
+std::memcpy(mappedData, pixels, stagingDesc.size);
+SDL_UnmapGPUTransferBuffer(m_Device, stagingBuffer);
+SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_Device);
+SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmd);
+SDL_GPUTextureTransferInfo source = {};
+source.transfer_buffer = stagingBuffer;
+source.offset = 0;
+SDL_GPUTextureRegion destination = {};
+destination.texture = m_Texture;
+destination.w = m_Width;
+destination.h = m_Height;
+destination.d = 1;
+SDL_UploadToGPUTexture(copyPass, &source, &destination, false);
+SDL_EndGPUCopyPass(copyPass);
+SDL_SubmitGPUCommandBuffer(cmd);
+SDL_ReleaseGPUTransferBuffer(m_Device, stagingBuffer);
+SDL_GPUSamplerCreateInfo samplerDesc = {};
+SetupSampler(samplerDesc, filter);
+m_Sampler = SDL_CreateGPUSampler(m_Device, &samplerDesc);
+}
+Texture::Texture(SDL_GPUDevice* device, uint32_t width, uint32_t height, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage, TextureFilter filter)
+: m_Device(device), m_Texture(nullptr), m_Sampler(nullptr), m_Width(width), m_Height(height)
+{
+SDL_GPUTextureCreateInfo textureDesc = {};
+textureDesc.type = SDL_GPU_TEXTURETYPE_2D;
+textureDesc.format = format;
+textureDesc.width = m_Width;
+textureDesc.height = m_Height;
+textureDesc.layer_count_or_depth = 1;
+textureDesc.num_levels = 1;
+textureDesc.usage = usage;
+m_Texture = SDL_CreateGPUTexture(m_Device, &textureDesc);
+if (!m_Texture) {
+spdlog::error("Failed to create empty GPU Texture ({}x{}): {}", m_Width, m_Height, SDL_GetError());
+return;
+}
+if (usage & SDL_GPU_TEXTUREUSAGE_SAMPLER) {
+SDL_GPUSamplerCreateInfo samplerDesc = {};
+SetupSampler(samplerDesc, filter);
+samplerDesc.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+samplerDesc.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+samplerDesc.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+m_Sampler = SDL_CreateGPUSampler(m_Device, &samplerDesc);
+}
+}
+Texture::~Texture() {
+if (m_Sampler) SDL_ReleaseGPUSampler(m_Device, m_Sampler);
+if (m_Texture) SDL_ReleaseGPUTexture(m_Device, m_Texture);
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/PipelineLibrary.cpp
+#include "PipelineLibrary.h"
+#include <spdlog/spdlog.h>
+PipelineLibrary::PipelineLibrary(SDL_GPUDevice* device) : m_Device(device) {}
+PipelineLibrary::~PipelineLibrary() {}
+GraphicsPipeline* PipelineLibrary::CreatePipeline(const std::string& name, const PipelineConfig& config, SDL_GPUTextureFormat renderTargetFormat) {
+if (m_Pipelines.find(name) != m_Pipelines.end()) {
+spdlog::warn("PipelineLibrary: Pipeline '{}' already exists. Returning existing instance.", name);
+return m_Pipelines[name].get();
+}
+auto pipeline = std::make_unique<GraphicsPipeline>(m_Device, config, renderTargetFormat);
+GraphicsPipeline* ptr = pipeline.get();
+m_Pipelines[name] = std::move(pipeline);
+spdlog::info("PipelineLibrary: Registered new pipeline '{}'", name);
+return ptr;
+}
+GraphicsPipeline* PipelineLibrary::GetPipeline(const std::string& name) const {
+auto it = m_Pipelines.find(name);
+if (it != m_Pipelines.end()) {
+return it->second.get();
+}
+spdlog::error("PipelineLibrary: Pipeline '{}' not found!", name);
+return nullptr;
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/RenderContext.h
+#pragma once
+#include <SDL3/SDL_gpu.h>
+#include "GraphicsPipeline.h"
+#include "ComputePipeline.h"
+#include "GPUBuffer.h"
+#include "Texture.h"
+/**
+* @class RenderContext
+* @brief Simplified command recorder for both Graphics and Compute tasks.
+*/
+class RenderContext {
+public:
+// Graphics Constructor
+RenderContext(SDL_GPURenderPass* pass, SDL_GPUCommandBuffer* cmd)
+: m_RenderPass(pass), m_ComputePass(nullptr), m_Cmd(cmd) {}
+// Compute Constructor
+RenderContext(SDL_GPUComputePass* pass, SDL_GPUCommandBuffer* cmd)
+: m_RenderPass(nullptr), m_ComputePass(pass), m_Cmd(cmd) {}
+// --- Graphics Commands ---
+/**
+* @brief Binds a graphics pipeline state object for subsequent draw calls.
+* @param pipeline The graphics pipeline to bind.
+*/
+void BindPipeline(GraphicsPipeline* pipeline);
+/**
+* @brief Binds a vertex buffer to a specific input slot.
+* @param buffer The GPU buffer containing vertex data.
+* @param slot The binding slot index (default 0).
+*/
+void BindVertexBuffer(GPUBuffer* buffer, uint32_t slot = 0);
+/**
+* @brief Binds an index buffer for indexed drawing.
+* @param buffer The GPU buffer containing indices.
+* @param indexSize The size of each index (16-bit or 32-bit).
+*/
+void BindIndexBuffer(GPUBuffer* buffer, SDL_GPUIndexElementSize indexSize = SDL_GPU_INDEXELEMENTSIZE_32BIT);
+/**
+* @brief Binds a texture and sampler to a fragment shader slot.
+* @param slot The binding slot index in the shader.
+* @param texture The texture to bind.
+*/
+void BindFragmentTexture(uint32_t slot, Texture* texture);
+/**
+* @brief Pushes small constant data to the vertex shader.
+* @param slot The binding slot index.
+* @param data Pointer to the data.
+* @param size Size of the data in bytes.
+*/
+void PushVertexConstants(uint32_t slot, const void* data, uint32_t size);
+/**
+* @brief Pushes small constant data to the fragment shader.
+* @param slot The binding slot index.
+* @param data Pointer to the data.
+* @param size Size of the data in bytes.
+*/
+void PushFragmentConstants(uint32_t slot, const void* data, uint32_t size);
+/**
+* @brief Draws primitives using the bound pipeline and vertex buffer.
+* @param vertexCount Number of vertices to draw.
+* @param instanceCount Number of instances to draw (default 1).
+* @param firstVertex Index of the first vertex to draw.
+* @param firstInstance Index of the first instance.
+*/
+void Draw(uint32_t vertexCount, uint32_t instanceCount = 1, uint32_t firstVertex = 0, uint32_t firstInstance = 0);
+/**
+* @brief Draws primitives using the bound index buffer.
+* @param indexCount Number of indices to draw.
+* @param instanceCount Number of instances to draw (default 1).
+* @param firstIndex Index of the first index in the buffer.
+* @param vertexOffset Value added to each index before fetching vertices.
+* @param firstInstance Index of the first instance.
+*/
+void DrawIndexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0, int32_t vertexOffset = 0, uint32_t firstInstance = 0);
+/**
+* @brief Issues an indirect draw call.
+* @param buffer The GPU buffer containing the draw parameters.
+* @param offset The offset in the buffer where parameters start.
+* @param drawCount The number of draws to issue.
+*/
+void DrawIndirect(GPUBuffer* buffer, uint32_t offset = 0, uint32_t drawCount = 1);
+/**
+* @brief Issues an indirect indexed draw call.
+* @param buffer The GPU buffer containing the draw parameters.
+* @param offset The offset in the buffer where parameters start.
+* @param drawCount The number of draws to issue.
+*/
+void DrawIndexedIndirect(GPUBuffer* buffer, uint32_t offset = 0, uint32_t drawCount = 1);
+/**
+* @brief Binds a storage buffer for read-only access in a graphics shader.
+* @param slot The binding slot index.
+* @param buffer The GPU buffer to bind.
+*/
+void BindGraphicsStorageBuffer(uint32_t slot, GPUBuffer* buffer);
+// --- Compute Commands ---
+/**
+* @brief Binds a compute pipeline for subsequent dispatch calls.
+* @param pipeline The compute pipeline to bind.
+*/
+void BindComputePipeline(ComputePipeline* pipeline);
+/**
+* @brief Binds a storage buffer for read/write access in a compute shader.
+* @param slot The binding slot index.
+* @param buffer The GPU buffer to bind.
+* @param write If true, allows writing to the buffer (Read-Write).
+*/
+void BindComputeStorageBuffer(uint32_t slot, GPUBuffer* buffer, bool write = false);
+/**
+* @brief Binds a storage texture for read/write access in a compute shader.
+* @param slot The binding slot index.
+* @param texture The GPU texture to bind.
+* @param write If true, allows writing to the texture (Read-Write).
+*/
+void BindComputeStorageTexture(uint32_t slot, Texture* texture, bool write = false);
+/**
+* @brief Dispatches a compute workgroup.
+* @param groupCountX Number of workgroups in the X dimension.
+* @param groupCountY Number of workgroups in the Y dimension.
+* @param groupCountZ Number of workgroups in the Z dimension.
+*/
+void Dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ);
+private:
+SDL_GPURenderPass* m_RenderPass;
+SDL_GPUComputePass* m_ComputePass;
+SDL_GPUCommandBuffer* m_Cmd;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/ComputePipeline.h
+#pragma once
+#include <SDL3/SDL_gpu.h>
+#include <string>
+/**
+* @struct ComputeConfig
+* @brief Configuration for a Compute Pipeline.
+*/
+struct ComputeConfig {
+size_t codeSize;
+const uint8_t* code;
+const char* entrypoint = "main";
+SDL_GPUShaderFormat format;
+uint32_t numSamplers = 0;
+uint32_t numReadonlyStorageTextures = 0;
+uint32_t numReadonlyStorageBuffers = 0;
+uint32_t numReadwriteStorageTextures = 0;
+uint32_t numReadwriteStorageBuffers = 0;
+uint32_t numUniformBuffers = 0;
+uint32_t threadCountX = 1;
+uint32_t threadCountY = 1;
+uint32_t threadCountZ = 1;
+};
+/**
+* @class ComputePipeline
+* @brief Wrapper for SDL_GPUComputePipeline.
+*
+* Used for general purpose GPU computing tasks (physics, particles, etc.)
+*/
+class ComputePipeline {
+public:
+ComputePipeline(SDL_GPUDevice* device, const ComputeConfig& config);
+~ComputePipeline();
+SDL_GPUComputePipeline* GetHandle() const { return m_Pipeline; }
+private:
+SDL_GPUDevice* m_Device;
+SDL_GPUComputePipeline* m_Pipeline;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/GPUBuffer.h
+#pragma once
+#include <SDL3/SDL_gpu.h>
+#include <cstdint>
+#include <vector>
+/**
+* @enum BufferUsage
+* @brief Defines the intended purpose of a GPU buffer.
+*/
+enum class BufferUsage {
+Vertex, ///< Used for vertex data.
+Index, ///< Used for index data (triangles).
+Uniform, ///< Used for constant/storage data read in shaders.
+Compute ///< Used for compute shader storage (read/write).
+};
+/**
+* @class GPUBuffer
+* @brief High-level abstraction for SDL3 GPU Buffers.
+*
+* Manages the lifecycle of an SDL_GPUBuffer and provides a safe interface
+* for uploading data from the CPU to GPU memory using internal staging.
+*/
+class GPUBuffer {
+public:
+/**
+* @brief Creates a GPU buffer with a specific usage and size.
+* @param device Pointer to the active SDL_GPUDevice.
+* @param usage The intended usage of this buffer.
+* @param size Size of the buffer in bytes.
+*/
+GPUBuffer(SDL_GPUDevice* device, BufferUsage usage, uint32_t size);
+/**
+* @brief Releases the underlying SDL GPU resources.
+*/
+~GPUBuffer();
+/**
+* @brief Uploads data to the GPU buffer.
+*
+* Internally creates a temporary staging buffer, maps it, copies the
+* data, and records a transfer command to the GPU.
+*
+* @param data Pointer to the CPU-side data.
+* @param size Size of data to upload in bytes.
+* @param offset Destination offset within the GPU buffer.
+* @param cmd Optional command buffer to use for the transfer.
+*/
+void Upload(const void* data, uint32_t size, uint32_t offset = 0, SDL_GPUCommandBuffer* cmd = nullptr);
+/** @brief Gets the native SDL handle. */
+SDL_GPUBuffer* GetHandle() const { return m_Buffer; }
+/** @brief Gets the total size of the buffer in bytes. */
+uint32_t GetSize() const { return m_Size; }
+private:
+SDL_GPUDevice* m_Device;
+SDL_GPUBuffer* m_Buffer;
+uint32_t m_Size;
+BufferUsage m_Usage;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/RenderContext.cpp
+#include "RenderContext.h"
+#include <spdlog/spdlog.h>
+// --- Graphics ---
+void RenderContext::BindPipeline(GraphicsPipeline* pipeline) {
+if (m_RenderPass) SDL_BindGPUGraphicsPipeline(m_RenderPass, pipeline->GetHandle());
+}
+void RenderContext::BindVertexBuffer(GPUBuffer* buffer, uint32_t slot) {
+if (m_RenderPass) {
+SDL_GPUBufferBinding binding = { buffer->GetHandle(), 0 };
+SDL_BindGPUVertexBuffers(m_RenderPass, slot, &binding, 1);
+}
+}
+void RenderContext::BindIndexBuffer(GPUBuffer* buffer, SDL_GPUIndexElementSize indexSize) {
+if (m_RenderPass) {
+SDL_GPUBufferBinding binding = { buffer->GetHandle(), 0 };
+SDL_BindGPUIndexBuffer(m_RenderPass, &binding, indexSize);
+}
+}
+void RenderContext::BindFragmentTexture(uint32_t slot, Texture* texture) {
+if (m_RenderPass && texture) {
+SDL_GPUTextureSamplerBinding binding = { texture->GetHandle(), texture->GetSampler() };
+if (!binding.sampler) spdlog::error("RenderContext: Binding texture to slot {} with NULL sampler!", slot);
+// Bind the combined sampler (required for SPIR-V sampler2D)
+SDL_BindGPUFragmentSamplers(m_RenderPass, slot, &binding, 1);
+}
+}
+void RenderContext::PushVertexConstants(uint32_t slot, const void* data, uint32_t size) {
+SDL_PushGPUVertexUniformData(m_Cmd, slot, data, size);
+}
+void RenderContext::PushFragmentConstants(uint32_t slot, const void* data, uint32_t size) {
+SDL_PushGPUFragmentUniformData(m_Cmd, slot, data, size);
+}
+void RenderContext::Draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) {
+if (m_RenderPass) SDL_DrawGPUPrimitives(m_RenderPass, vertexCount, instanceCount, firstVertex, firstInstance);
+}
+void RenderContext::DrawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
+if (m_RenderPass) SDL_DrawGPUIndexedPrimitives(m_RenderPass, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+}
+void RenderContext::DrawIndirect(GPUBuffer* buffer, uint32_t offset, uint32_t drawCount) {
+if (m_RenderPass) SDL_DrawGPUPrimitivesIndirect(m_RenderPass, buffer->GetHandle(), offset, drawCount);
+}
+void RenderContext::DrawIndexedIndirect(GPUBuffer* buffer, uint32_t offset, uint32_t drawCount) {
+if (m_RenderPass) SDL_DrawGPUIndexedPrimitivesIndirect(m_RenderPass, buffer->GetHandle(), offset, drawCount);
+}
+void RenderContext::BindGraphicsStorageBuffer(uint32_t slot, GPUBuffer* buffer) {
+if (m_RenderPass) {
+SDL_GPUBuffer* handle = buffer->GetHandle();
+SDL_BindGPUVertexStorageBuffers(m_RenderPass, slot, &handle, 1);
+SDL_BindGPUFragmentStorageBuffers(m_RenderPass, slot, &handle, 1);
+}
+}
+// --- Compute ---
+void RenderContext::BindComputePipeline(ComputePipeline* pipeline) {
+if (m_ComputePass) SDL_BindGPUComputePipeline(m_ComputePass, pipeline->GetHandle());
+}
+void RenderContext::BindComputeStorageBuffer(uint32_t slot, GPUBuffer* buffer, bool write) {
+if (m_ComputePass) {
+SDL_GPUBuffer* handle = buffer->GetHandle();
+SDL_BindGPUComputeStorageBuffers(m_ComputePass, slot, &handle, 1);
+}
+}
+void RenderContext::BindComputeStorageTexture(uint32_t slot, Texture* texture, bool write) {
+if (m_ComputePass) {
+SDL_GPUTexture* handle = texture->GetHandle();
+SDL_BindGPUComputeStorageTextures(m_ComputePass, slot, &handle, 1);
+}
+}
+void RenderContext::Dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) {
+if (m_ComputePass) SDL_DispatchGPUCompute(m_ComputePass, groupCountX, groupCountY, groupCountZ);
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/GraphicsPipeline.h
+#pragma once
+#include <SDL3/SDL_gpu.h>
+#include "Shader.h"
+#include <vector>
+/**
+* @struct VertexAttribute
+* @brief Describes a single attribute in a vertex (e.g., Position, Color).
+*/
+struct VertexAttribute {
+uint32_t location; ///< Shader location (layout(location = X)).
+SDL_GPUVertexElementFormat format; ///< Data format (e.g., Float3, UB4).
+uint32_t offset; ///< Offset from the start of the vertex struct.
+};
+/**
+* @struct PipelineConfig
+* @brief Configuration for creating a Graphics Pipeline.
+*/
+struct PipelineConfig {
+/** @brief The vertex shader module to use. */
+Shader* vertexShader = nullptr;
+/** @brief The fragment shader module to use. */
+Shader* fragmentShader = nullptr;
+/** @brief List of vertex attributes (Position, Normal, etc.). */
+std::vector<VertexAttribute> vertexAttributes;
+/** @brief Stride in bytes between consecutive vertices in the buffer. */
+uint32_t vertexStride = 0;
+/** @brief Type of primitives to draw (TriangleList, LineList, etc.). */
+SDL_GPUPrimitiveType primitiveType = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+/** @brief Fill mode (Fill or Line/Wireframe). */
+SDL_GPUFillMode fillMode = SDL_GPU_FILLMODE_FILL;
+/** @brief Culling mode (None, Front, or Back). */
+SDL_GPUCullMode cullMode = SDL_GPU_CULLMODE_NONE;
+/** @brief List of pixel formats for each color target. */
+std::vector<SDL_GPUTextureFormat> colorTargetFormats;
+/** @brief Whether to enable alpha blending. */
+bool enableBlending = false;
+/** @brief Whether to enable depth testing and writing. */
+bool enableDepthTest = false;
+/** @brief The comparison operator for the depth test (Less, Greater, etc.). */
+SDL_GPUCompareOp depthCompareOp = SDL_GPU_COMPAREOP_ALWAYS;
+};
+/**
+* @class GraphicsPipeline
+* @brief Encapsulates a pre-compiled GPU state object.
+*
+* In modern APIs, all state (shaders, layout, blending) must be
+* defined upfront in a Pipeline State Object (PSO).
+*/
+class GraphicsPipeline {
+public:
+/**
+* @brief Compiles a new graphics pipeline.
+* @param device Pointer to the active SDL_GPUDevice.
+* @param config The configuration describing the pipeline state.
+* @param renderTargetFormat The pixel format of the target texture (usually the swapchain format).
+*/
+GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& config, SDL_GPUTextureFormat renderTargetFormat);
+~GraphicsPipeline();
+/** @brief Gets the native SDL pipeline handle. */
+SDL_GPUGraphicsPipeline* GetHandle() const { return m_Pipeline; }
+private:
+SDL_GPUDevice* m_Device;
+SDL_GPUGraphicsPipeline* m_Pipeline;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/ComputePipeline.cpp
+#include "ComputePipeline.h"
+#include <spdlog/spdlog.h>
+ComputePipeline::ComputePipeline(SDL_GPUDevice* device, const ComputeConfig& config)
+: m_Device(device), m_Pipeline(nullptr)
+{
+SDL_GPUComputePipelineCreateInfo createInfo = {};
+createInfo.code_size = config.codeSize;
+createInfo.code = config.code;
+createInfo.entrypoint = config.entrypoint;
+createInfo.format = config.format;
+createInfo.num_samplers = config.numSamplers;
+createInfo.num_readonly_storage_textures = config.numReadonlyStorageTextures;
+createInfo.num_readonly_storage_buffers = config.numReadonlyStorageBuffers;
+createInfo.num_readwrite_storage_textures = config.numReadwriteStorageTextures;
+createInfo.num_readwrite_storage_buffers = config.numReadwriteStorageBuffers;
+createInfo.num_uniform_buffers = config.numUniformBuffers;
+createInfo.threadcount_x = config.threadCountX;
+createInfo.threadcount_y = config.threadCountY;
+createInfo.threadcount_z = config.threadCountZ;
+m_Pipeline = SDL_CreateGPUComputePipeline(m_Device, &createInfo);
+if (!m_Pipeline) {
+spdlog::error("Failed to create Compute Pipeline: {}", SDL_GetError());
+}
+}
+ComputePipeline::~ComputePipeline() {
+if (m_Pipeline) {
+SDL_ReleaseGPUComputePipeline(m_Device, m_Pipeline);
+}
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/GraphicsPipeline.cpp
+#include "GraphicsPipeline.h"
+#include <spdlog/spdlog.h>
+GraphicsPipeline::GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& config, SDL_GPUTextureFormat renderTargetFormat)
+: m_Device(device), m_Pipeline(nullptr)
+{
+if (!device) {
+spdlog::error("GraphicsPipeline: Device is NULL!");
+return;
+}
+if (!config.vertexShader || !config.vertexShader->GetHandle()) {
+spdlog::error("GraphicsPipeline: Vertex shader is invalid!");
+return;
+}
+if (!config.fragmentShader || !config.fragmentShader->GetHandle()) {
+spdlog::error("GraphicsPipeline: Fragment shader is invalid!");
+return;
+}
+std::vector<SDL_GPUVertexAttribute> sdlAttributes;
+sdlAttributes.reserve(config.vertexAttributes.size());
+for (const auto& attr : config.vertexAttributes) {
+SDL_GPUVertexAttribute sdlAttr;
+sdlAttr.location = attr.location;
+sdlAttr.buffer_slot = 0;
+sdlAttr.format = attr.format;
+sdlAttr.offset = attr.offset;
+sdlAttributes.push_back(sdlAttr);
+}
+SDL_GPUVertexBufferDescription vertexBufferDesc = {};
+vertexBufferDesc.slot = 0;
+vertexBufferDesc.pitch = config.vertexStride;
+vertexBufferDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+vertexBufferDesc.instance_step_rate = 0;
+std::vector<SDL_GPUColorTargetDescription> colorTargetDescs;
+if (!config.colorTargetFormats.empty()) {
+for (auto format : config.colorTargetFormats) {
+SDL_GPUColorTargetDescription desc = {};
+desc.format = format;
+desc.blend_state.enable_blend = config.enableBlending;
+if (config.enableBlending) {
+desc.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+desc.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+desc.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+desc.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+desc.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+desc.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+}
+desc.blend_state.color_write_mask = 0xF;
+colorTargetDescs.push_back(desc);
+}
+} else {
+if (renderTargetFormat != SDL_GPU_TEXTUREFORMAT_INVALID) {
+SDL_GPUColorTargetDescription desc = {};
+desc.format = renderTargetFormat;
+desc.blend_state.enable_blend = config.enableBlending;
+if (config.enableBlending) {
+desc.blend_state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+desc.blend_state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+desc.blend_state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+desc.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+desc.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+desc.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+}
+desc.blend_state.color_write_mask = 0xF;
+colorTargetDescs.push_back(desc);
+}
+}
+SDL_GPUGraphicsPipelineCreateInfo createInfo = {};
+createInfo.vertex_shader = config.vertexShader->GetHandle();
+createInfo.fragment_shader = config.fragmentShader->GetHandle();
+createInfo.vertex_input_state.num_vertex_attributes = (uint32_t)sdlAttributes.size();
+createInfo.vertex_input_state.vertex_attributes = sdlAttributes.empty() ? nullptr : sdlAttributes.data();
+createInfo.vertex_input_state.num_vertex_buffers = sdlAttributes.empty() ? 0 : 1;
+createInfo.vertex_input_state.vertex_buffer_descriptions = sdlAttributes.empty() ? nullptr : &vertexBufferDesc;
+createInfo.primitive_type = config.primitiveType;
+createInfo.rasterizer_state.fill_mode = config.fillMode;
+createInfo.rasterizer_state.cull_mode = config.cullMode;
+createInfo.target_info.num_color_targets = (uint32_t)colorTargetDescs.size();
+createInfo.target_info.color_target_descriptions = colorTargetDescs.empty() ? nullptr : colorTargetDescs.data();
+if (config.enableDepthTest) {
+createInfo.target_info.has_depth_stencil_target = true;
+createInfo.target_info.depth_stencil_format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+createInfo.depth_stencil_state.enable_depth_test = true;
+createInfo.depth_stencil_state.enable_depth_write = true;
+createInfo.depth_stencil_state.compare_op = config.depthCompareOp;
+} else {
+createInfo.target_info.has_depth_stencil_target = false;
+createInfo.target_info.depth_stencil_format = SDL_GPU_TEXTUREFORMAT_INVALID;
+createInfo.depth_stencil_state.enable_depth_test = false;
+createInfo.depth_stencil_state.enable_depth_write = false;
+}
+m_Pipeline = SDL_CreateGPUGraphicsPipeline(m_Device, &createInfo);
+if (!m_Pipeline) {
+spdlog::error("Failed to create Graphics Pipeline: {}", SDL_GetError());
+} else {
+spdlog::info("Graphics Pipeline created successfully.");
+}
+}
+GraphicsPipeline::~GraphicsPipeline() {
+if (m_Pipeline) {
+SDL_ReleaseGPUGraphicsPipeline(m_Device, m_Pipeline);
+}
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/GPUBuffer.cpp
+#include "GPUBuffer.h"
+#include <spdlog/spdlog.h>
+#include <cstring>
+GPUBuffer::GPUBuffer(SDL_GPUDevice* device, BufferUsage usage, uint32_t size)
+: m_Device(device), m_Size(size), m_Usage(usage)
+{
+SDL_GPUBufferCreateInfo desc = {};
+desc.size = size;
+switch (usage) {
+case BufferUsage::Vertex: desc.usage = SDL_GPU_BUFFERUSAGE_VERTEX; break;
+case BufferUsage::Index: desc.usage = SDL_GPU_BUFFERUSAGE_INDEX; break;
+case BufferUsage::Uniform: desc.usage = SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ; break;
+case BufferUsage::Compute: desc.usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ | SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_WRITE; break;
+}
+m_Buffer = SDL_CreateGPUBuffer(device, &desc);
+if (!m_Buffer) {
+spdlog::error("Failed to create GPU Buffer: {}", SDL_GetError());
+}
+}
+GPUBuffer::~GPUBuffer() {
+if (m_Buffer) {
+SDL_ReleaseGPUBuffer(m_Device, m_Buffer);
+}
+}
+void GPUBuffer::Upload(const void* data, uint32_t size, uint32_t offset, SDL_GPUCommandBuffer* cmd) {
+if (size + offset > m_Size) {
+spdlog::error("GPUBuffer::Upload: Attempted to upload more data than buffer size!");
+return;
+}
+// Create a staging buffer for the transfer
+SDL_GPUTransferBufferCreateInfo stagingDesc = {};
+stagingDesc.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+stagingDesc.size = size;
+SDL_GPUTransferBuffer* stagingBuffer = SDL_CreateGPUTransferBuffer(m_Device, &stagingDesc);
+if (!stagingBuffer) {
+spdlog::error("Failed to create staging buffer: {}", SDL_GetError());
+return;
+}
+// Map and copy data to staging
+void* mappedData = SDL_MapGPUTransferBuffer(m_Device, stagingBuffer, false);
+if (!mappedData) {
+spdlog::error("GPUBuffer::Upload: Failed to map transfer buffer: {}", SDL_GetError());
+SDL_ReleaseGPUTransferBuffer(m_Device, stagingBuffer);
+return;
+}
+std::memcpy(mappedData, data, size);
+SDL_UnmapGPUTransferBuffer(m_Device, stagingBuffer);
+// Record the copy command
+bool submitInternal = false;
+if (!cmd) {
+cmd = SDL_AcquireGPUCommandBuffer(m_Device);
+submitInternal = true;
+}
+SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmd);
+SDL_GPUTransferBufferLocation source = { stagingBuffer, 0 };
+SDL_GPUBufferRegion destination = { m_Buffer, offset, size };
+SDL_UploadToGPUBuffer(copyPass, &source, &destination, false);
+SDL_EndGPUCopyPass(copyPass);
+if (submitInternal) {
+SDL_SubmitGPUCommandBuffer(cmd);
+}
+// Clean up staging (it's safe to release after submission, SDL will defer actual deletion)
+SDL_ReleaseGPUTransferBuffer(m_Device, stagingBuffer);
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/Framebuffer.h
+#pragma once
+#include <SDL3/SDL_gpu.h>
+#include "Texture.h"
+#include <vector>
+#include <memory>
+/**
+* @class Framebuffer
+* @brief Manages a set of render target textures and an optional depth buffer.
+*
+* Used for off-screen rendering, such as G-Buffers for deferred shading
+* or post-processing effects.
+*/
+class Framebuffer {
+public:
+/**
+* @brief Creates a framebuffer with specific dimensions.
+* @param device Pointer to the active SDL_GPUDevice.
+* @param width Width in pixels.
+* @param height Height in pixels.
+* @param formats List of pixel formats for each color target.
+* @param hasDepth Whether to include a depth target.
+*/
+Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height, const std::vector<SDL_GPUTextureFormat>& formats, bool hasDepth = true);
+~Framebuffer();
+/** @brief Returns the color target at a specific index. */
+Texture* GetColorTarget(uint32_t index) const { return m_ColorTargets[index].get(); }
+/** @brief Returns the depth target texture. */
+Texture* GetDepthTarget() const { return m_DepthTarget.get(); }
+/** @brief Returns the total number of color targets. */
+uint32_t GetColorTargetCount() const { return (uint32_t)m_ColorTargets.size(); }
+uint32_t GetWidth() const { return m_Width; }
+uint32_t GetHeight() const { return m_Height; }
+private:
+SDL_GPUDevice* m_Device;
+uint32_t m_Width;
+uint32_t m_Height;
+std::vector<std::unique_ptr<Texture>> m_ColorTargets;
+std::unique_ptr<Texture> m_DepthTarget;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/FrameGraph.cpp
+#include "FrameGraph.h"
+#include <spdlog/spdlog.h>
+FrameGraph::FrameGraph(SDL_GPUDevice* device) : m_Device(device) {}
+FrameGraph::~FrameGraph() {}
+void FrameGraph::AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth, std::function<void(SDL_GPUCommandBuffer*)> preFunc) {
+m_Passes.push_back({ name, PassType::Graphics, target, needsDepth, preFunc, func });
+}
+void FrameGraph::AddComputePass(const std::string& name, std::function<void(RenderContext&)> func, std::function<void(SDL_GPUCommandBuffer*)> preFunc) {
+m_Passes.push_back({ name, PassType::Compute, nullptr, false, preFunc, func });
+}
+void FrameGraph::Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTexture, uint32_t width, uint32_t height) {
+if (m_Passes.empty()) return;
+m_ClearedTargets.clear();
+for (size_t i = 0; i < m_Passes.size(); i++) {
+const auto& passDesc = m_Passes[i];
+// Execute pre-pass commands (like PushConstants) OUTSIDE the render/compute pass
+if (passDesc.preExecute) {
+passDesc.preExecute(cmd);
+}
+if (passDesc.type == PassType::Compute) {
+// ... (keep compute logic)
+}
+else {
+std::vector<SDL_GPUColorTargetInfo> colorTargets;
+SDL_GPUDepthStencilTargetInfo depthTarget = {};
+bool hasDepth = false;
+if (passDesc.target == nullptr) {
+// Direct to Swapchain
+bool alreadyCleared = m_ClearedTargets.find(nullptr) != m_ClearedTargets.end();
+SDL_GPUColorTargetInfo info = {};
+info.texture = swapchainTexture;
+info.clear_color = { 0.1f, 0.1f, 0.1f, 1.0f };
+info.load_op = (!alreadyCleared) ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+info.store_op = SDL_GPU_STOREOP_STORE;
+colorTargets.push_back(info);
+if (passDesc.needsDepth) {
+if (!m_SwapchainDepth || m_SwapchainDepth->GetWidth() != width || m_SwapchainDepth->GetHeight() != height) {
+m_SwapchainDepth = std::make_unique<Texture>(m_Device, width, height, SDL_GPU_TEXTUREFORMAT_D32_FLOAT, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
+}
+depthTarget.texture = m_SwapchainDepth->GetHandle();
+depthTarget.clear_depth = 0.0f;
+depthTarget.load_op = (!alreadyCleared) ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+depthTarget.store_op = SDL_GPU_STOREOP_STORE;
+hasDepth = true;
+}
+m_ClearedTargets.insert(nullptr);
+} else {
+// To Framebuffer
+bool alreadyCleared = m_ClearedTargets.find(passDesc.target) != m_ClearedTargets.end();
+for (uint32_t j = 0; j < passDesc.target->GetColorTargetCount(); ++j) {
+SDL_GPUColorTargetInfo info = {};
+info.texture = passDesc.target->GetColorTarget(j)->GetHandle();
+info.clear_color = { 0.1f, 0.1f, 0.1f, 0.0f };
+info.load_op = (!alreadyCleared) ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+info.store_op = SDL_GPU_STOREOP_STORE;
+colorTargets.push_back(info);
+}
+if (passDesc.target->GetDepthTarget()) {
+depthTarget.texture = passDesc.target->GetDepthTarget()->GetHandle();
+depthTarget.clear_depth = 0.0f;
+depthTarget.load_op = (!alreadyCleared) ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
+depthTarget.store_op = SDL_GPU_STOREOP_STORE;
+hasDepth = true;
+}
+m_ClearedTargets.insert(passDesc.target);
+}
+SDL_GPURenderPass* sdlPass = SDL_BeginGPURenderPass(cmd, colorTargets.data(), (uint32_t)colorTargets.size(), hasDepth ? &depthTarget : nullptr);
+if (sdlPass) {
+uint32_t passW = passDesc.target ? passDesc.target->GetWidth() : width;
+uint32_t passH = passDesc.target ? passDesc.target->GetHeight() : height;
+SDL_GPUViewport viewport = { 0.0f, 0.0f, (float)passW, (float)passH, 0.0f, 1.0f };
+SDL_SetGPUViewport(sdlPass, &viewport);
+SDL_Rect scissor = { 0, 0, (int)passW, (int)passH };
+SDL_SetGPUScissor(sdlPass, &scissor);
+RenderContext ctx(sdlPass, cmd);
+passDesc.execute(ctx);
+SDL_EndGPURenderPass(sdlPass);
+} else {
+spdlog::error("FrameGraph: Failed to begin render pass '{}'", passDesc.name);
+}
+}
+}
+}
+void FrameGraph::Reset() {
+m_Passes.clear();
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/Texture.h
+#pragma once
+#include <SDL3/SDL_gpu.h>
+#include <string>
+/**
+* @enum TextureFilter
+* @brief Defines how the texture is sampled when scaled.
+*/
+enum class TextureFilter {
+Nearest, ///< Pixelated/Blocky filtering.
+Linear ///< Smooth/Blurred filtering.
+};
+/**
+* @class Texture
+* @brief Wrapper for SDL_GPUTexture and SDL_GPUSampler.
+*
+* Handles loading image files from disk (via stb_image) and
+* uploading them to GPU memory.
+*/
+class Texture {
+public:
+/**
+* @brief Loads a texture from an image file.
+* @param device Pointer to the active SDL_GPUDevice.
+* @param filePath Path to the image file (PNG, JPG, etc.).
+* @param filter The filtering mode to use for this texture.
+*/
+Texture(SDL_GPUDevice* device, const std::string& filePath, TextureFilter filter = TextureFilter::Linear);
+/**
+* @brief Creates a texture from raw pixel data in memory.
+* @param device Pointer to the active SDL_GPUDevice.
+* @param pixels Pointer to the RGBA8 pixel data.
+* @param width Width in pixels.
+* @param height Height in pixels.
+* @param filter The filtering mode to use.
+*/
+Texture(SDL_GPUDevice* device, unsigned char* pixels, uint32_t width, uint32_t height, TextureFilter filter = TextureFilter::Linear);
+/**
+* @brief Creates an empty GPU texture with specific parameters.
+* @param device Pointer to the active SDL_GPUDevice.
+* @param width Width in pixels.
+* @param height Height in pixels.
+* @param format SDL GPU texture format.
+* @param usage SDL GPU texture usage flags.
+* @param filter The filtering mode to use.
+*/
+Texture(SDL_GPUDevice* device, uint32_t width, uint32_t height, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage, TextureFilter filter = TextureFilter::Linear);
+~Texture();
+/** @brief Gets the native SDL texture handle. */
+SDL_GPUTexture* GetHandle() const { return m_Texture; }
+/** @brief Gets the associated SDL sampler handle. */
+SDL_GPUSampler* GetSampler() const { return m_Sampler; }
+/** @brief Gets the width of the texture in pixels. */
+uint32_t GetWidth() const { return m_Width; }
+/** @brief Gets the height of the texture in pixels. */
+uint32_t GetHeight() const { return m_Height; }
+private:
+SDL_GPUDevice* m_Device;
+SDL_GPUTexture* m_Texture;
+SDL_GPUSampler* m_Sampler;
+uint32_t m_Width;
+uint32_t m_Height;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/Framebuffer.cpp
+#include "Framebuffer.h"
+#include <spdlog/spdlog.h>
+Framebuffer::Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height, const std::vector<SDL_GPUTextureFormat>& formats, bool hasDepth)
+: m_Device(device), m_Width(width), m_Height(height)
+{
+// 1. Create Color Targets
+for (const auto& format : formats) {
+auto tex = std::make_unique<Texture>(
+m_Device,
+m_Width,
+m_Height,
+format,
+SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+TextureFilter::Linear
+);
+m_ColorTargets.push_back(std::move(tex));
+}
+// 2. Create Depth Target if requested
+if (hasDepth) {
+SDL_GPUTextureFormat depthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+m_DepthTarget = std::make_unique<Texture>(
+m_Device,
+m_Width,
+m_Height,
+depthFormat,
+SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+TextureFilter::Linear
+);
+}
+spdlog::info("Framebuffer created ({}x{}) with {} color targets", m_Width, m_Height, m_ColorTargets.size());
+}
+Framebuffer::~Framebuffer() {
+// std::unique_ptr handles Texture destruction
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Graphics/API/FrameGraph.h
+#pragma once
+#include <string>
+#include <vector>
+#include <functional>
+#include <memory>
+#include "RenderContext.h"
+#include "Framebuffer.h"
+#include "Texture.h"
+enum class PassType {
+Graphics,
+Compute
+};
+/**
+* @struct RenderPassDesc
+* @brief Defines a single node in the FrameGraph.
+*/
+struct RenderPassDesc {
+std::string name;
+PassType type;
+// Outputs (Graphics Only)
+Framebuffer* target = nullptr;
+bool needsDepth = true; // For swapchain passes mostly
+// Commands to run BEFORE the pass begins (e.g. PushConstants)
+std::function<void(SDL_GPUCommandBuffer*)> preExecute;
+// The actual draw/compute commands
+std::function<void(RenderContext&)> execute;
+};
+/**
+* @class FrameGraph
+* @brief High-level manager for rendering and compute passes.
+*/
+#include <unordered_set>
+class FrameGraph {
+public:
+FrameGraph(SDL_GPUDevice* device);
+~FrameGraph();
+/** @brief Adds a graphics pass. */
+void AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth = true, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr);
+/** @brief Adds a compute pass. */
+void AddComputePass(const std::string& name, std::function<void(RenderContext&)> func, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr);
+/** @brief Executes all recorded passes. */
+void Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTexture, uint32_t width, uint32_t height);
+/** @brief Clears all passes for the next frame. */
+void Reset();
+private:
+SDL_GPUDevice* m_Device;
+std::vector<RenderPassDesc> m_Passes;
+std::unique_ptr<Texture> m_SwapchainDepth;
+std::unordered_set<void*> m_ClearedTargets;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Gameplay/TestScene.h
+#pragma once
+#include <memory>
+#include <string>
+#include <vector>
+#include <glm/glm.hpp>
+#include "Graphics/Camera.h"
+#include "Graphics/Model.h"
+#include "Graphics/API/Shader.h"
+#include "Graphics/Renderer.h"
+#include "Graphics/Lights.h"
+#include "Core/AssetManager.h"
+/**
+* @class TestScene
+* @brief Standalone testing scene for rendering GLTF models.
+*/
+class TestScene {
+public:
+TestScene(Renderer* renderer);
+~TestScene();
+void Update(float deltaTime);
+void Render(Renderer* renderer);
+void OnImGui();
+private:
+void LoadModel(const std::string& path);
+void CreatePipeline();
+void CreateDirectPipeline();
+void CreatePostPipeline();
+void CreateShadowPipeline();
+Renderer* m_Renderer;
+std::shared_ptr<Model> m_Model;
+std::vector<Light> m_Lights;
+std::vector<MeshInstance> m_MeshInstances;
+std::string m_ModelPath = "assets/test_scene_pixelation.glb";
+Camera m_Camera;
+std::unique_ptr<Shader> m_VertShader;
+std::unique_ptr<Shader> m_FragShader;
+std::unique_ptr<Shader> m_SimpleVertShader;
+std::unique_ptr<Shader> m_SimpleFragShader;
+glm::vec3 m_ModelPosition = {0.0f, 0.0f, 0.0f};
+glm::vec3 m_ModelRotation = {0.0f, 0.0f, 0.0f};
+float m_ModelScale = 1.0f;
+uint32_t m_ToonSteps = 4;
+// Pixelation & Edge Detection Parameters
+bool m_UsePostProcess = false;
+int m_PixelScale = 4;
+float m_NormalThreshold = 0.5f;
+float m_DepthThreshold = 0.1f;
+bool m_Orthographic = false;
+glm::vec4 m_NormalEdgeColor = {1.0f, 1.0f, 1.0f, 1.0f};
+glm::vec4 m_DepthEdgeColor = {0.0f, 0.0f, 0.0f, 1.0f};
+Light m_Sun;
+std::unique_ptr<Framebuffer> m_ShadowMap;
+std::unique_ptr<Shader> m_ShadowVertShader;
+glm::mat4 m_SunProj;
+glm::mat4 m_SunView;
+std::unique_ptr<Framebuffer> m_GBuffer;
+std::unique_ptr<Shader> m_PostVertShader;
+std::unique_ptr<Shader> m_PostFragShader;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Gameplay/World.h
+#pragma once
+#include <entt/entt.hpp>
+/**
+* @class World
+* @brief Manages the game state and all active entities.
+*
+* The World class acts as a container for the ECS (Entity Component System)
+* registry and orchestrates the updating of game logic.
+*/
+class World {
+public:
+/**
+* @brief Initializes the game world and ECS systems.
+*/
+World();
+/**
+* @brief Cleans up the world and destroys all entities.
+*/
+~World();
+/**
+* @brief Updates all game logic for the current frame.
+* @param dt The time elapsed since the last frame in seconds.
+*/
+void Update(float dt);
+private:
+/** @brief The EnTT registry holding all entities and components. */
+entt::registry m_Registry;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Gameplay/World.cpp
+#include "World.h"
+#include <spdlog/spdlog.h>
+World::World() {
+spdlog::info("Game World Initialized with EnTT");
+}
+World::~World() {
+}
+void World::Update(float dt) {
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Gameplay/TestScene.cpp
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_ENABLE_EXPERIMENTAL
+#include "TestScene.h"
+#include "Core/AssetManager.h"
+#include "Core/Input.h"
+#include "Graphics/API/GraphicsPipeline.h"
+#include "Graphics/API/RenderContext.h"
+#include <imgui.h>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/quaternion.hpp>
+#include <filesystem>
+struct alignas(16) ModelPushConstants {
+glm::mat4 model; // 0
+glm::vec4 baseColorFactor; // 64
+uint32_t hasTexture; // 80
+uint32_t toonSteps; // 84
+uint32_t padding[2]; // 88
+};
+struct alignas(16) PostPushConstants {
+float normalThreshold; // 0
+float depthThreshold; // 4
+glm::vec2 resolution; // 8
+glm::vec4 normalEdgeColor; // 16
+glm::vec4 depthEdgeColor; // 32
+};
+TestScene::TestScene(Renderer* renderer) : m_Renderer(renderer) {
+m_Sun.direction = glm::normalize(glm::vec3(-1.0f, -1.0f, -0.5f));
+m_Sun.color = glm::vec3(1.0f, 0.95f, 0.8f);
+m_Sun.intensity = 2.0f;
+m_Sun.type = (uint32_t)LightType::Directional;
+m_Camera.m_Position = glm::vec3(0.0f, 2.0f, 5.0f);
+m_ModelScale = 1.f;
+m_PixelScale = 4;
+m_ToonSteps = 4;
+m_UsePostProcess = true;
+// Initialize Framebuffers
+SDL_GPUDevice* device = m_Renderer->GetDevice();
+m_ShadowMap = std::make_unique<Framebuffer>(device, 2048, 2048, std::vector<SDL_GPUTextureFormat>{}, true);
+std::vector<SDL_GPUTextureFormat> gbufferFormats = {
+SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, // Color
+SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM // Normals
+};
+m_GBuffer = std::make_unique<Framebuffer>(device, 1280, 720, gbufferFormats, true);
+// Initial Sun Matrices for Shadow Mapping
+m_SunProj = glm::ortho(-20.0f, 20.0f, -20.0f, 20.0f, 0.1f, 100.0f);
+m_SunView = glm::lookAt(glm::vec3(-m_Sun.direction * 20.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+CreatePipeline();
+CreateDirectPipeline();
+CreatePostPipeline();
+CreateShadowPipeline();
+m_ModelPath = "assets/SponzaModel.glb";
+LoadModel(m_ModelPath);
+}
+TestScene::~TestScene() {}
+void TestScene::CreateShadowPipeline() {
+SDL_GPUDevice* device = m_Renderer->GetDevice();
+ShaderResourceLayout vertLayout = {0, 0, 1, 1};
+m_ShadowVertShader = std::make_unique<Shader>(device, "shaders/shadow.vert.spv", ShaderStage::Vertex, vertLayout);
+auto shadowFrag = std::make_unique<Shader>(device, "shaders/shadow.frag.spv", ShaderStage::Fragment, ShaderResourceLayout{0,0,0,0});
+PipelineConfig config;
+config.vertexShader = m_ShadowVertShader.get();
+config.fragmentShader = shadowFrag.get();
+config.vertexStride = sizeof(ModelVertex);
+config.vertexAttributes = { { 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position) } };
+config.enableDepthTest = true;
+config.depthCompareOp = SDL_GPU_COMPAREOP_GREATER;
+config.cullMode = SDL_GPU_CULLMODE_BACK;
+config.colorTargetFormats = {};
+m_Renderer->GetPipelines()->CreatePipeline("shadow_pipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
+}
+void TestScene::CreatePipeline() {
+SDL_GPUDevice* device = m_Renderer->GetDevice();
+ShaderResourceLayout vertLayout = {0, 0, 1, 1};
+ShaderResourceLayout fragLayout = {2, 0, 1, 1};
+m_VertShader = std::make_unique<Shader>(device, "shaders/model.vert.spv", ShaderStage::Vertex, vertLayout);
+m_FragShader = std::make_unique<Shader>(device, "shaders/model.frag.spv", ShaderStage::Fragment, fragLayout);
+PipelineConfig config;
+config.vertexShader = m_VertShader.get();
+config.fragmentShader = m_FragShader.get();
+config.vertexStride = sizeof(ModelVertex);
+config.vertexAttributes = {
+{ 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position) },
+{ 1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, normal) },
+{ 2, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(ModelVertex, texCoords) },
+{ 3, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(ModelVertex, color) },
+{ 4, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, tangent) }
+};
+config.enableDepthTest = true;
+config.depthCompareOp = SDL_GPU_COMPAREOP_GREATER;
+config.cullMode = SDL_GPU_CULLMODE_NONE;
+// model.frag outputs to 2 targets: o_Color and o_Normal
+config.colorTargetFormats = { SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM };
+m_Renderer->GetPipelines()->CreatePipeline("model_pipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
+}
+void TestScene::CreateDirectPipeline() {
+SDL_GPUDevice* device = m_Renderer->GetDevice();
+ShaderResourceLayout vertLayout = {0, 0, 0, 1}; // Only 1 uniform buffer (Set 1)
+ShaderResourceLayout fragLayout = {1, 0, 0, 0}; // 1 sampler for base color (Set 2)
+m_SimpleVertShader = std::make_unique<Shader>(device, "shaders/simple.vert.spv", ShaderStage::Vertex, vertLayout);
+m_SimpleFragShader = std::make_unique<Shader>(device, "shaders/simple.frag.spv", ShaderStage::Fragment, fragLayout);
+PipelineConfig config;
+config.vertexShader = m_SimpleVertShader.get();
+config.fragmentShader = m_SimpleFragShader.get();
+config.vertexStride = sizeof(ModelVertex);
+config.vertexAttributes = {
+{ 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position) },
+{ 1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, normal) },
+{ 2, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(ModelVertex, texCoords) },
+{ 3, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(ModelVertex, color) }
+};
+config.enableDepthTest = true;
+config.depthCompareOp = SDL_GPU_COMPAREOP_GREATER;
+config.cullMode = SDL_GPU_CULLMODE_NONE;
+SDL_GPUTextureFormat swapchainFormat = SDL_GetGPUSwapchainTextureFormat(device, m_Renderer->GetWindow()->handle);
+config.colorTargetFormats = { swapchainFormat };
+m_Renderer->GetPipelines()->CreatePipeline("model_direct_pipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
+}
+void TestScene::CreatePostPipeline() {
+SDL_GPUDevice* device = m_Renderer->GetDevice();
+ShaderResourceLayout postLayout = {3, 0, 0, 1};
+m_PostVertShader = std::make_unique<Shader>(device, "shaders/pixelation.vert.spv", ShaderStage::Vertex, ShaderResourceLayout{0,0,0,0});
+m_PostFragShader = std::make_unique<Shader>(device, "shaders/pixelation.frag.spv", ShaderStage::Fragment, postLayout);
+PipelineConfig config;
+config.vertexShader = m_PostVertShader.get();
+config.fragmentShader = m_PostFragShader.get();
+config.enableDepthTest = false;
+SDL_GPUTextureFormat swapchainFormat = SDL_GetGPUSwapchainTextureFormat(device, m_Renderer->GetWindow()->handle);
+m_Renderer->GetPipelines()->CreatePipeline("post_pipeline", config, swapchainFormat);
+}
+void TestScene::LoadModel(const std::string& path) {
+if (std::filesystem::exists(path)) {
+SceneData scene = AssetManager::LoadScene(path);
+m_Model = scene.model;
+m_Lights = scene.lights;
+m_MeshInstances = scene.meshInstances;
+}
+if (!m_Model) {
+m_Model = AssetManager::GetFallbackModel();
+m_MeshInstances.clear();
+MeshInstance defaultInstance;
+defaultInstance.firstSection = 0;
+defaultInstance.sectionCount = (uint32_t)m_Model->GetSections().size();
+defaultInstance.transform = glm::mat4(1.0f);
+m_MeshInstances.push_back(defaultInstance);
+}
+}
+void TestScene::Update(float deltaTime) {
+if (Input::IsMouseButtonPressed(SDL_BUTTON_RIGHT)) Input::SetRelativeMouseMode(m_Renderer->GetWindow()->handle, true);
+if (Input::IsMouseButtonReleased(SDL_BUTTON_RIGHT)) Input::SetRelativeMouseMode(m_Renderer->GetWindow()->handle, false);
+if (Input::IsRelativeMouseMode()) {
+glm::vec2 delta = Input::GetMousePosition();
+m_Camera.Rotate(delta.x, delta.y);
+}
+glm::vec3 moveDir(0.0f);
+if (Input::IsKeyDown(SDLK_W)) moveDir += m_Camera.m_Front;
+if (Input::IsKeyDown(SDLK_S)) moveDir -= m_Camera.m_Front;
+if (Input::IsKeyDown(SDLK_A)) moveDir -= m_Camera.m_Right;
+if (Input::IsKeyDown(SDLK_D)) moveDir += m_Camera.m_Right;
+if (glm::length(moveDir) > 0.0f) m_Camera.Move(glm::normalize(moveDir), deltaTime);
+m_Camera.m_Orthographic = m_Orthographic;
+}
+void TestScene::Render(Renderer* renderer) {
+if (!m_Model) return;
+int w, h;
+SDL_GetWindowSizeInPixels(m_Renderer->GetWindow()->handle, &w, &h);
+if (w <= 0 || h <= 0) return;
+float aspect = (float)w / (float)h;
+glm::mat4 viewProj = m_Camera.GetProjectionMatrix(aspect) * m_Camera.GetViewMatrix();
+glm::mat4 baseModelMat = glm::translate(glm::mat4(1.0f), m_ModelPosition) *
+glm::toMat4(glm::quat(glm::radians(m_ModelRotation))) *
+glm::scale(glm::mat4(1.0f), glm::vec3(m_ModelScale));
+// Update Global Uniforms
+m_SunView = glm::lookAt(glm::vec3(-m_Sun.direction * 20.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+glm::mat4 sunVP = m_SunProj * m_SunView;
+GlobalUniforms globalData = {};
+globalData.view = m_Camera.GetViewMatrix();
+globalData.proj = m_Camera.GetProjectionMatrix(aspect);
+globalData.viewProj = viewProj;
+globalData.sunVP = sunVP;
+globalData.sunColor = glm::vec4(m_Sun.color, m_Sun.intensity);
+globalData.sunDir = glm::vec4(m_Sun.direction, 0.0f);
+globalData.cameraPos = glm::vec4(m_Camera.m_Position, 1.0f);
+globalData.time = (float)SDL_GetTicks() / 1000.0f;
+globalData.resolution = glm::vec2((float)w, (float)h);
+globalData.numLights = (uint32_t)m_Lights.size();
+for (size_t i = 0; i < m_Lights.size() && i < 16; i++) {
+globalData.lights[i] = m_Lights[i];
+}
+renderer->UpdateGlobalUniforms(globalData);
+if (!m_UsePostProcess) {
+// Single Direct Pass to Swapchain
+renderer->AddPass("DirectPass", nullptr, [this, viewProj, baseModelMat](RenderContext& ctx) {
+auto* pipeline = m_Renderer->GetPipelines()->GetPipeline("model_direct_pipeline");
+if (!pipeline) return;
+ctx.BindPipeline(pipeline);
+ctx.BindVertexBuffer(m_Model->GetVertexBuffer());
+ctx.BindIndexBuffer(m_Model->GetIndexBuffer());
+ctx.BindGraphicsStorageBuffer(0, m_Renderer->GetGlobalUBO());
+ctx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
+for (const auto& instance : m_MeshInstances) {
+glm::mat4 instanceModelMat = baseModelMat * instance.transform;
+for (uint32_t i = 0; i < instance.sectionCount; i++) {
+uint32_t sectionIdx = instance.firstSection + i;
+if (sectionIdx >= (uint32_t)m_Model->GetSections().size()) continue;
+const auto& section = m_Model->GetSections()[sectionIdx];
+const auto& material = m_Model->GetMaterials()[section.materialIndex];
+struct { glm::mat4 viewProj; glm::mat4 model; } pc;
+pc.viewProj = viewProj;
+pc.model = instanceModelMat;
+ctx.PushVertexConstants(0, &pc, sizeof(pc));
+if (material.baseColorTexture) ctx.BindFragmentTexture(0, material.baseColorTexture.get());
+else ctx.BindFragmentTexture(0, AssetManager::GetFallbackTexture().get());
+ctx.DrawIndexed(section.indexCount, 1, section.firstIndex);
+}
+}
+}, true);
+} else {
+// Multi-pass Rendering
+// 1. Shadow Pass
+renderer->AddPass("ShadowPass", m_ShadowMap.get(), [this, sunVP, baseModelMat](RenderContext& ctx) {
+auto* pipeline = m_Renderer->GetPipelines()->GetPipeline("shadow_pipeline");
+if (!pipeline) return;
+ctx.BindPipeline(pipeline);
+ctx.BindVertexBuffer(m_Model->GetVertexBuffer());
+ctx.BindIndexBuffer(m_Model->GetIndexBuffer());
+ctx.BindGraphicsStorageBuffer(0, m_Renderer->GetGlobalUBO());
+ctx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
+for (const auto& instance : m_MeshInstances) {
+glm::mat4 instanceModelMat = baseModelMat * instance.transform;
+for (const auto& section : m_Model->GetSections()) {
+ModelPushConstants pc = {};
+pc.model = instanceModelMat;
+ctx.PushVertexConstants(0, &pc, sizeof(pc));
+ctx.DrawIndexed(section.indexCount, 1, section.firstIndex);
+}
+}
+}, true);
+// 2. G-Buffer Pass (Forward rendering to offscreen target)
+renderer->AddPass("GBufferPass", m_GBuffer.get(), [this, baseModelMat](RenderContext& ctx) {
+auto* pipeline = m_Renderer->GetPipelines()->GetPipeline("model_pipeline");
+if (!pipeline) return;
+ctx.BindPipeline(pipeline);
+ctx.BindVertexBuffer(m_Model->GetVertexBuffer());
+ctx.BindIndexBuffer(m_Model->GetIndexBuffer());
+ctx.BindGraphicsStorageBuffer(0, m_Renderer->GetGlobalUBO());
+ctx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
+for (const auto& instance : m_MeshInstances) {
+glm::mat4 instanceModelMat = baseModelMat * instance.transform;
+for (uint32_t i = 0; i < instance.sectionCount; i++) {
+uint32_t sectionIdx = instance.firstSection + i;
+const auto& section = m_Model->GetSections()[sectionIdx];
+const auto& material = m_Model->GetMaterials()[section.materialIndex];
+ModelPushConstants pc = {};
+pc.model = instanceModelMat;
+pc.baseColorFactor = material.baseColorFactor;
+pc.hasTexture = material.baseColorTexture ? 1 : 0;
+pc.toonSteps = m_ToonSteps;
+ctx.PushVertexConstants(0, &pc, sizeof(pc));
+ctx.PushFragmentConstants(0, &pc, sizeof(pc));
+if (material.baseColorTexture) ctx.BindFragmentTexture(0, material.baseColorTexture.get());
+else ctx.BindFragmentTexture(0, AssetManager::GetFallbackTexture().get());
+ctx.DrawIndexed(section.indexCount, 1, section.firstIndex);
+}
+}
+}, true);
+// 3. Post-Process Pass
+renderer->AddPass("PostProcessPass", nullptr, [this, w, h](RenderContext& ctx) {
+auto* pipeline = m_Renderer->GetPipelines()->GetPipeline("post_pipeline");
+if (!pipeline) return;
+ctx.BindPipeline(pipeline);
+ctx.BindFragmentTexture(0, m_GBuffer->GetColorTarget(0)); // Color
+ctx.BindFragmentTexture(1, m_GBuffer->GetColorTarget(1)); // Normals
+ctx.BindFragmentTexture(2, m_GBuffer->GetDepthTarget()); // Depth
+PostPushConstants pc = {};
+pc.normalThreshold = m_NormalThreshold;
+pc.depthThreshold = m_DepthThreshold;
+pc.resolution = glm::vec2((float)w / (float)m_PixelScale, (float)h / (float)m_PixelScale);
+pc.normalEdgeColor = m_NormalEdgeColor;
+pc.depthEdgeColor = m_DepthEdgeColor;
+ctx.PushFragmentConstants(0, &pc, sizeof(pc));
+ctx.Draw(3, 1, 0, 0); // Fullscreen triangle
+}, false);
+}
+}
+void TestScene::OnImGui() {
+ImGui::Begin("Test Scene Controls");
+ImGui::Checkbox("Use Post-Processing", &m_UsePostProcess);
+if (ImGui::CollapsingHeader("Camera (FPS)", ImGuiTreeNodeFlags_DefaultOpen)) {
+ImGui::Text("Right Click + WASD to move");
+ImGui::DragFloat3("Position", glm::value_ptr(m_Camera.m_Position), 0.1f);
+ImGui::DragFloat("Yaw", &m_Camera.m_Yaw, 0.5f);
+ImGui::DragFloat("Pitch", &m_Camera.m_Pitch, 0.5f, -89.0f, 89.0f);
+ImGui::DragFloat("Movement Speed", &m_Camera.m_MovementSpeed, 0.1f, 0.1f, 100.0f);
+ImGui::Checkbox("Orthographic", &m_Orthographic);
+}
+if (ImGui::CollapsingHeader("Lighting & Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
+if (ImGui::DragFloat3("Sun Direction", glm::value_ptr(m_Sun.direction), 0.01f, -1.0f, 1.0f)) {
+m_Sun.direction = glm::normalize(m_Sun.direction);
+}
+ImGui::ColorEdit3("Sun Color", glm::value_ptr(m_Sun.color));
+ImGui::DragFloat("Sun Intensity", &m_Sun.intensity, 0.1f, 0.0f, 10.0f);
+ImGui::DragInt("Toon Steps", (int*)&m_ToonSteps, 1, 0, 16);
+}
+if (ImGui::CollapsingHeader("Pixelation & Edges", ImGuiTreeNodeFlags_DefaultOpen)) {
+ImGui::SliderInt("Pixel Scale", &m_PixelScale, 1, 16);
+ImGui::SliderFloat("Normal Threshold", &m_NormalThreshold, 0.0f, 1.0f);
+ImGui::SliderFloat("Depth Threshold", &m_DepthThreshold, 0.0f, 0.5f);
+ImGui::ColorEdit4("Normal Edge Color", glm::value_ptr(m_NormalEdgeColor));
+ImGui::ColorEdit4("Depth Edge Color", glm::value_ptr(m_DepthEdgeColor));
+}
+if (ImGui::CollapsingHeader("Model", ImGuiTreeNodeFlags_DefaultOpen)) {
+ImGui::DragFloat3("Model Position", glm::value_ptr(m_ModelPosition), 0.1f);
+ImGui::DragFloat3("Model Rotation", glm::value_ptr(m_ModelRotation), 0.5f);
+ImGui::DragFloat("Model Scale", &m_ModelScale, 0.1f, 0.0001f, 1000.0f);
+if (ImGui::Button("Reload Model")) LoadModel(m_ModelPath);
+}
+ImGui::End();
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Networking/enet_implementation.cpp
+#define ENET_IMPLEMENTATION
+#include <enet/enet.h>
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Networking/NetworkWrapper.h
+#pragma once
+#include <enet/enet.h>
+#include <thread>
+#include <mutex>
+#include <queue>
+#include <vector>
+#include <functional>
+#include <map>
+#include <cstring>
+#include <spdlog/spdlog.h>
+#include <optional>
+/**
+* @namespace NetLib
+* @brief Namespace containing all networking-related classes and utilities.
+*/
+namespace NetLib {
+/**
+* @class ThreadSafeQueue
+* @brief A simple thread-safe wrapper around std::queue.
+* @tparam T The type of elements stored in the queue.
+*/
+template<typename T>
+class ThreadSafeQueue {
+private:
+std::queue<T> queue;
+std::mutex mutex;
+public:
+/** @brief Pushes an item into the queue. */
+void push(const T& item) {
+std::lock_guard<std::mutex> lock(mutex);
+queue.push(item);
+}
+/**
+* @brief Attempts to pop an item from the queue.
+* @param item Reference to store the popped item.
+* @return true if an item was popped, false if the queue was empty.
+*/
+bool pop(T& item) {
+std::lock_guard<std::mutex> lock(mutex);
+if (queue.empty()) return false;
+item = queue.front();
+queue.pop();
+return true;
+}
+/** @brief Checks if the queue is empty. */
+bool empty() {
+std::lock_guard<std::mutex> lock(mutex);
+return queue.empty();
+}
+};
+/**
+* @struct Packet
+* @brief Represents a raw network packet.
+*
+* Contains raw binary data and the ID of the sender.
+* Supports conversion to/from POD structures.
+*/
+struct Packet {
+std::vector<uint8_t> data; ///< Raw binary data.
+uint32_t senderId; ///< ID assigned by ENet to the sender.
+Packet() : senderId(0) {}
+/**
+* @brief Creates a packet from a POD structure.
+* @tparam T The type of the structure.
+* @param structure The structure to copy into the packet.
+*/
+template<typename T>
+Packet(const T& structure) : senderId(0) {
+data.resize(sizeof(T));
+memcpy(data.data(), &structure, sizeof(T));
+}
+/**
+* @brief Casts the packet data to a specific structure pointer.
+* @tparam T The target structure type.
+* @return Pointer to the data, or nullptr if size is insufficient.
+*/
+template<typename T>
+T* as() {
+if (data.size() < sizeof(T)) return nullptr;
+return reinterpret_cast<T*>(data.data());
+}
+};
+/**
+* @class Client
+* @brief Handles client-side ENet connections and communication.
+*
+* Runs a dedicated background thread for processing network events.
+*/
+class Client {
+private:
+ENetHost* client;
+ENetPeer* serverPeer;
+std::thread networkThread;
+bool running;
+ThreadSafeQueue<Packet> incomingPackets;
+public:
+Client() : client(nullptr), serverPeer(nullptr), running(false) {}
+~Client() { disconnect(); }
+/**
+* @brief Connects to a remote server.
+* @param host The hostname or IP address.
+* @param port The port number.
+* @param timeoutMs Connection timeout in milliseconds.
+* @return true if connection was established.
+*/
+bool connect(const char* host, uint16_t port, uint32_t timeoutMs = 5000);
+/** @brief Disconnects from the server and stops the network thread. */
+void disconnect();
+/**
+* @brief Sends a structure to the server.
+* @tparam T Type of the structure.
+* @param structure The data to send.
+* @param reliable Whether to use ENet's reliable delivery.
+*/
+template<typename T>
+void send(const T& structure, bool reliable = true) {
+if (!serverPeer || !running) return;
+ENetPacket* packet = enet_packet_create(&structure, sizeof(T),
+reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
+enet_peer_send(serverPeer, 0, packet);
+}
+/** @brief Receives the next available packet from the queue. */
+bool receive(Packet& packet) {
+return incomingPackets.pop(packet);
+}
+/** @brief Checks if the client is currently connected. */
+bool isConnected() const { return serverPeer != nullptr && running; }
+private:
+void networkLoop();
+};
+/**
+* @class Server
+* @brief Handles server-side ENet hosting and peer management.
+*
+* Manages multiple client connections and provides broadcasting capabilities.
+*/
+class Server {
+private:
+ENetHost* server;
+std::thread networkThread;
+bool running;
+ThreadSafeQueue<Packet> incomingPackets;
+std::mutex peersMutex;
+std::vector<ENetPeer*> peers;
+struct ConnectionEvent {
+uint32_t peerId;
+bool isConnect;
+};
+ThreadSafeQueue<ConnectionEvent> connectionEvents;
+public:
+Server() : server(nullptr), running(false) {}
+~Server() { stop(); }
+/**
+* @brief Starts hosting a server.
+* @param port The port to listen on.
+* @param maxClients Maximum number of concurrent connections.
+* @return true if server started successfully.
+*/
+bool start(uint16_t port, uint32_t maxClients = 32);
+/** @brief Stops the server and disconnects all clients. */
+void stop();
+/**
+* @brief Sends a structure to all connected clients.
+*/
+template<typename T>
+void broadcast(const T& structure, bool reliable = true) {
+std::lock_guard<std::mutex> lock(peersMutex);
+ENetPacket* packet = enet_packet_create(&structure, sizeof(T),
+reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
+for (auto* peer : peers) {
+if (peer) enet_peer_send(peer, 0, packet);
+}
+}
+/**
+* @brief Sends a structure to a specific client.
+* @param peerId The ID of the target peer.
+*/
+template<typename T>
+void sendTo(uint32_t peerId, const T& structure, bool reliable = true) {
+std::lock_guard<std::mutex> lock(peersMutex);
+if (peerId < peers.size() && peers[peerId]) {
+ENetPacket* packet = enet_packet_create(&structure, sizeof(T),
+reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
+enet_peer_send(peers[peerId], 0, packet);
+}
+}
+/** @brief Receives the next available packet from the queue. */
+bool receive(Packet& packet) {
+return incomingPackets.pop(packet);
+}
+/** @brief Checks for new connections or disconnections. */
+bool pollConnection(uint32_t& peerId, bool& isConnect) {
+ConnectionEvent event;
+if (connectionEvents.pop(event)) {
+peerId = event.peerId;
+isConnect = event.isConnect;
+return true;
+}
+return false;
+}
+private:
+void networkLoop();
+};
+/**
+* @class GameSession
+* @brief High-level manager for a multiplayer game session.
+*
+* Abstracts whether the user is a host or a client and provides
+* type-based packet routing.
+*
+* @tparam PacketHeaderType The structure type used as a header for all packets.
+*/
+template<typename PacketHeaderType>
+class GameSession {
+private:
+Server* server;
+Client* client;
+bool isHost;
+uint32_t myPlayerId;
+bool idAssigned;
+std::map<uint8_t, std::queue<Packet>> clientPacketQueues;
+std::map<uint8_t, std::queue<Packet>> serverPacketQueues;
+std::mutex clientQueueMutex;
+std::mutex serverQueueMutex;
+struct ConnectionEvent {
+uint32_t peerId;
+bool isConnect;
+};
+std::queue<ConnectionEvent> connectionQueue;
+std::mutex connectionMutex;
+public:
+GameSession() : server(nullptr), client(nullptr), isHost(false),
+myPlayerId(999), idAssigned(false) {}
+~GameSession() { cleanup(); }
+/** @brief Starts a local server and connects a local client to it. */
+bool startHost(uint16_t port = 25565, uint32_t maxClients = 32);
+/** @brief Connects to a remote game host. */
+bool connectToServer(const char* host, uint16_t port = 25565);
+/**
+* @brief Polling function to sort incoming packets into typed queues.
+* Should be called every frame.
+*/
+void update();
+/**
+* @brief Retrieves the next packet of a specific type from the server.
+* @tparam T The expected structure type.
+* @param packetType The identifier for the packet type.
+*/
+template<typename T>
+std::optional<T> receiveFromServer(uint8_t packetType);
+/** @brief Polls for player connection events (Server only). */
+bool pollPlayerConnection(uint32_t& peerId, bool& isConnect);
+/** @brief Sends a packet to the server. */
+template<typename T>
+void send(const T& packet, bool reliable = true);
+/** @brief Broadcasts a packet to all connected clients (Server only). */
+template<typename T>
+void broadcastToAll(const T& packet, bool reliable = true);
+/** @brief Gets the local player's network ID. */
+uint32_t getMyPlayerId() const { return myPlayerId; }
+/** @brief Checks if this instance is hosting the server. */
+bool isHosting() const { return isHost; }
+/** @brief Shuts down networking and releases resources. */
+void cleanup();
+};
+} // namespace NetLib
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/AssetManager.cpp
+#define GLM_ENABLE_EXPERIMENTAL
+#include "AssetManager.h"
+#include <tiny_gltf.h>
+#include <filesystem>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/quaternion.hpp>
+SDL_GPUDevice* AssetManager::s_Device = nullptr;
+std::unordered_map<std::string, std::shared_ptr<Texture>> AssetManager::s_Textures;
+std::unordered_map<std::string, SceneData> AssetManager::s_Scenes;
+std::shared_ptr<Model> AssetManager::s_FallbackModel = nullptr;
+std::shared_ptr<Texture> AssetManager::s_FallbackTexture = nullptr;
+void AssetManager::Init(SDL_GPUDevice* device) {
+s_Device = device;
+spdlog::info("AssetManager initialized");
+}
+void AssetManager::Shutdown() {
+s_Textures.clear();
+s_Scenes.clear();
+s_FallbackModel.reset();
+s_FallbackTexture.reset();
+spdlog::info("AssetManager shutdown and resources cleared");
+}
+std::shared_ptr<Texture> AssetManager::LoadTexture(const std::string& filePath, TextureFilter filter) {
+auto it = s_Textures.find(filePath);
+if (it != s_Textures.end()) return it->second;
+auto texture = std::make_shared<Texture>(s_Device, filePath, filter);
+if (texture->GetHandle()) {
+s_Textures[filePath] = texture;
+return texture;
+}
+return nullptr;
+}
+std::shared_ptr<Texture> AssetManager::LoadTexture(const std::string& name, unsigned char* pixels, uint32_t width, uint32_t height, TextureFilter filter) {
+auto it = s_Textures.find(name);
+if (it != s_Textures.end()) return it->second;
+auto texture = std::make_shared<Texture>(s_Device, pixels, width, height, filter);
+if (texture->GetHandle()) {
+s_Textures[name] = texture;
+return texture;
+}
+return nullptr;
+}
+template<typename T>
+const T* GetAttributes(const tinygltf::Model& model, int accessorIndex) {
+if (accessorIndex < 0) return nullptr;
+const tinygltf::Accessor& acc = model.accessors[accessorIndex];
+const tinygltf::BufferView& bv = model.bufferViews[acc.bufferView];
+return reinterpret_cast<const T*>(&(model.buffers[bv.buffer].data[acc.byteOffset + bv.byteOffset]));
+}
+struct LoaderContext {
+std::vector<ModelVertex>& vertices;
+std::vector<uint32_t>& indices;
+std::vector<MeshSection>& sections;
+std::vector<Light>& lights;
+std::vector<MeshInstance>& meshInstances;
+const tinygltf::Model& gltfModel;
+const std::string& filePath;
+const std::string& baseDir;
+};
+void ProcessNode(LoaderContext& ctx, int nodeIndex, const glm::mat4& parentTransform) {
+if (nodeIndex < 0) return;
+const auto& node = ctx.gltfModel.nodes[nodeIndex];
+glm::mat4 localTransform = glm::mat4(1.0f);
+if (node.matrix.size() == 16) {
+localTransform = glm::make_mat4(node.matrix.data());
+} else {
+if (node.translation.size() == 3) localTransform = glm::translate(localTransform, glm::vec3(glm::make_vec3(node.translation.data())));
+if (node.rotation.size() == 4) localTransform = localTransform * glm::toMat4(glm::quat((float)node.rotation[3], (float)node.rotation[0], (float)node.rotation[1], (float)node.rotation[2]));
+if (node.scale.size() == 3) localTransform = glm::scale(localTransform, glm::vec3(glm::make_vec3(node.scale.data())));
+}
+glm::mat4 globalTransform = parentTransform * localTransform;
+// Handle KHR_lights_punctual
+if (node.extensions.count("KHR_lights_punctual")) {
+spdlog::debug("Node {}: Found KHR_lights_punctual extension", nodeIndex);
+const auto& ext = node.extensions.at("KHR_lights_punctual");
+if (ext.IsObject() && ext.Has("light")) {
+int lightIdx = ext.Get("light").Get<int>();
+spdlog::debug("Node {}: Extension references light index {}", nodeIndex, lightIdx);
+const tinygltf::Light* gltfLight = (lightIdx >= 0 && lightIdx < (int)ctx.gltfModel.lights.size()) ? &ctx.gltfModel.lights[lightIdx] : nullptr;
+if (gltfLight) {
+spdlog::info("Node {}: Successfully found light '{}' of type {}", nodeIndex, gltfLight->name, gltfLight->type);
+Light light;
+glm::vec4 worldPos = globalTransform * glm::vec4(0, 0, 0, 1);
+light.position = glm::vec3(worldPos);
+glm::vec4 worldDir = globalTransform * glm::vec4(0, 0, -1, 0);
+light.direction = glm::normalize(glm::vec3(worldDir));
+glm::vec3 color = (gltfLight->color.size() == 3) ? glm::vec3(glm::make_vec3(gltfLight->color.data())) : glm::vec3(1.0f);
+light.color = color;
+light.intensity = gltfLight->intensity;
+if (gltfLight->type == "directional") light.type = (uint32_t)LightType::Directional;
+else if (gltfLight->type == "point") light.type = (uint32_t)LightType::Point;
+else if (gltfLight->type == "spot") light.type = (uint32_t)LightType::Spot;
+float nodeScale = (glm::length(glm::vec3(globalTransform[0])) + glm::length(glm::vec3(globalTransform[1])) + glm::length(glm::vec3(globalTransform[2]))) / 3.0f;
+light.range = gltfLight->range;
+spdlog::info(" - Position: ({}, {}, {})", light.position.x, light.position.y, light.position.z);
+spdlog::info(" - Direction: ({}, {}, {})", light.direction.x, light.direction.y, light.direction.z);
+spdlog::info(" - Color: ({}, {}, {})", light.color.r, light.color.g, light.color.b);
+spdlog::info(" - Intensity: {}", light.intensity);
+spdlog::info(" - Range: {}", light.range);
+spdlog::info(" - Type Enum: {}", light.type);
+ctx.lights.push_back(light);
+}
+}
+}
+if (node.mesh >= 0) {
+const auto& mesh = ctx.gltfModel.meshes[node.mesh];
+MeshInstance instance;
+instance.firstSection = (uint32_t)ctx.sections.size();
+instance.sectionCount = (uint32_t)mesh.primitives.size();
+instance.transform = globalTransform;
+ctx.meshInstances.push_back(instance);
+for (const auto& primitive : mesh.primitives) {
+MeshSection section;
+section.firstIndex = (uint32_t)ctx.indices.size();
+section.materialIndex = primitive.material >= 0 ? (uint32_t)primitive.material : 0;
+const float* posPtr = nullptr;
+const float* normPtr = nullptr;
+const float* uvPtr = nullptr;
+const void* colorPtr = nullptr;
+int colorCompType = 0, colorType = 0;
+if (primitive.attributes.count("POSITION")) posPtr = GetAttributes<float>(ctx.gltfModel, primitive.attributes.at("POSITION"));
+if (primitive.attributes.count("NORMAL")) normPtr = GetAttributes<float>(ctx.gltfModel, primitive.attributes.at("NORMAL"));
+if (primitive.attributes.count("TEXCOORD_0")) uvPtr = GetAttributes<float>(ctx.gltfModel, primitive.attributes.at("TEXCOORD_0"));
+if (primitive.attributes.count("COLOR_0")) {
+const auto& acc = ctx.gltfModel.accessors[primitive.attributes.at("COLOR_0")];
+colorPtr = GetAttributes<void>(ctx.gltfModel, primitive.attributes.at("COLOR_0"));
+colorCompType = acc.componentType;
+colorType = acc.type;
+}
+size_t vertexCount = ctx.gltfModel.accessors[primitive.attributes.at("POSITION")].count;
+uint32_t vertexStart = (uint32_t)ctx.vertices.size();
+for (size_t i = 0; i < vertexCount; i++) {
+ModelVertex v;
+v.position = posPtr ? glm::make_vec3(&posPtr[i * 3]) : glm::vec3(0.0f);
+v.normal = normPtr ? glm::make_vec3(&normPtr[i * 3]) : glm::vec3(0.0f, 1.0f, 0.0f);
+v.texCoords = uvPtr ? glm::make_vec2(&uvPtr[i * 2]) : glm::vec2(0.0f);
+v.color = glm::vec4(1.0f);
+if (colorPtr) {
+float factor = (colorCompType == TINYGLTF_COMPONENT_TYPE_FLOAT) ? 1.0f : (colorCompType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT ? 1.0f/65535.0f : 1.0f/255.0f);
+if (colorCompType == TINYGLTF_COMPONENT_TYPE_FLOAT) {
+const float* f = (const float*)colorPtr;
+v.color = (colorType == TINYGLTF_TYPE_VEC3) ? glm::vec4(f[i*3], f[i*3+1], f[i*3+2], 1.0f) : glm::make_vec4(&f[i*4]);
+} else {
+const uint8_t* u = (const uint8_t*)colorPtr;
+v.color = (colorType == TINYGLTF_TYPE_VEC3) ? glm::vec4(u[i*3]*factor, u[i*3+1]*factor, u[i*3+2]*factor, 1.0f) : glm::vec4(u[i*4]*factor, u[i*4+1]*factor, u[i*4+2]*factor, u[i*4+3]*factor);
+}
+}
+ctx.vertices.push_back(v);
+}
+if (primitive.indices >= 0) {
+const auto& acc = ctx.gltfModel.accessors[primitive.indices];
+const auto* buf = GetAttributes<uint8_t>(ctx.gltfModel, primitive.indices);
+section.indexCount = (uint32_t)acc.count;
+for (size_t i = 0; i < acc.count; i++) {
+if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) ctx.indices.push_back(((const uint32_t*)buf)[i] + vertexStart);
+else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) ctx.indices.push_back(((const uint16_t*)buf)[i] + vertexStart);
+else if (acc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) ctx.indices.push_back(((const uint8_t*)buf)[i] + vertexStart);
+}
+} else {
+section.indexCount = (uint32_t)vertexCount;
+for (uint32_t i = 0; i < (uint32_t)vertexCount; i++) ctx.indices.push_back(i + vertexStart);
+}
+ctx.sections.push_back(section);
+}
+}
+for (int childIndex : node.children) ProcessNode(ctx, childIndex, globalTransform);
+}
+std::shared_ptr<Model> AssetManager::LoadModel(const std::string& filePath) {
+return LoadScene(filePath).model;
+}
+SceneData AssetManager::LoadScene(const std::string& filePath) {
+auto it = s_Scenes.find(filePath);
+if (it != s_Scenes.end()) return it->second;
+tinygltf::Model gltfModel;
+tinygltf::TinyGLTF loader;
+std::string err, warn;
+bool ret = false;
+std::string ext = std::filesystem::path(filePath).extension().string();
+if (ext == ".gltf") ret = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, filePath);
+else if (ext == ".glb") ret = loader.LoadBinaryFromFile(&gltfModel, &err, &warn, filePath);
+if (!ret) { spdlog::error("Failed to load GLTF: {}", filePath); return { nullptr, {}, {} }; }
+spdlog::info("GLTF Loaded: {}. Used Extensions:", filePath);
+for (const auto& extName : gltfModel.extensionsUsed) {
+spdlog::info(" - {}", extName);
+}
+spdlog::info("Model has {} lights in the main lights vector", gltfModel.lights.size());
+if (gltfModel.extensions.count("KHR_lights_punctual")) {
+const auto& ext = gltfModel.extensions.at("KHR_lights_punctual");
+if (ext.IsObject() && ext.Has("lights")) {
+spdlog::info("KHR_lights_punctual found in root extensions with {} lights", ext.Get("lights").ArrayLen());
+}
+}
+std::vector<ModelVertex> vertices;
+std::vector<uint32_t> indices;
+std::vector<MeshSection> sections;
+std::vector<Material> materials;
+std::vector<Light> lights;
+std::vector<MeshInstance> meshInstances;
+std::string baseDir = std::filesystem::path(filePath).parent_path().string();
+for (size_t i = 0; i < gltfModel.materials.size(); i++) {
+const auto& gltfMat = gltfModel.materials[i];
+Material mat;
+mat.name = gltfMat.name.empty() ? "Material_" + std::to_string(i) : gltfMat.name;
+mat.baseColorFactor = glm::vec4(
+static_cast<float>(gltfMat.pbrMetallicRoughness.baseColorFactor[0]),
+static_cast<float>(gltfMat.pbrMetallicRoughness.baseColorFactor[1]),
+static_cast<float>(gltfMat.pbrMetallicRoughness.baseColorFactor[2]),
+static_cast<float>(gltfMat.pbrMetallicRoughness.baseColorFactor[3])
+);
+mat.metallicFactor = (float)gltfMat.pbrMetallicRoughness.metallicFactor;
+mat.roughnessFactor = (float)gltfMat.pbrMetallicRoughness.roughnessFactor;
+if (gltfMat.pbrMetallicRoughness.baseColorTexture.index >= 0) {
+const auto& gltfTex = gltfModel.textures[gltfMat.pbrMetallicRoughness.baseColorTexture.index];
+const auto& gltfImg = gltfModel.images[gltfTex.source];
+if (!gltfImg.uri.empty()) mat.baseColorTexture = LoadTexture(baseDir + "/" + gltfImg.uri);
+else if (!gltfImg.image.empty()) {
+std::string texName = filePath + "_img_" + std::to_string(gltfTex.source);
+mat.baseColorTexture = LoadTexture(texName, (unsigned char*)gltfImg.image.data(), gltfImg.width, gltfImg.height);
+}
+}
+materials.push_back(mat);
+}
+if (materials.empty()) materials.push_back(Material{"Default"});
+LoaderContext ctx = { vertices, indices, sections, lights, meshInstances, gltfModel, filePath, baseDir };
+const tinygltf::Scene& scene = gltfModel.scenes[gltfModel.defaultScene >= 0 ? gltfModel.defaultScene : 0];
+for (int nodeIndex : scene.nodes) ProcessNode(ctx, nodeIndex, glm::mat4(1.0f));
+auto model = std::make_shared<Model>(s_Device, vertices, indices, sections, materials);
+SceneData sceneData = { model, lights, meshInstances };
+s_Scenes[filePath] = sceneData;
+spdlog::info("Scene loaded successfully: {} ({} vertices, {} indices, {} lights, {} meshes)", filePath, (uint32_t)vertices.size(), (uint32_t)indices.size(), (uint32_t)lights.size(), (uint32_t)meshInstances.size());
+return sceneData;
+}
+std::shared_ptr<Model> AssetManager::GetFallbackModel() {
+if (s_FallbackModel) return s_FallbackModel;
+std::vector<ModelVertex> vertices = {
+{{-0.5f, -0.5f, 0.5f}, {0,0,1}, {0,0}, {1,1,1,1}}, {{ 0.5f, -0.5f, 0.5f}, {0,0,1}, {1,0}, {1,1,1,1}},
+{{ 0.5f, 0.5f, 0.5f}, {0,0,1}, {1,1}, {1,1,1,1}}, {{-0.5f, 0.5f, 0.5f}, {0,0,1}, {0,1}, {1,1,1,1}},
+{{-0.5f, -0.5f, -0.5f}, {0,0,-1}, {1,0}, {1,1,1,1}}, {{-0.5f, 0.5f, -0.5f}, {0,0,-1}, {1,1}, {1,1,1,1}},
+{{ 0.5f, 0.5f, -0.5f}, {0,0,-1}, {0,1}, {1,1,1,1}}, {{ 0.5f, -0.5f, -0.5f}, {0,0,-1}, {0,0}, {1,1,1,1}},
+{{-0.5f, 0.5f, -0.5f}, {0,1,0}, {0,1}, {1,1,1,1}}, {{-0.5f, 0.5f, 0.5f}, {0,1,0}, {0,0}, {1,1,1,1}},
+{{ 0.5f, 0.5f, 0.5f}, {0,1,0}, {1,0}, {1,1,1,1}}, {{ 0.5f, 0.5f, -0.5f}, {0,1,0}, {1,1}, {1,1,1,1}},
+{{-0.5f, -0.5f, -0.5f}, {0,-1,0}, {1,1}, {1,1,1,1}}, {{ 0.5f, -0.5f, -0.5f}, {0,-1,0}, {0,1}, {1,1,1,1}},
+{{ 0.5f, -0.5f, 0.5f}, {0,-1,0}, {0,0}, {1,1,1,1}}, {{-0.5f, -0.5f, 0.5f}, {0,-1,0}, {1,0}, {1,1,1,1}},
+{{ 0.5f, -0.5f, -0.5f}, {1,0,0}, {1,0}, {1,1,1,1}}, {{ 0.5f, 0.5f, -0.5f}, {1,0,0}, {1,1}, {1,1,1,1}},
+{{ 0.5f, 0.5f, 0.5f}, {1,0,0}, {0,1}, {1,1,1,1}}, {{ 0.5f, -0.5f, 0.5f}, {1,0,0}, {0,0}, {1,1,1,1}},
+{{-0.5f, -0.5f, -0.5f}, {-1,0,0}, {0,0}, {1,1,1,1}}, {{-0.5f, -0.5f, 0.5f}, {-1,0,0}, {1,0}, {1,1,1,1}},
+{{-0.5f, 0.5f, 0.5f}, {-1,0,0}, {1,1}, {1,1,1,1}}, {{-0.5f, 0.5f, -0.5f}, {-1,0,0}, {0,1}, {1,1,1,1}}
+};
+std::vector<uint32_t> indices = {
+0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4,
+8, 9, 10, 10, 11, 8, 12, 13, 14, 14, 15, 12,
+16, 17, 18, 18, 19, 16, 20, 21, 22, 22, 23, 20
+};
+std::vector<MeshSection> sections = {{0, 36, 0}};
+std::vector<Material> materials = {{"Default"}};
+materials[0].baseColorFactor = {1.0f, 0.0f, 1.0f, 1.0f};
+s_FallbackModel = std::make_shared<Model>(s_Device, vertices, indices, sections, materials);
+return s_FallbackModel;
+}
+std::shared_ptr<Texture> AssetManager::GetFallbackTexture() {
+if (s_FallbackTexture) return s_FallbackTexture;
+unsigned char whitePixels[] = { 255, 255, 255, 255 };
+s_FallbackTexture = std::make_shared<Texture>(s_Device, whitePixels, 1, 1, TextureFilter::Nearest);
+return s_FallbackTexture;
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/Application.cpp
+#include "Application.h"
+#include "../Graphics/Renderer.h"
+#include "../Gameplay/World.h"
+#include "../Gameplay/TestScene.h"
+#include "Input.h"
+#include "AssetManager.h"
+#include "../Graphics/API/GPUBuffer.h"
+#include "../Graphics/API/GraphicsPipeline.h"
+#include "../Graphics/ShapeGenerator.h"
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
+#include <spdlog/spdlog.h>
+Application::Application() {
+m_Window.title = "Bugmin Engine";
+m_Window.width = 1280;
+m_Window.height = 720;
+m_Window.mode = WindowMode::Windowed;
+m_Window.vsync = true;
+if (!CreateWindow(m_Window)) {
+spdlog::critical("Failed to create window");
+exit(1);
+}
+m_Renderer = std::make_unique<Renderer>(&m_Window);
+AssetManager::Init(m_Renderer->GetDevice());
+m_World = std::make_unique<World>();
+m_TestScene = std::make_unique<TestScene>(m_Renderer.get());
+}
+Application::~Application() {
+m_TestScene.reset();
+m_World.reset();
+AssetManager::Shutdown();
+m_Renderer.reset();
+DestroyWindow(&m_Window);
+}
+void Application::Run() {
+while (m_Running) {
+m_Timer.Update();
+Input::Update();
+ProcessEvents();
+m_World->Update(m_Timer.GetDeltaTime());
+if (m_TestScene) m_TestScene->Update(m_Timer.GetDeltaTime());
+if (m_Renderer->BeginFrame()) {
+if (m_TestScene) m_TestScene->Render(m_Renderer.get());
+ImGui::Begin("Bugmin Debugger");
+ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
+if (ImGui::Button("Exit")) m_Running = false;
+ImGui::End();
+if (m_TestScene) m_TestScene->OnImGui();
+m_Renderer->EndFrame();
+}
+}
+}
+void Application::ProcessEvents() {
+SDL_Event event;
+while (SDL_PollEvent(&event)) {
+ImGui_ImplSDL3_ProcessEvent(&event);
+Input::ProcessEvent(event);
+if (event.type == SDL_EVENT_QUIT) m_Running = false;
+}
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/AssetManager.h
+#pragma once
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <spdlog/spdlog.h>
+#include <SDL3/SDL_gpu.h>
+#include "Graphics/API/Texture.h"
+#include "Graphics/Model.h"
+#include "Graphics/Lights.h"
+/**
+* @class AssetManager
+* @brief Singleton-style manager for loading and caching engine assets.
+*
+* Performance:
+* - Caches textures and models to avoid redundant I/O and GPU uploads.
+* - Simple API for fast access during runtime.
+*
+* Ease of Use:
+* - Centralized management of GPU resources.
+* - Automatic cleanup of assets during shutdown.
+*/
+struct MeshInstance {
+uint32_t firstSection;
+uint32_t sectionCount;
+glm::mat4 transform;
+};
+struct SceneData {
+std::shared_ptr<Model> model;
+std::vector<Light> lights;
+std::vector<MeshInstance> meshInstances;
+};
+class AssetManager {
+public:
+/**
+* @brief Initializes the AssetManager with the active GPU device.
+* @param device The SDL_GPUDevice to use for resource creation.
+*/
+static void Init(SDL_GPUDevice* device);
+/**
+* @brief Clears all cached assets and logs shutdown.
+*/
+static void Shutdown();
+/**
+* @brief Loads or retrieves a cached texture.
+* @param filePath Path to the image file.
+* @param filter The filtering mode to use.
+* @return Shared pointer to the Texture object.
+*/
+static std::shared_ptr<Texture> LoadTexture(const std::string& filePath, TextureFilter filter = TextureFilter::Linear);
+/**
+* @brief Loads or retrieves a cached texture from raw pixel data.
+* @param name Unique name for the texture cache.
+* @param pixels Pointer to the RGBA8 pixel data.
+* @param width Width in pixels.
+* @param height Height in pixels.
+* @param filter The filtering mode to use.
+* @return Shared pointer to the Texture object.
+*/
+static std::shared_ptr<Texture> LoadTexture(const std::string& name, unsigned char* pixels, uint32_t width, uint32_t height, TextureFilter filter = TextureFilter::Linear);
+/**
+* @brief Loads or retrieves a cached GLTF model.
+* @param filePath Path to the .gltf or .glb file.
+* @return Shared pointer to the Model object.
+*/
+static std::shared_ptr<Model> LoadModel(const std::string& filePath);
+/**
+* @brief Loads a full scene including models and lights.
+* @param filePath Path to the .gltf or .glb file.
+* @return SceneData containing the model and all lights found in the file.
+*/
+static SceneData LoadScene(const std::string& filePath);
+/** @brief Returns a simple procedural unit cube. */
+static std::shared_ptr<Model> GetFallbackModel();
+/** @brief Returns a 1x1 white texture. */
+static std::shared_ptr<Texture> GetFallbackTexture();
+private:
+static SDL_GPUDevice* s_Device;
+static std::unordered_map<std::string, std::shared_ptr<Texture>> s_Textures;
+static std::unordered_map<std::string, SceneData> s_Scenes;
+static std::shared_ptr<Model> s_FallbackModel;
+static std::shared_ptr<Texture> s_FallbackTexture;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/Input.h
+#pragma once
+#include <SDL3/SDL.h>
+#include <glm/glm.hpp>
+#include <unordered_map>
+/**
+* @class Input
+* @brief Static utility class for handling keyboard and mouse input.
+*
+* Tracks the current and previous states of all keys and mouse buttons
+* to provide easy access to "pressed" and "released" events.
+*/
+class Input {
+public:
+/**
+* @brief Updates the input state.
+*
+* Moves current state to the 'last' state to prepare for a new frame.
+* Should be called once per frame.
+*/
+static void Update();
+/**
+* @brief Processes an SDL input event.
+* @param event The SDL_Event to parse.
+*/
+static void ProcessEvent(const SDL_Event& event);
+/**
+* @brief Checks if a key is currently held down.
+* @param key The SDL keycode to check.
+*/
+static bool IsKeyDown(SDL_Keycode key);
+/**
+* @brief Checks if a key was pressed exactly this frame.
+* @param key The SDL keycode to check.
+*/
+static bool IsKeyPressed(SDL_Keycode key);
+/**
+* @brief Checks if a key was released exactly this frame.
+* @param key The SDL keycode to check.
+*/
+static bool IsKeyReleased(SDL_Keycode key);
+/**
+* @brief Checks if a mouse button is currently held down.
+* @param button The SDL mouse button index (e.g., SDL_BUTTON_LEFT).
+*/
+static bool IsMouseButtonDown(uint8_t button);
+/**
+* @brief Checks if a mouse button was pressed exactly this frame.
+* @param button The SDL mouse button index.
+*/
+static bool IsMouseButtonPressed(uint8_t button);
+/**
+* @brief Checks if a mouse button was released exactly this frame.
+* @param button The SDL mouse button index.
+*/
+static bool IsMouseButtonReleased(uint8_t button);
+/**
+* @brief Gets the current mouse coordinates in window space.
+* @return glm::vec2 containing x and y position.
+*/
+static glm::vec2 GetMousePosition();
+/**
+* @brief Toggles relative mouse mode (hides cursor and captures movement).
+* @param window The SDL window to capture.
+* @param enabled If true, mouse is captured.
+*/
+static void SetRelativeMouseMode(SDL_Window* window, bool enabled);
+/** @brief Returns true if relative mouse mode is active. */
+static bool IsRelativeMouseMode();
+private:
+static std::unordered_map<SDL_Keycode, bool> m_Keys;
+static std::unordered_map<SDL_Keycode, bool> m_KeysLast;
+static std::unordered_map<uint8_t, bool> m_MouseButtons;
+static std::unordered_map<uint8_t, bool> m_MouseButtonsLast;
+static glm::vec2 m_MousePos;
+static bool m_RelativeMouse;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/Timer.h
+#pragma once
+#include <SDL3/SDL.h>
+class Timer {
+public:
+Timer() {
+m_LastTime = SDL_GetTicks();
+}
+void Update() {
+uint64_t currentTime = SDL_GetTicks();
+m_DeltaTime = (currentTime - m_LastTime) / 1000.0f;
+m_LastTime = currentTime;
+}
+float GetDeltaTime() const { return m_DeltaTime; }
+float GetFPS() const { return 1.0f / m_DeltaTime; }
+private:
+uint64_t m_LastTime;
+float m_DeltaTime = 0.0f;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/Application.h
+#pragma once
+#include <memory>
+#include <string>
+#include <vector>
+#include "Window/Window.h"
+#include "Core/Timer.h"
+class Renderer;
+class World;
+class TestScene;
+/**
+* @class Application
+* @brief The main entry point and controller for the Bugmin engine.
+*
+* This class manages the primary game loop, initializes core systems
+* (Renderer, World, Input), and handles top-level system events.
+*/
+class Application {
+public:
+/**
+* @brief Initializes the engine, creating the window and core systems.
+*/
+Application();
+/**
+* @brief Cleans up all engine systems and resources.
+*/
+~Application();
+/**
+* @brief Starts and maintains the main execution loop.
+*
+* This function runs until the application is requested to close.
+*/
+void Run();
+private:
+/**
+* @brief Processes SDL system events.
+*
+* Handles window events, keyboard/mouse input, and quit requests.
+*/
+void ProcessEvents();
+Window m_Window;
+std::unique_ptr<Renderer> m_Renderer;
+std::unique_ptr<World> m_World;
+std::unique_ptr<TestScene> m_TestScene;
+Timer m_Timer;
+bool m_Running = true;
+};
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/Input.cpp
+#include "Input.h"
+std::unordered_map<SDL_Keycode, bool> Input::m_Keys;
+std::unordered_map<SDL_Keycode, bool> Input::m_KeysLast;
+std::unordered_map<uint8_t, bool> Input::m_MouseButtons;
+std::unordered_map<uint8_t, bool> Input::m_MouseButtonsLast;
+glm::vec2 Input::m_MousePos;
+bool Input::m_RelativeMouse = false;
+void Input::Update() {
+m_KeysLast = m_Keys;
+m_MouseButtonsLast = m_MouseButtons;
+float x, y;
+if (m_RelativeMouse) {
+SDL_GetRelativeMouseState(&x, &y);
+} else {
+SDL_GetMouseState(&x, &y);
+}
+m_MousePos = {x, y};
+}
+void Input::ProcessEvent(const SDL_Event& event) {
+if (event.type == SDL_EVENT_KEY_DOWN) {
+m_Keys[event.key.key] = true;
+} else if (event.type == SDL_EVENT_KEY_UP) {
+m_Keys[event.key.key] = false;
+} else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+m_MouseButtons[event.button.button] = true;
+} else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+m_MouseButtons[event.button.button] = false;
+}
+}
+bool Input::IsKeyDown(SDL_Keycode key) {
+return m_Keys[key];
+}
+bool Input::IsKeyPressed(SDL_Keycode key) {
+return m_Keys[key] && !m_KeysLast[key];
+}
+bool Input::IsKeyReleased(SDL_Keycode key) {
+return !m_Keys[key] && m_KeysLast[key];
+}
+bool Input::IsMouseButtonDown(uint8_t button) {
+return m_MouseButtons[button];
+}
+bool Input::IsMouseButtonPressed(uint8_t button) {
+return m_MouseButtons[button] && !m_MouseButtonsLast[button];
+}
+bool Input::IsMouseButtonReleased(uint8_t button) {
+return !m_MouseButtons[button] && m_MouseButtonsLast[button];
+}
+glm::vec2 Input::GetMousePosition() {
+return m_MousePos;
+}
+void Input::SetRelativeMouseMode(SDL_Window* window, bool enabled) {
+m_RelativeMouse = enabled;
+SDL_SetWindowRelativeMouseMode(window, enabled);
+}
+bool Input::IsRelativeMouseMode() {
+return m_RelativeMouse;
+}
+
+// FILE: /home/david/Dokumente/coding projects/bugmin/src/Core/tiny_gltf_implementation.cpp
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <tiny_gltf.h>
+

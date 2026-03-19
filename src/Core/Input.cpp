@@ -5,13 +5,15 @@ std::unordered_map<SDL_Keycode, bool> Input::m_KeysLast;
 std::unordered_map<uint8_t, bool> Input::m_MouseButtons;
 std::unordered_map<uint8_t, bool> Input::m_MouseButtonsLast;
 glm::vec2 Input::m_MousePos;
-glm::vec2 Input::m_MouseLastPos;
+glm::vec2 Input::m_MouseDelta = {0, 0};
+
+bool Input::m_RelativeMouse = false;
 
 void Input::Update() {
     m_KeysLast = m_Keys;
     m_MouseButtonsLast = m_MouseButtons;
-    m_MouseLastPos = m_MousePos;
-
+    m_MouseDelta = {0, 0}; // Reset delta each frame
+    
     float x, y;
     SDL_GetMouseState(&x, &y);
     m_MousePos = {x, y};
@@ -26,6 +28,9 @@ void Input::ProcessEvent(const SDL_Event& event) {
         m_MouseButtons[event.button.button] = true;
     } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
         m_MouseButtons[event.button.button] = false;
+    } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        m_MouseDelta.x += event.motion.xrel;
+        m_MouseDelta.y += event.motion.yrel;
     }
 }
 
@@ -58,5 +63,14 @@ glm::vec2 Input::GetMousePosition() {
 }
 
 glm::vec2 Input::GetMouseDelta() {
-    return m_MousePos - m_MouseLastPos;
+    return m_MouseDelta;
+}
+
+void Input::SetRelativeMouseMode(SDL_Window* window, bool enabled) {
+    m_RelativeMouse = enabled;
+    SDL_SetWindowRelativeMouseMode(window, enabled);
+}
+
+bool Input::IsRelativeMouseMode() {
+    return m_RelativeMouse;
 }

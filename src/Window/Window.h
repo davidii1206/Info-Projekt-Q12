@@ -4,12 +4,23 @@
 #include <string>
 #include <vector>
 
+/**
+ * @file Window.h
+ * @brief Window management and event polling.
+ */
+
 #ifdef _WIN32
 #undef CreateWindow
 #endif
 
+/**
+ * @brief Window display modes.
+ */
 enum class WindowMode { Windowed, Borderless, Fullscreen };
 
+/**
+ * @brief Structure holding SDL window state.
+ */
 struct Window {
     uint32_t width;
     uint32_t height;
@@ -20,6 +31,11 @@ struct Window {
     bool hasFocus;
 };
 
+/**
+ * @brief Creates a system window.
+ * @param win Reference to window configuration.
+ * @return Pointer to the configured window.
+ */
 Window* CreateWindow(Window& win);
 void    DestroyWindow(Window* win);
 
