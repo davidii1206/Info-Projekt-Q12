@@ -12,7 +12,7 @@ TestScene::TestScene(Renderer* renderer) {
     m_Camera->m_Position = {0, 0, 0};
 
     // Attempt to load a scene
-    m_Scene = AssetManager::LoadScene("assets/SponzaModel.glb");
+    m_Scene = AssetManager::LoadScene("assets/test_scene_pixelation.glb");
     if (!m_Scene.model) {
         spdlog::warn("TestScene: Failed to load SponzaModel.glb, using fallback.");
         m_Scene.model = AssetManager::GetFallbackModel();
@@ -59,10 +59,38 @@ void TestScene::InitPipelines(Renderer* renderer) {
 
     config.enableDepthTest = true;
     config.depthCompareOp = SDL_GPU_COMPAREOP_GREATER; // Required for Reverse-Z
-    config.cullMode = SDL_GPU_CULLMODE_NONE; // Disable culling for testing
 
     SDL_GPUTextureFormat swapchainFormat = SDL_GetGPUSwapchainTextureFormat(renderer->GetDevice(), renderer->GetWindow()->handle);
     m_Pipeline = renderer->GetPipelines()->CreatePipeline("ModelPipeline", config, swapchainFormat);
+
+    // --- G-Buffer Setup ---
+    m_GBufferFormats = {
+        SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Normal
+        SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,     // Color (Albedo)
+        SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Light Buffer
+        SDL_GPU_TEXTUREFORMAT_R16_UINT            // Object ID
+    };
+
+    PipelineConfig gBufferConfig = config; // Reuse geometry state
+    gBufferConfig.colorTargetFormats = m_GBufferFormats;
+    
+    m_GBufferPipeline = renderer->GetPipelines()->CreatePipeline("GBufferPipeline", gBufferConfig, SDL_GPU_TEXTUREFORMAT_INVALID);
+
+    // --- Post-Processing Setup ---
+    ShaderResourceLayout postVertLayout = {0, 0, 0, 0}; // Fullscreen triangle
+    ShaderResourceLayout postFragLayout = {4, 0, 0, 2}; // 4 Samplers, 2 PC slots
+
+    m_PostVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/post.vert.spv", ShaderStage::Vertex, postVertLayout);
+    m_PostFragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/post.frag.spv", ShaderStage::Fragment, postFragLayout);
+
+    PipelineConfig postConfig;
+    postConfig.vertexShader = m_PostVertShader.get();
+    postConfig.fragmentShader = m_PostFragShader.get();
+    postConfig.primitiveType = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    postConfig.enableDepthTest = false;
+    postConfig.enableBlending = false;
+
+    m_PostPipeline = renderer->GetPipelines()->CreatePipeline("PostPipeline", postConfig, swapchainFormat);
 }
 
 void TestScene::Update(float deltaTime) {
@@ -96,6 +124,17 @@ void TestScene::Render(Renderer* renderer) {
     SDL_GetWindowSizeInPixels(renderer->GetWindow()->handle, &w, &h);
     float aspect = (float)w / (float)h;
 
+    // --- G-Buffer Lifecycle (Low Res) ---
+    uint32_t lowW = (uint32_t)w / m_DownscaleFactor;
+    uint32_t lowH = (uint32_t)h / m_DownscaleFactor;
+    if (lowW == 0) lowW = 1;
+    if (lowH == 0) lowH = 1;
+
+    if (!m_GBuffer || m_GBuffer->GetWidth() != lowW || m_GBuffer->GetHeight() != lowH) {
+        m_GBuffer = std::make_unique<Framebuffer>(renderer->GetDevice(), lowW, lowH, m_GBufferFormats, true);
+        spdlog::info("TestScene: Resized G-Buffer to {}x{}", lowW, lowH);
+    }
+
     m_Globals.view = m_Camera->GetViewMatrix();
     m_Globals.proj = m_Camera->GetProjectionMatrix(aspect);
     m_Globals.viewProj = m_Globals.proj * m_Globals.view;
@@ -110,25 +149,23 @@ void TestScene::Render(Renderer* renderer) {
     // timers: x: time, y: numLights, z: deltaTime, w: frameCount
     m_Globals.timers = glm::vec4(m_TotalTime, (float)lightCount, 0.016f, (float)m_FrameCount);
     
-    // screen: xy: resolution, zw: padding
-    m_Globals.screen = glm::vec4((float)w, (float)h, 0.0f, 0.0f);
+    // screen: xy: resolution, z: posterizeSteps, w: padding
+    m_Globals.screen = glm::vec4((float)lowW, (float)lowH, m_PosterizeSteps, 0.0f);
 
     renderer->UpdateGlobalUniforms(m_Globals);
 
-    // Add Render Pass
-    renderer->AddPass("MainPass", nullptr, [this, renderer](RenderContext& ctx) {
-        if (!m_Pipeline || !m_Scene.model) return;
+    // --- 1. G-Buffer Pass (Low Res) ---
+    renderer->AddPass("GBufferPass", m_GBuffer.get(), [this, renderer](RenderContext& ctx) {
+        if (!m_GBufferPipeline || !m_Scene.model) return;
 
-        ctx.BindPipeline(m_Pipeline);
+        ctx.BindPipeline(m_GBufferPipeline);
         
-        // Bind Global Uniforms as a Storage Buffer (Slot 0 in both stages)
         ctx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
         ctx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
 
         ctx.BindVertexBuffer(m_Scene.model->GetVertexBuffer());
         ctx.BindIndexBuffer(m_Scene.model->GetIndexBuffer());
 
-        // Bind Material SSBO to Slot 1 (Set 2 in Fragment, Binding 1)
         if (m_Scene.model->GetMaterialBuffer()) {
             ctx.BindFragmentStorageBuffer(1, m_Scene.model->GetMaterialBuffer());
         }
@@ -136,35 +173,59 @@ void TestScene::Render(Renderer* renderer) {
         const auto& allSections = m_Scene.model->GetSections();
         const auto& allMaterials = m_Scene.model->GetMaterials();
 
-        // Loop over instances from GLTF
+        uint32_t instanceID = 1; // Start from 1, 0 is background
         for (const auto& instance : m_Scene.meshInstances) {
-            struct ModelPC {
-                glm::mat4 model;
-            } modelPC;
+            struct ModelPC { glm::mat4 model; } modelPC;
             modelPC.model = instance.transform;
-
-            // Push Model Matrix to Slot 0
             ctx.PushVertexConstants(0, &modelPC, sizeof(ModelPC));
 
-            // Render all sections belonging to this mesh
             for (uint32_t i = 0; i < instance.sectionCount; ++i) {
                 const auto& section = allSections[instance.firstSection + i];
+                
+                struct FragPC {
+                    uint32_t matIdx;
+                    uint32_t objID;
+                    uint32_t pad1;
+                    uint32_t pad2;
+                } fpc;
+                fpc.matIdx = (uint32_t)section.materialIndex;
+                fpc.objID = instanceID;
+                ctx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
 
-                // Push Material Index to Slot 0 (as vec4 for alignment)
-                glm::vec4 matIdx = glm::vec4((float)section.materialIndex, 0.0f, 0.0f, 0.0f);
-                ctx.PushFragmentConstants(0, &matIdx, sizeof(glm::vec4));
-
-                // Bind Texture to Slot 0 (Set 0 in Fragment, Binding 0)
                 if (section.materialIndex < allMaterials.size()) {
                     auto tex = allMaterials[section.materialIndex].baseColorTexture;
                     if (!tex) tex = AssetManager::GetFallbackTexture();
                     ctx.BindFragmentTexture(0, tex.get());
                 }
-
                 ctx.DrawIndexed(section.indexCount, 1, section.firstIndex);
             }
+            instanceID++;
         }
     });
+
+    // --- Post-Processing Pass (Swapchain) ---
+    renderer->AddPass("PostPass", nullptr, [this, w, h, lowW, lowH](RenderContext& ctx) {
+        if (!m_PostPipeline || !m_GBuffer) return;
+
+        ctx.BindPipeline(m_PostPipeline);
+
+        // Bind G-Buffer textures
+        ctx.BindFragmentTexture(0, m_GBuffer->GetColorTarget(0)); // tNormal
+        ctx.BindFragmentTexture(1, m_GBuffer->GetColorTarget(1)); // tColor
+        ctx.BindFragmentTexture(2, m_GBuffer->GetColorTarget(2)); // tLight
+        ctx.BindFragmentTexture(3, m_GBuffer->GetDepthTarget());   // tDepth
+
+        struct PostPC {
+            glm::vec4 resolution; // x, y, 1/x, 1/y
+            glm::vec4 params;     // x: normalEdgeStrength, y: depthEdgeStrength, z: posterizeSteps, w: debugMode
+        } pc;
+        pc.resolution = glm::vec4((float)lowW, (float)lowH, 1.0f / (float)lowW, 1.0f / (float)lowH);
+        pc.params = glm::vec4(m_NormalThreshold, m_DepthThreshold, m_PosterizeSteps, (float)m_DebugMode);
+
+        ctx.PushFragmentConstants(0, &pc, sizeof(PostPC));
+
+        ctx.Draw(3); // Fullscreen triangle
+    }, false); 
 }
 
 void TestScene::OnImGui() {
@@ -189,6 +250,44 @@ void TestScene::OnImGui() {
         ImGui::Text("Model Info");
         ImGui::Text("Sections: %d", (int)m_Scene.model->GetSections().size());
         ImGui::Text("Materials: %d", (int)m_Scene.model->GetMaterials().size());
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Post-Processing Settings (Three.js Style)");
+    ImGui::SliderInt("Pixel Size", &m_DownscaleFactor, 1, 8);
+    ImGui::SliderFloat("Normal Edge Strength", &m_NormalThreshold, 0.0f, 1.0f);
+    ImGui::SliderFloat("Depth Edge Strength", &m_DepthThreshold, 0.0f, 1.0f);
+    ImGui::SliderFloat("Posterize Steps", &m_PosterizeSteps, 1.0f, 16.0f);
+
+    const char* debugModes[] = { "None", "Normal", "Color", "Light", "Depth", "Depth Indicator", "Normal Indicator" };
+    ImGui::Combo("Debug Mode", &m_DebugMode, debugModes, IM_ARRAYSIZE(debugModes));
+
+    if (m_GBuffer) {
+        ImGui::Separator();
+        ImGui::Text("G-Buffer Visualization (Low Res)");
+        if (ImGui::BeginTabBar("GBufferTabs")) {
+            if (ImGui::BeginTabItem("Normal")) {
+                ImTextureID texID = (ImTextureID)m_GBuffer->GetColorTarget(0)->GetHandle();
+                ImGui::Image(texID, ImVec2(256, 256));
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Color")) {
+                ImTextureID texID = (ImTextureID)m_GBuffer->GetColorTarget(1)->GetHandle();
+                ImGui::Image(texID, ImVec2(256, 256));
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Light")) {
+                ImTextureID texID = (ImTextureID)m_GBuffer->GetColorTarget(2)->GetHandle();
+                ImGui::Image(texID, ImVec2(256, 256));
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Depth")) {
+                ImTextureID texID = (ImTextureID)m_GBuffer->GetDepthTarget()->GetHandle();
+                ImGui::Image(texID, ImVec2(256, 256));
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
     }
 
     ImGui::End();

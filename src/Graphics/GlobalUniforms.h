@@ -22,7 +22,7 @@ struct alignas(16) GlobalUniforms {
     // x: time, y: numLights, z: deltaTime, w: frameCount
     glm::vec4 timers;       // 304
     
-    // xy: resolution, zw: padding
+    // xy: resolution, z: posterizeSteps, w: padding
     glm::vec4 screen;       // 320
     
     Light lights[16];       // 336

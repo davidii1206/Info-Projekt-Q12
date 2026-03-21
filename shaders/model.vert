@@ -38,10 +38,10 @@ layout(set = 0, binding = 0, std430) readonly buffer GlobalUniforms {
 } globals;
 
 
-layout(location = 0) out vec3 outNormal;
-layout(location = 1) out vec2 outTexCoords;
-layout(location = 2) out vec4 outColor;
-layout(location = 3) out vec3 outPos;
+layout(location = 0) out vec3 vNormal;
+layout(location = 1) out vec2 vTexCoords;
+layout(location = 2) out vec4 vColor;
+layout(location = 3) out vec3 vPos;
 
 bool is_nan(mat4 m) {
     return any(isnan(m[0])) || any(isnan(m[1])) || any(isnan(m[2])) || any(isnan(m[3]));
@@ -59,7 +59,7 @@ void main() {
     }
 
     vec4 worldPos = model * vec4(inPosition, 1.0);
-    outPos = worldPos.xyz;
+    vPos = worldPos.xyz;
     gl_Position = viewProj * worldPos;
     
     // Fallback for extreme values or NaN in final position
@@ -67,11 +67,11 @@ void main() {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
     }
 
-    outNormal = normalize(mat3(model) * inNormal);
-    if (any(isnan(outNormal))) {
-        outNormal = inNormal;
+    vNormal = normalize(mat3(model) * inNormal);
+    if (any(isnan(vNormal))) {
+        vNormal = inNormal;
     }
 
-    outTexCoords = inTexCoords;
-    outColor = inColor;
+    vTexCoords = inTexCoords;
+    vColor = inColor;
 }

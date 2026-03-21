@@ -1,9 +1,9 @@
 #version 450
 
-layout(location = 0) in vec3 outNormal;
-layout(location = 1) in vec2 outTexCoords;
-layout(location = 2) in vec4 outColor;
-layout(location = 3) in vec3 outPos;
+layout(location = 0) in vec3 vNormal;
+layout(location = 1) in vec2 vTexCoords;
+layout(location = 2) in vec4 vColor;
+layout(location = 3) in vec3 vPos;
 struct Light {
     vec4 position_type; // xyz: position, w: type
     vec4 direction_range; // xyz: direction, w: range
@@ -48,26 +48,32 @@ layout(set = 2, binding = 2, std430) readonly buffer MaterialBuffer {
 
 // Slot 0 (pc) -> Binding 0 in Set 3
 layout(set = 3, binding = 0) uniform MaterialIndex {
-    vec4 materialIndex; // x = index, rest is padding
+    uint materialIndex;
+    uint objectID;
 } pc;
 
-layout(location = 0) out vec4 fragColor;
+layout(location = 0) out vec4 outNormal;
+layout(location = 1) out vec4 outColor;
+layout(location = 2) out vec4 outLight;
+layout(location = 3) out uint outID;
 
 void main() {
     uint matIdx = uint(pc.materialIndex.x);
     GPUMaterial mat = matBuffer.materials[matIdx];
     
-    vec4 texColor = texture(baseColorTexture, outTexCoords);
-    vec4 baseColor = mat.baseColorFactor * outColor * texColor;
+    vec4 texColor = texture(baseColorTexture, vTexCoords);
+    vec4 baseColor = mat.baseColorFactor * vColor * texColor;
     
     if (baseColor.a < 0.1) discard;
 
-    vec3 N = normalize(outNormal);
-    vec3 V = normalize(globals.cameraPos.xyz - outPos);
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(globals.cameraPos.xyz - vPos);
     
     vec3 totalDiffuse = vec3(0.1); // Ambient
     
     uint numLights = uint(globals.timers.y);
+    float posterizeSteps = globals.screen.z;
+
     for (uint i = 0; i < numLights; ++i) {
         Light light = globals.lights[i];
         
@@ -81,18 +87,17 @@ void main() {
         if (type == 0) { // Directional
             L = normalize(-light.direction_range.xyz);
         } else { // Point or Spot
-            vec3 lightDir = light.position_type.xyz - outPos;
+            vec3 lightDir = light.position_type.xyz - vPos;
             float distance = length(lightDir);
             L = normalize(lightDir);
             
             float range = light.direction_range.w;
             attenuation = max(0.0, 1.0 - (distance / range));
-            attenuation *= attenuation; // Quadratic falloff for smoother look
             
             if (type == 2) { // Spot
                 float theta = dot(L, normalize(-light.direction_range.xyz));
-                float innerCutoff = 0.9; // Hardcoded for now
-                float outerCutoff = 0.8;
+                float innerCutoff = 0.95; 
+                float outerCutoff = 0.85;
                 float epsilon = innerCutoff - outerCutoff;
                 float spotIntensity = clamp((theta - outerCutoff) / epsilon, 0.0, 1.0);
                 attenuation *= spotIntensity;
@@ -100,8 +105,17 @@ void main() {
         }
         
         float diff = max(dot(N, L), 0.0);
-        totalDiffuse += lightColor * intensity * diff * attenuation;
+        float lightIntensity = diff * attenuation;
+
+        // Apply Toon/Posterization to the light intensity directly
+        if (posterizeSteps > 0.0) {
+            lightIntensity = floor(lightIntensity * posterizeSteps) / posterizeSteps;
+        }
+
+        totalDiffuse += lightColor * intensity * lightIntensity;
     }
     
-    fragColor = vec4(baseColor.rgb * totalDiffuse, baseColor.a);
+    outNormal = vec4(N * 0.5 + 0.5, 1.0);
+    outColor = baseColor;
+    outLight = vec4(totalDiffuse, 1.0);
 }

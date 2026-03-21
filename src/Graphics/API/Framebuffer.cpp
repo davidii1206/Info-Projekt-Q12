@@ -12,7 +12,7 @@ Framebuffer::Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height,
             m_Height, 
             format, 
             SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
-            TextureFilter::Linear
+            TextureFilter::Nearest
         );
         m_ColorTargets.push_back(std::move(tex));
     }
@@ -27,7 +27,7 @@ Framebuffer::Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height,
             m_Height,
             depthFormat,
             SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
-            TextureFilter::Linear
+            TextureFilter::Nearest
         );
     }
 

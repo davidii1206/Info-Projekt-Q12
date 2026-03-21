@@ -32,9 +32,9 @@ Application::Application() {
 Application::~Application() {
     m_TestScene.reset();
     m_World.reset();
+    AssetManager::Shutdown();
     m_Renderer.reset();
     DestroyWindow(&m_Window);
-    AssetManager::Shutdown();
 }
 
 void Application::Run() {
@@ -44,10 +44,11 @@ void Application::Run() {
         ProcessEvents();
 
         m_Network.Update();
-        m_World->Update(m_Timer.GetDeltaTime(), m_Network);
-        if (m_TestScene) m_TestScene->Update(m_Timer.GetDeltaTime());
 
         if (m_Renderer->BeginFrame()) {
+            m_World->Update(m_Timer.GetDeltaTime(), m_Network);
+            if (m_TestScene) m_TestScene->Update(m_Timer.GetDeltaTime());
+
             if (m_TestScene) m_TestScene->Render(m_Renderer.get());
 
             ImGui::Begin("Bugmin Debugger");
