@@ -4,6 +4,7 @@
 #include <vector>
 #include "Window/Window.h"
 #include "Core/Timer.h"
+#include "Networking/NetworkManager.h"
 
 class Renderer;
 class World;
@@ -48,5 +49,6 @@ private:
     std::unique_ptr<World> m_World;
     std::unique_ptr<TestScene> m_TestScene;
     Timer m_Timer;
+    NetworkManager m_Network;
     bool m_Running = true;
 };

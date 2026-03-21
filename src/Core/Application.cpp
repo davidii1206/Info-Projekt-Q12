@@ -2,6 +2,8 @@
 #include "../Graphics/Renderer.h"
 #include "../Gameplay/World.h"
 #include "../Gameplay/TestScene.h"
+#include "../Gameplay/WorldDebugUI.h"
+#include "../Networking/NetworkDebugUI.h"
 #include "Input.h"
 #include "AssetManager.h"
 #include <imgui.h>
@@ -41,7 +43,8 @@ void Application::Run() {
         Input::Update();
         ProcessEvents();
 
-        m_World->Update(m_Timer.GetDeltaTime());
+        m_Network.Update();
+        m_World->Update(m_Timer.GetDeltaTime(), m_Network);
         if (m_TestScene) m_TestScene->Update(m_Timer.GetDeltaTime());
 
         if (m_Renderer->BeginFrame()) {
@@ -53,6 +56,9 @@ void Application::Run() {
             ImGui::End();
 
             if (m_TestScene) m_TestScene->OnImGui();
+            
+            NetDebug::Draw(m_Network);
+            WorldDebugUI::Draw(*m_World);
 
             m_Renderer->EndFrame();
         }
