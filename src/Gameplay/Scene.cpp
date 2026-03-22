@@ -29,6 +29,10 @@ void SceneManager::FixedUpdate(SceneContext& ctx, float dt) {
     if (m_Current) m_Current->FixedUpdate(ctx, dt);
 }
 
+void SceneManager::Render(SceneContext& ctx, Renderer* renderer) {
+    if (m_Current) m_Current->Render(ctx, renderer);
+}
+
 const char* SceneManager::GetName() const {
     return m_Current ? m_Current->Name() : "None";
 }

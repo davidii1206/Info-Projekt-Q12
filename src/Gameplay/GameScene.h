@@ -1,15 +1,24 @@
 #pragma once
 #include "Scene.h"
+#include "../Graphics/Camera.h"
+#include "../Graphics/GlobalUniforms.h"
 #include <unordered_map>
 #include <cstdint>
+#include <memory>
+
+class Shader;
+class GraphicsPipeline;
 
 class GameScene : public IScene {
 public:
+    GameScene();
+    ~GameScene() override;
     const char* Name() const override { return "GameScene"; }
     void OnEnter(SceneContext& ctx) override;
     void OnExit(SceneContext& ctx)  override;
     void FrameUpdate(SceneContext& ctx, float dt) override;
     void FixedUpdate(SceneContext& ctx, float dt) override;
+    void Render(SceneContext& ctx, Renderer* renderer) override;
 
 private:
     // --- server-side helpers (only called when hosting) ---
@@ -35,4 +44,13 @@ private:
 
     float m_SnapAccum = 0.f;
     static constexpr float SNAPSHOT_RATE = 1.f / 20.f; // send snapshots at 20 Hz
+
+    // Rendering
+    std::unique_ptr<Shader> m_VertShader;
+    std::unique_ptr<Shader> m_FragShader;
+    GraphicsPipeline* m_ModelPipeline = nullptr;
+    std::unique_ptr<Camera> m_Camera;
+    GlobalUniforms m_Globals{};
+    float m_TotalTime = 0.0f;
+    uint32_t m_FrameCount = 0;
 };

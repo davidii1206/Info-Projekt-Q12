@@ -47,6 +47,7 @@ void Application::Run() {
 
         if (m_Renderer->BeginFrame()) {
             m_World->Update(m_Timer.GetDeltaTime(), m_Network);
+            m_World->Render(m_Renderer.get(), m_Network);
             if (m_TestScene) m_TestScene->Update(m_Timer.GetDeltaTime());
 
             if (m_TestScene) m_TestScene->Render(m_Renderer.get());

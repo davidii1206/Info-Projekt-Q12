@@ -27,3 +27,7 @@ struct PlayerComponent {
 struct NetworkedComponent {
     uint32_t netId = 0;
 };
+
+struct ModelComponent {
+    std::string modelPath;
+};

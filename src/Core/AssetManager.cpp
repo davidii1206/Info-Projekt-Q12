@@ -234,10 +234,11 @@ void ProcessNode(LoaderContext& ctx, int nodeIndex, const glm::mat4& parentTrans
 }
 
 std::shared_ptr<Model> AssetManager::LoadModel(const std::string& filePath) {
-    return LoadScene(filePath).model;
+    return LoadGLTF(filePath).model;
 }
 
-SceneData AssetManager::LoadScene(const std::string& filePath) {
+
+SceneData AssetManager::LoadGLTF(const std::string& filePath) {
     auto it = s_Scenes.find(filePath);
     if (it != s_Scenes.end()) return it->second;
 

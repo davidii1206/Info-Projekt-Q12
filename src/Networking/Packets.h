@@ -9,6 +9,7 @@ enum class PacketType : uint8_t {
     PLAYER_JOINED    = 3, // "new player entity: netId Y, playerId X, at position P"
     PLAYER_LEFT      = 4, // "entity with netId Y was removed"
     ENTITY_SNAPSHOT  = 5, // "entity netId Y is now at position P with velocity V"
+    ASSET_JOINED     = 6, // "new asset entity: netId Y, modelPath P"
 
     // Client → Server
     PLAYER_INPUT = 10, // "my movement input is (dx, dz)"
@@ -35,6 +36,13 @@ struct PlayerJoinedPacket {
 struct PlayerLeftPacket {
     PacketType type  = PacketType::PLAYER_LEFT;
     uint32_t   netId = 0;
+};
+
+struct AssetJoinedPacket {
+    PacketType type = PacketType::ASSET_JOINED;
+    uint32_t   netId = 0;
+    char       modelPath[128]{};
+    float      x = 0.f, y = 0.f, z = 0.f;
 };
 
 struct EntitySnapshotPacket {

@@ -31,6 +31,11 @@ void World::Update(float dt) {
     // Legacy update if needed, but we should prefer the networking one
 }
 
+void World::Render(Renderer* renderer, NetworkManager& net) {
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager};
+    m_SceneManager.Render(ctx, renderer);
+}
+
 void World::FixedUpdate(float dt, NetworkManager& net) {
     SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager};
     m_SceneManager.FixedUpdate(ctx, dt);

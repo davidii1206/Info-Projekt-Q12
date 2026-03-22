@@ -12,7 +12,7 @@ TestScene::TestScene(Renderer* renderer) {
     m_Camera->m_Position = {0, 0, 0};
 
     // Attempt to load a scene
-    m_Scene = AssetManager::LoadScene("assets/test_scene_pixelation.glb");
+    m_Scene = AssetManager::LoadGLTF("assets/test_scene_pixelation.glb");
     if (!m_Scene.model) {
         spdlog::warn("TestScene: Failed to load SponzaModel.glb, using fallback.");
         m_Scene.model = AssetManager::GetFallbackModel();

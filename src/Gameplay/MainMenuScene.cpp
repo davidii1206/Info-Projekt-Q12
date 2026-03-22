@@ -18,3 +18,5 @@ void MainMenuScene::FrameUpdate(SceneContext& ctx, float dt) {
 }
 
 void MainMenuScene::FixedUpdate(SceneContext& ctx, float dt) {}
+
+void MainMenuScene::Render(SceneContext& ctx, Renderer* renderer) {}

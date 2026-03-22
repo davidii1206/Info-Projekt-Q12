@@ -8,4 +8,5 @@ public:
     void OnExit(SceneContext& ctx)  override;
     void FrameUpdate(SceneContext& ctx, float dt) override;
     void FixedUpdate(SceneContext& ctx, float dt) override;
+    void Render(SceneContext& ctx, Renderer* renderer) override;
 };

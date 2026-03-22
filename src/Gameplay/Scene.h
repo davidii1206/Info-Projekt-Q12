@@ -2,6 +2,7 @@
 #include <entt/entt.hpp>
 
 class NetworkManager;
+class Renderer;
 class IScene;
 class SceneManager; // forward-declared so SceneContext can reference it
 
@@ -20,6 +21,7 @@ public:
     virtual void OnExit(SceneContext& ctx)  = 0;
     virtual void FrameUpdate(SceneContext& ctx, float dt) = 0; // per-frame: ImGui, input
     virtual void FixedUpdate(SceneContext& ctx, float dt) = 0; // fixed-rate: logic, networking
+    virtual void Render(SceneContext& ctx, Renderer* renderer) = 0;
 };
 
 class SceneManager {
@@ -35,6 +37,7 @@ public:
 
     void FrameUpdate(SceneContext& ctx, float dt);
     void FixedUpdate(SceneContext& ctx, float dt);
+    void Render(SceneContext& ctx, Renderer* renderer);
 
     const char* GetName() const;
 

@@ -3,13 +3,11 @@
 #include "Scene.h"
 
 class NetworkManager;
+class Renderer;
 
 /**
  * @class World
  * @brief Manages the game state and all active entities.
- * 
- * The World class acts as a container for the ECS (Entity Component System) 
- * registry and orchestrates the updating of game logic with networking support.
  */
 class World {
 public:
@@ -35,6 +33,8 @@ public:
      * @param dt The time elapsed since the last frame in seconds.
      */
     void Update(float dt);
+
+    void Render(Renderer* renderer, NetworkManager& net);
 
     // Accessors for debug UI and teammate's rendering system.
     entt::registry& GetServerRegistry() { return m_ServerRegistry; }

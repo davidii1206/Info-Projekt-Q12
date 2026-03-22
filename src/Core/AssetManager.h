@@ -72,11 +72,11 @@ public:
     static std::shared_ptr<Model> LoadModel(const std::string& filePath);
 
     /**
-     * @brief Loads a full scene including models and lights.
+     * @brief Loads a full asset (GLTF) including models and lights.
      * @param filePath Path to the .gltf or .glb file.
      * @return SceneData containing the model and all lights found in the file.
      */
-    static SceneData LoadScene(const std::string& filePath);
+    static SceneData LoadGLTF(const std::string& filePath);
 
     /** @brief Returns a simple procedural unit cube. */
     static std::shared_ptr<Model> GetFallbackModel();

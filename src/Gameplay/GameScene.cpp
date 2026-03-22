@@ -5,17 +5,52 @@
 #include "../Networking/NetworkManager.h"
 #include "../Networking/Packets.h"
 #include "../Core/Input.h"
+#include "../Core/AssetManager.h"
+#include "../Graphics/Renderer.h"
+#include "../Graphics/API/Shader.h"
+#include "../Graphics/API/GraphicsPipeline.h"
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <cstring>
 
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+GameScene::GameScene() {}
+GameScene::~GameScene() {}
+
 void GameScene::OnEnter(SceneContext& ctx) {
     spdlog::info("GameScene: entered");
-    // Player entities are created reactively via connection events and packets.
+
+    // Initialize rendering resources
+    // We'll need a Renderer* to get the device. We can assume we'll get it during the first Render call
+    // or we could pass it in. For now, let's just do it in Render if not initialized.
+
+    if (ctx.network.IsHosting()) {
+        // Spawn a networked asset for testing
+        const uint32_t assetNetId = m_NextNetId++;
+        
+        // Authoritative server entity
+        auto sEntity = ctx.serverRegistry.create();
+        ctx.serverRegistry.emplace<TransformComponent>(sEntity, glm::vec3{2.f, 0.f, 2.f});
+        ctx.serverRegistry.emplace<MovementComponent>(sEntity);
+        ctx.serverRegistry.emplace<NetworkedComponent>(sEntity, assetNetId);
+        ctx.serverRegistry.emplace<ModelComponent>(sEntity, "assets/test_scene.glb");
+        m_ServerNetMap[assetNetId] = sEntity;
+
+        // Tell all clients (including ourselves) to spawn it visually
+        AssetJoinedPacket pkt;
+        pkt.netId = assetNetId;
+        std::strncpy(pkt.modelPath, "assets/test_scene.glb", sizeof(pkt.modelPath)-1);
+        pkt.x = 2.f; pkt.y = 0.f; pkt.z = 2.f;
+        ctx.network.BroadcastToAll(pkt);
+        
+        spdlog::info("GameScene: spawned test asset netId={}", assetNetId);
+    }
 }
 
 void GameScene::OnExit(SceneContext& ctx) {
@@ -30,7 +65,94 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_MyNetId       = 0;
     m_IdAssigned    = false;
     m_SnapAccum     = 0.f;
+    
+    m_VertShader.reset();
+    m_FragShader.reset();
+    m_ModelPipeline = nullptr;
+
     spdlog::info("GameScene: exited, registries cleared");
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
+    if (!m_ModelPipeline) {
+        // Init pipelines
+        ShaderResourceLayout vertLayout = {0, 0, 1, 1}; 
+        ShaderResourceLayout fragLayout = {1, 0, 2, 1}; 
+
+        m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert.spv", ShaderStage::Vertex, vertLayout);
+        m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag.spv", ShaderStage::Fragment, fragLayout);
+
+        PipelineConfig config;
+        config.vertexShader = m_VertShader.get();
+        config.fragmentShader = m_FragShader.get();
+        config.vertexStride = sizeof(ModelVertex);
+        config.vertexAttributes = {
+            {0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position)},
+            {1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, normal)},
+            {2, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(ModelVertex, texCoords)},
+            {3, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(ModelVertex, color)},
+            {4, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, tangent)}
+        };
+        config.enableDepthTest = true;
+        config.depthCompareOp = SDL_GPU_COMPAREOP_GREATER;
+
+        SDL_GPUTextureFormat swapchainFormat = SDL_GetGPUSwapchainTextureFormat(renderer->GetDevice(), renderer->GetWindow()->handle);
+        m_ModelPipeline = renderer->GetPipelines()->CreatePipeline("GameModelPipeline", config, swapchainFormat);
+    }
+
+    renderer->AddPass("GameRenderPass", nullptr, [this, ctx, renderer](RenderContext& renderCtx) {
+        renderCtx.BindPipeline(m_ModelPipeline);
+        renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
+        renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
+
+        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        for (auto entity : view) {
+            auto& transform = view.get<TransformComponent>(entity);
+            auto& modelComp = view.get<ModelComponent>(entity);
+
+            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
+            if (!sceneData.model) continue;
+
+            renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
+            renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
+
+            if (sceneData.model->GetMaterialBuffer()) {
+                renderCtx.BindFragmentStorageBuffer(1, sceneData.model->GetMaterialBuffer());
+            }
+
+            const auto& allSections = sceneData.model->GetSections();
+            const auto& allMaterials = sceneData.model->GetMaterials();
+
+            for (const auto& instance : sceneData.meshInstances) {
+                struct ModelPC { glm::mat4 model; } modelPC;
+                // Combine entity transform with instance local transform
+                glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
+                                      glm::mat4_cast(glm::quat(transform.rotation)) *
+                                      glm::scale(glm::mat4(1.0f), transform.scale);
+                modelPC.model = entityMat * instance.transform;
+                renderCtx.PushVertexConstants(0, &modelPC, sizeof(ModelPC));
+
+                for (uint32_t i = 0; i < instance.sectionCount; ++i) {
+                    const auto& section = allSections[instance.firstSection + i];
+                    struct FragPC { uint32_t matIdx; uint32_t objID; uint32_t pad1; uint32_t pad2; } fpc;
+                    fpc.matIdx = (uint32_t)section.materialIndex;
+                    fpc.objID = 0; // Not using object IDs in GameScene for now
+                    renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
+
+                    if (section.materialIndex < allMaterials.size()) {
+                        auto tex = allMaterials[section.materialIndex].baseColorTexture;
+                        if (!tex) tex = AssetManager::GetFallbackTexture();
+                        renderCtx.BindFragmentTexture(0, tex.get());
+                    }
+                    renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
+                }
+            }
+        }
+    }, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,12 +227,24 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
             //    Done BEFORE adding the new entity so there are no duplicates.
             for (auto& [netId, ent] : m_ServerNetMap) {
                 auto& t = ctx.serverRegistry.get<TransformComponent>(ent);
-                auto& p = ctx.serverRegistry.get<PlayerComponent>(ent);
-                PlayerJoinedPacket pkt;
-                pkt.netId    = netId;
-                pkt.playerId = p.playerId;
-                pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
-                ctx.network.SendToClient(peerId, pkt);
+                
+                auto* p = ctx.serverRegistry.try_get<PlayerComponent>(ent);
+                if (p) {
+                    PlayerJoinedPacket pkt;
+                    pkt.netId    = netId;
+                    pkt.playerId = p->playerId;
+                    pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
+                    ctx.network.SendToClient(peerId, pkt);
+                }
+
+                auto* m = ctx.serverRegistry.try_get<ModelComponent>(ent);
+                if (m) {
+                    AssetJoinedPacket pkt;
+                    pkt.netId = netId;
+                    std::strncpy(pkt.modelPath, m->modelPath.c_str(), sizeof(pkt.modelPath)-1);
+                    pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
+                    ctx.network.SendToClient(peerId, pkt);
+                }
             }
 
             // 2. Tell the new client their own identity.
@@ -181,16 +315,22 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
 // ---------------------------------------------------------------------------
 
 void GameScene::SendSnapshots(SceneContext& ctx) {
-    auto view = ctx.serverRegistry.view<NetworkedComponent, TransformComponent, MovementComponent>();
+    auto view = ctx.serverRegistry.view<NetworkedComponent, TransformComponent>();
     for (auto entity : view) {
         auto& net = view.get<NetworkedComponent>(entity);
         auto& t   = view.get<TransformComponent>(entity);
-        auto& m   = view.get<MovementComponent>(entity);
 
         EntitySnapshotPacket pkt;
         pkt.netId = net.netId;
         pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
-        pkt.vx = m.velocity.x; pkt.vy = m.velocity.y; pkt.vz = m.velocity.z;
+        
+        auto* m = ctx.serverRegistry.try_get<MovementComponent>(entity);
+        if (m) {
+            pkt.vx = m->velocity.x; pkt.vy = m->velocity.y; pkt.vz = m->velocity.z;
+        } else {
+            pkt.vx = pkt.vy = pkt.vz = 0.f;
+        }
+        
         ctx.network.BroadcastToAll(pkt);
     }
 }
@@ -251,6 +391,22 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         auto* m = ctx.clientRegistry.try_get<MovementComponent>(it->second);
         if (t) t->position = {pkt->x,  pkt->y,  pkt->z};
         if (m) m->velocity  = {pkt->vx, pkt->vy, pkt->vz};
+    }
+
+    // New assets.
+    while (true) {
+        auto pkt = ctx.network.ReceiveFromServer<AssetJoinedPacket>(PacketType::ASSET_JOINED);
+        if (!pkt) break;
+        if (m_ClientNetMap.count(pkt->netId)) continue; // duplicate guard
+
+        auto entity = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
+        ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
+        ctx.clientRegistry.emplace<ModelComponent>(entity, std::string(pkt->modelPath));
+        m_ClientNetMap[pkt->netId] = entity;
+
+        spdlog::info("GameScene: asset entity created  netId={} path={}",
+                     pkt->netId, pkt->modelPath);
     }
 }
 
