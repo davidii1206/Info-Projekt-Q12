@@ -24,7 +24,14 @@ Application::Application() {
 
     m_Renderer = std::make_unique<Renderer>(&m_Window);
     AssetManager::Init(m_Renderer->GetDevice());
-    m_World = std::make_unique<World>();
+
+    // Physics zuerst starten — World braucht den Pointer
+    m_Physics.Init();
+    m_Physics.AddStaticFloor();
+    m_Physics.GetSystem().OptimizeBroadPhase();
+    spdlog::info("Physics initialized");
+
+    m_World = std::make_unique<World>(&m_Physics);
 
     m_TestScene = std::make_unique<TestScene>(m_Renderer.get());
 }
@@ -32,6 +39,7 @@ Application::Application() {
 Application::~Application() {
     m_TestScene.reset();
     m_World.reset();
+    m_Physics.Shutdown();
     AssetManager::Shutdown();
     m_Renderer.reset();
     DestroyWindow(&m_Window);
@@ -45,15 +53,25 @@ void Application::Run() {
 
         m_Network.Update();
 
+        const float dt = m_Timer.GetDeltaTime();
+
+        // 1. Physics simulieren → Snapshots holen
+        const auto& snapshots = m_Physics.Step(dt);
+
+        // 2. Snapshots in entt-Components schreiben
+        m_World->ApplySnapshots(snapshots);
+
         if (m_Renderer->BeginFrame()) {
-            m_World->Update(m_Timer.GetDeltaTime(), m_Network);
+            m_World->Update(dt, m_Network);
             m_World->Render(m_Renderer.get(), m_Network);
-            if (m_TestScene) m_TestScene->Update(m_Timer.GetDeltaTime());
+            if (m_TestScene) m_TestScene->Update(dt);
 
             if (m_TestScene) m_TestScene->Render(m_Renderer.get());
 
             ImGui::Begin("Bugmin Debugger");
             ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
+            ImGui::Text("Physics steps: %lu", m_Physics.GetStepCount());
+            ImGui::Text("Bodies tracked: %zu", snapshots.size());
             if (ImGui::Button("Exit")) m_Running = false;
             ImGui::End();
 

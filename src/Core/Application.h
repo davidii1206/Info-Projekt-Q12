@@ -5,6 +5,7 @@
 #include "Window/Window.h"
 #include "Core/Timer.h"
 #include "Networking/NetworkManager.h"
+#include "Core/PhysicsServer.h"
 
 class Renderer;
 class World;
@@ -46,7 +47,8 @@ private:
 
     Window m_Window;
     std::unique_ptr<Renderer> m_Renderer;
-    std::unique_ptr<World> m_World;
+    PhysicsServer             m_Physics;   // vor m_World — World braucht den Pointer
+    std::unique_ptr<World>    m_World;
     std::unique_ptr<TestScene> m_TestScene;
     Timer m_Timer;
     NetworkManager m_Network;

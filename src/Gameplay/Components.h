@@ -1,6 +1,8 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <string>
+#include "../Core/PhysicsServer.h"
 
 struct TransformComponent {
     glm::vec3 position{0.f};
@@ -30,4 +32,18 @@ struct NetworkedComponent {
 
 struct ModelComponent {
     std::string modelPath;
+};
+
+// ---------------------------------------------------------------------------
+// Physics Components
+// ---------------------------------------------------------------------------
+
+// Verlinkt eine entt-Entity mit einem Jolt-Body
+struct PhysicsBodyComponent {
+    PhysicsBodyHandle handle;
+};
+
+// Optionales Tag damit World weiß welche entityID zu welcher entt-Entity gehört
+struct EntityIDComponent {
+    uint32_t id = 0;
 };
