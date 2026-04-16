@@ -1,3 +1,7 @@
+/**
+ * @file Renderer.cpp
+ * @brief Implementation of the core rendering system.
+ */
 #include "Renderer.h"
 #include <spdlog/spdlog.h>
 #include <imgui.h>
@@ -8,6 +12,7 @@ Renderer::Renderer(Window* window)
     : m_Window(window), m_Device(nullptr), m_CurrentCommandBuffer(nullptr), 
       m_CurrentSwapchainTexture(nullptr) 
 {
+    // Attempt to create GPU device with Vulkan backend preference
     m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, "vulkan");
     
     if (!m_Device) {
@@ -27,10 +32,12 @@ Renderer::Renderer(Window* window)
 
     spdlog::info("SDL3 GPU Renderer Initialized! Backend: {}", SDL_GetGPUDeviceDriver(m_Device));
 
+    // Initialize core rendering sub-systems
     m_FrameGraph = std::make_unique<FrameGraph>(m_Device);
     m_PipelineLibrary = std::make_unique<PipelineLibrary>(m_Device);
     m_GlobalUBO = std::make_unique<GPUBuffer>(m_Device, BufferUsage::Uniform, sizeof(GlobalUniforms) + 256); // Extra space for alignment safety
 
+    // Initialize ImGui for SDL3 and SDL_GPU
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui_ImplSDL3_InitForSDLGPU(m_Window->handle);
@@ -60,6 +67,7 @@ bool Renderer::BeginFrame() {
     m_CurrentCommandBuffer = SDL_AcquireGPUCommandBuffer(m_Device);
     if (!m_CurrentCommandBuffer) return false;
 
+    // Acquire swapchain texture for rendering
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(m_CurrentCommandBuffer, m_Window->handle, &m_CurrentSwapchainTexture, nullptr, nullptr)) {
         m_CurrentSwapchainTexture = nullptr;
         SDL_SubmitGPUCommandBuffer(m_CurrentCommandBuffer);
@@ -74,8 +82,9 @@ bool Renderer::BeginFrame() {
 }
 
 void Renderer::UpdateGlobalUniforms(const GlobalUniforms& uniforms) {
+    m_GlobalUniforms = uniforms;
     if (m_CurrentCommandBuffer) {
-        m_GlobalUBO->Upload(&uniforms, sizeof(GlobalUniforms), 0, m_CurrentCommandBuffer, true);
+        m_GlobalUBO->Upload(&m_GlobalUniforms, sizeof(GlobalUniforms), 0, m_CurrentCommandBuffer, true);
     }
 }
 
@@ -88,9 +97,12 @@ void Renderer::EndFrame() {
 
     int w, h;
     SDL_GetWindowSizeInPixels(m_Window->handle, &w, &h);
+    
+    // Execute the recorded frame graph
     m_FrameGraph->Execute(m_CurrentCommandBuffer, m_CurrentSwapchainTexture, (uint32_t)w, (uint32_t)h);
     m_FrameGraph->Reset();
 
+    // Render ImGui overlay
     ImGui::Render();
     ImDrawData* drawData = ImGui::GetDrawData();
     if (drawData && m_CurrentCommandBuffer) {

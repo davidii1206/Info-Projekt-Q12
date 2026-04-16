@@ -1,3 +1,7 @@
+/**
+ * @file Shader.cpp
+ * @brief Implementation of the Shader class for loading and creating GPU shaders.
+ */
 #include "Shader.h"
 #include <SDL3/SDL.h>
 #include <spdlog/spdlog.h>
@@ -6,7 +10,7 @@
 Shader::Shader(SDL_GPUDevice* device, const std::string& filePath, ShaderStage stage, const ShaderResourceLayout& layout)
     : m_Device(device), m_Shader(nullptr), m_Stage(stage) 
 {
-    // Load binary file
+    // Load binary file from disk
     std::ifstream file(filePath, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
         spdlog::error("Failed to open shader file: {}", filePath);
@@ -32,6 +36,7 @@ Shader::Shader(SDL_GPUDevice* device, const std::string& filePath, ShaderStage s
         chosenFormat = SDL_GPU_SHADERFORMAT_MSL;
     }
 
+    // Set up shader creation description
     SDL_GPUShaderCreateInfo desc = {};
     desc.code_size = fileSize;
     desc.code = buffer.data();

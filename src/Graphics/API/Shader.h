@@ -1,3 +1,7 @@
+/**
+ * @file Shader.h
+ * @brief Shader management and resource layout for the GPU.
+ */
 #pragma once
 #include <SDL3/SDL_gpu.h>
 #include <string>
@@ -8,8 +12,8 @@
  * @brief Defines which stage of the graphics pipeline the shader belongs to.
  */
 enum class ShaderStage {
-    Vertex,
-    Fragment
+    Vertex,   /**< Vertex shader stage. */
+    Fragment  /**< Fragment shader stage. */
 };
 
 /**
@@ -20,10 +24,10 @@ enum class ShaderStage {
  * at creation time.
  */
 struct ShaderResourceLayout {
-    uint32_t numSamplers = 0;
-    uint32_t numStorageTextures = 0;
-    uint32_t numStorageBuffers = 0;
-    uint32_t numUniformBuffers = 0;
+    uint32_t numSamplers = 0;        /**< Number of samplers used by the shader. */
+    uint32_t numStorageTextures = 0; /**< Number of storage textures used by the shader. */
+    uint32_t numStorageBuffers = 0;  /**< Number of storage buffers used by the shader. */
+    uint32_t numUniformBuffers = 0;  /**< Number of uniform buffers used by the shader. */
 };
 
 /**
@@ -43,16 +47,26 @@ public:
      * @param layout Description of the resources this shader uses.
      */
     Shader(SDL_GPUDevice* device, const std::string& filePath, ShaderStage stage, const ShaderResourceLayout& layout);
+
+    /**
+     * @brief Destroys the shader and releases GPU resources.
+     */
     ~Shader();
 
-    /** @brief Gets the native SDL shader handle. */
+    /**
+     * @brief Gets the native SDL shader handle.
+     * @return Pointer to SDL_GPUShader.
+     */
     SDL_GPUShader* GetHandle() const { return m_Shader; }
     
-    /** @brief Gets the shader stage. */
+    /**
+     * @brief Gets the shader stage.
+     * @return The ShaderStage.
+     */
     ShaderStage GetStage() const { return m_Stage; }
 
 private:
-    SDL_GPUDevice* m_Device;
-    SDL_GPUShader* m_Shader;
-    ShaderStage m_Stage;
+    SDL_GPUDevice* m_Device; /**< Pointer to the SDL GPU device. */
+    SDL_GPUShader* m_Shader; /**< Native SDL shader handle. */
+    ShaderStage m_Stage;     /**< The stage this shader is for. */
 };

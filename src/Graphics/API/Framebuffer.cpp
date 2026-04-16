@@ -1,3 +1,7 @@
+/**
+ * @file Framebuffer.cpp
+ * @brief Implementation of the Framebuffer class for managing off-screen render targets.
+ */
 #include "Framebuffer.h"
 #include <spdlog/spdlog.h>
 

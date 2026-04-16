@@ -1,3 +1,7 @@
+/**
+ * @file GPUBuffer.cpp
+ * @brief Implementation of the GPUBuffer class for managing GPU memory.
+ */
 #include "GPUBuffer.h"
 #include <spdlog/spdlog.h>
 #include <cstring>
@@ -8,6 +12,7 @@ GPUBuffer::GPUBuffer(SDL_GPUDevice* device, BufferUsage usage, uint32_t size)
     SDL_GPUBufferCreateInfo desc = {};
     desc.size = size;
     
+    // Set appropriate usage flags based on BufferUsage enum
     switch (usage) {
         case BufferUsage::Vertex:  desc.usage = SDL_GPU_BUFFERUSAGE_VERTEX; break;
         case BufferUsage::Index:   desc.usage = SDL_GPU_BUFFERUSAGE_INDEX; break;
@@ -33,7 +38,7 @@ void GPUBuffer::Upload(const void* data, uint32_t size, uint32_t offset, SDL_GPU
         return;
     }
 
-    // Create a staging buffer for the transfer
+    // Create a temporary staging buffer for the transfer
     SDL_GPUTransferBufferCreateInfo stagingDesc = {};
     stagingDesc.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     stagingDesc.size = size;
@@ -44,7 +49,7 @@ void GPUBuffer::Upload(const void* data, uint32_t size, uint32_t offset, SDL_GPU
         return;
     }
 
-    // Map and copy data to staging
+    // Map and copy data from CPU memory to staging buffer
     void* mappedData = SDL_MapGPUTransferBuffer(m_Device, stagingBuffer, false);
     if (!mappedData) {
         spdlog::error("GPUBuffer::Upload: Failed to map transfer buffer: {}", SDL_GetError());
@@ -54,7 +59,7 @@ void GPUBuffer::Upload(const void* data, uint32_t size, uint32_t offset, SDL_GPU
     std::memcpy(mappedData, data, size);
     SDL_UnmapGPUTransferBuffer(m_Device, stagingBuffer);
 
-    // Record the copy command
+    // Record the copy command into the provided or internal command buffer
     bool submitInternal = false;
     if (!cmd) {
         cmd = SDL_AcquireGPUCommandBuffer(m_Device);
@@ -74,6 +79,6 @@ void GPUBuffer::Upload(const void* data, uint32_t size, uint32_t offset, SDL_GPU
         SDL_SubmitGPUCommandBuffer(cmd);
     }
 
-    // Clean up staging (it's safe to release after submission, SDL will defer actual deletion)
+    // Clean up staging resources
     SDL_ReleaseGPUTransferBuffer(m_Device, stagingBuffer);
 }

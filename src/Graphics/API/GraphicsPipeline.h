@@ -1,3 +1,7 @@
+/**
+ * @file GraphicsPipeline.h
+ * @brief Graphics pipeline state management for the GPU.
+ */
 #pragma once
 #include <SDL3/SDL_gpu.h>
 #include "Shader.h"
@@ -8,9 +12,9 @@
  * @brief Describes a single attribute in a vertex (e.g., Position, Color).
  */
 struct VertexAttribute {
-    uint32_t location;      ///< Shader location (layout(location = X)).
-    SDL_GPUVertexElementFormat format; ///< Data format (e.g., Float3, UB4).
-    uint32_t offset;        ///< Offset from the start of the vertex struct.
+    uint32_t location;      /**< Shader location (layout(location = X)). */
+    SDL_GPUVertexElementFormat format; /**< Data format (e.g., Float3, UB4). */
+    uint32_t offset;        /**< Offset in bytes from the start of the vertex struct. */
 };
 
 /**
@@ -68,12 +72,19 @@ public:
      * @param renderTargetFormat The pixel format of the target texture (usually the swapchain format).
      */
     GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& config, SDL_GPUTextureFormat renderTargetFormat);
+
+    /**
+     * @brief Destroys the graphics pipeline and releases GPU resources.
+     */
     ~GraphicsPipeline();
 
-    /** @brief Gets the native SDL pipeline handle. */
+    /**
+     * @brief Gets the native SDL pipeline handle.
+     * @return Pointer to SDL_GPUGraphicsPipeline.
+     */
     SDL_GPUGraphicsPipeline* GetHandle() const { return m_Pipeline; }
 
 private:
-    SDL_GPUDevice* m_Device;
-    SDL_GPUGraphicsPipeline* m_Pipeline;
+    SDL_GPUDevice* m_Device;            /**< Pointer to the SDL GPU device. */
+    SDL_GPUGraphicsPipeline* m_Pipeline; /**< Native SDL graphics pipeline handle. */
 };

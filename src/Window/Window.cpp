@@ -1,3 +1,7 @@
+/**
+ * @file Window.cpp
+ * @brief Implementation of window management and event polling.
+ */
 #include "Window.h"
 #include <SDL3/SDL.h>
 #include <spdlog/spdlog.h>
@@ -9,6 +13,7 @@ Window* CreateWindow(Window& win) {
         return nullptr;
     }
 
+    // Set window flags based on requested mode
     Uint32 flags = SDL_WINDOW_RESIZABLE;
     if (win.mode == WindowMode::Fullscreen) {
         flags |= SDL_WINDOW_FULLSCREEN;

@@ -1,8 +1,17 @@
+/**
+ * @file Texture.cpp
+ * @brief Implementation of the Texture class for GPU texture and sampler management.
+ */
 #include "Texture.h"
 #include <SDL3/SDL.h>
 #include <spdlog/spdlog.h>
 #include <stb_image.h>
 
+/**
+ * @brief Internal helper to set up SDL_GPUSamplerCreateInfo.
+ * @param samplerDesc Reference to the creation info structure.
+ * @param filter The desired texture filter mode.
+ */
 void SetupSampler(SDL_GPUSamplerCreateInfo& samplerDesc, TextureFilter filter) {
     samplerDesc.min_filter = (filter == TextureFilter::Linear) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
     samplerDesc.mag_filter = (filter == TextureFilter::Linear) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
@@ -30,6 +39,7 @@ Texture::Texture(SDL_GPUDevice* device, const std::string& filePath, TextureFilt
     m_Width = (uint32_t)width;
     m_Height = (uint32_t)height;
 
+    // Create GPU texture description
     SDL_GPUTextureCreateInfo textureDesc = {};
     textureDesc.type = SDL_GPU_TEXTURETYPE_2D;
     textureDesc.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -46,6 +56,7 @@ Texture::Texture(SDL_GPUDevice* device, const std::string& filePath, TextureFilt
         return;
     }
 
+    // Use a staging buffer to upload pixel data
     SDL_GPUTransferBufferCreateInfo stagingDesc = {};
     stagingDesc.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     stagingDesc.size = m_Width * m_Height * 4;
@@ -55,6 +66,7 @@ Texture::Texture(SDL_GPUDevice* device, const std::string& filePath, TextureFilt
     std::memcpy(mappedData, pixels, stagingDesc.size);
     SDL_UnmapGPUTransferBuffer(m_Device, stagingBuffer);
 
+    // Record and submit the upload command
     SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(m_Device);
     SDL_GPUCopyPass* copyPass = SDL_BeginGPUCopyPass(cmd);
 
@@ -73,9 +85,11 @@ Texture::Texture(SDL_GPUDevice* device, const std::string& filePath, TextureFilt
     SDL_EndGPUCopyPass(copyPass);
     SDL_SubmitGPUCommandBuffer(cmd);
 
+    // Clean up temporary resources
     SDL_ReleaseGPUTransferBuffer(m_Device, stagingBuffer);
     stbi_image_free(pixels);
 
+    // Create the sampler
     SDL_GPUSamplerCreateInfo samplerDesc = {};
     SetupSampler(samplerDesc, filter);
     m_Sampler = SDL_CreateGPUSampler(m_Device, &samplerDesc);

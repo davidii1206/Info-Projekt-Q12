@@ -1,10 +1,25 @@
+/**
+ * @file NetworkDebugUI.h
+ * @brief ImGui-based user interface for managing network connections.
+ */
+
 #pragma once
 #include "NetworkManager.h"
 #include <imgui.h>
 #include <cstring>
 
+/**
+ * @namespace NetDebug
+ * @brief Contains UI drawing logic for networking.
+ */
 namespace NetDebug {
 
+/**
+ * @brief Renders the "Network" debug window.
+ * 
+ * Provides inputs for Host IP and Port, and buttons to Host, Join, or Disconnect.
+ * @param net Reference to the NetworkManager instance.
+ */
 inline void Draw(NetworkManager& net) {
     ImGui::Begin("Network");
 

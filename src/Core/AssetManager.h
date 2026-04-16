@@ -1,3 +1,8 @@
+/**
+ * @file AssetManager.h
+ * @brief Singleton-style manager for loading and caching engine assets.
+ */
+
 #pragma once
 #include <string>
 #include <unordered_map>
@@ -7,6 +12,26 @@
 #include "Graphics/API/Texture.h"
 #include "Graphics/Model.h"
 #include "Graphics/Lights.h"
+
+/**
+ * @struct MeshInstance
+ * @brief Represents an instance of a mesh within a scene.
+ */
+struct MeshInstance {
+    uint32_t firstSection; ///< Starting index of the mesh sections in this instance.
+    uint32_t sectionCount; ///< Number of sections in this instance.
+    glm::mat4 transform;   ///< Transformation matrix for this instance.
+};
+
+/**
+ * @struct SceneData
+ * @brief Container for models, lights, and mesh instances loaded from a GLTF file.
+ */
+struct SceneData {
+    std::shared_ptr<Model> model; ///< Shared pointer to the loaded Model.
+    std::vector<Light> lights;    ///< List of lights found in the scene.
+    std::vector<MeshInstance> meshInstances; ///< List of mesh instances in the scene.
+};
 
 /**
  * @class AssetManager
@@ -20,18 +45,6 @@
  * - Centralized management of GPU resources.
  * - Automatic cleanup of assets during shutdown.
  */
-struct MeshInstance {
-    uint32_t firstSection;
-    uint32_t sectionCount;
-    glm::mat4 transform;
-};
-
-struct SceneData {
-    std::shared_ptr<Model> model;
-    std::vector<Light> lights;
-    std::vector<MeshInstance> meshInstances;
-};
-
 class AssetManager {
 public:
     /**
@@ -85,9 +98,9 @@ public:
     static std::shared_ptr<Texture> GetFallbackTexture();
 
 private:
-    static SDL_GPUDevice* s_Device;
-    static std::unordered_map<std::string, std::shared_ptr<Texture>> s_Textures;
-    static std::unordered_map<std::string, SceneData> s_Scenes;
-    static std::shared_ptr<Model> s_FallbackModel;
-    static std::shared_ptr<Texture> s_FallbackTexture;
+    static SDL_GPUDevice* s_Device; ///< SDL GPU device used for resource allocation.
+    static std::unordered_map<std::string, std::shared_ptr<Texture>> s_Textures; ///< Cache for loaded textures.
+    static std::unordered_map<std::string, SceneData> s_Scenes; ///< Cache for loaded GLTF scenes.
+    static std::shared_ptr<Model> s_FallbackModel; ///< Procedural fallback cube model.
+    static std::shared_ptr<Texture> s_FallbackTexture; ///< Procedural white fallback texture.
 };

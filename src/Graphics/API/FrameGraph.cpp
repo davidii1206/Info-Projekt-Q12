@@ -1,3 +1,7 @@
+/**
+ * @file FrameGraph.cpp
+ * @brief Implementation of the FrameGraph class for managing GPU passes.
+ */
 #include "FrameGraph.h"
 #include <spdlog/spdlog.h>
 
@@ -26,7 +30,7 @@ void FrameGraph::Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTex
         }
 
         if (passDesc.type == PassType::Compute) {
-            // ... (keep compute logic)
+            // Compute logic would go here
         } 
         else {
             std::vector<SDL_GPUColorTargetInfo> colorTargets;
@@ -44,6 +48,7 @@ void FrameGraph::Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTex
                 colorTargets.push_back(info);
 
                 if (passDesc.needsDepth) {
+                    // Create swapchain depth buffer if it doesn't exist or is the wrong size
                     if (!m_SwapchainDepth || m_SwapchainDepth->GetWidth() != width || m_SwapchainDepth->GetHeight() != height) {
                         m_SwapchainDepth = std::make_unique<Texture>(m_Device, width, height, SDL_GPU_TEXTUREFORMAT_D32_FLOAT, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
                     }

@@ -1,9 +1,14 @@
+/**
+ * @file ComputePipeline.cpp
+ * @brief Implementation of the ComputePipeline class for GPGPU tasks.
+ */
 #include "ComputePipeline.h"
 #include <spdlog/spdlog.h>
 
 ComputePipeline::ComputePipeline(SDL_GPUDevice* device, const ComputeConfig& config)
     : m_Device(device), m_Pipeline(nullptr)
 {
+    // Set up compute pipeline creation info
     SDL_GPUComputePipelineCreateInfo createInfo = {};
     createInfo.code_size = config.codeSize;
     createInfo.code = config.code;

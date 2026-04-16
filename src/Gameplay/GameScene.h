@@ -1,3 +1,8 @@
+/**
+ * @file GameScene.h
+ * @brief Header for the main gameplay scene.
+ */
+
 #pragma once
 #include "Scene.h"
 #include "../Graphics/Camera.h"
@@ -9,48 +14,132 @@
 class Shader;
 class GraphicsPipeline;
 
+/**
+ * @class GameScene
+ * @brief The main gameplay scene.
+ * 
+ * Handles networked game logic, player movement, and 3D rendering of the game world.
+ */
 class GameScene : public IScene {
 public:
+    /**
+     * @brief Constructs the GameScene.
+     */
     GameScene();
+
+    /**
+     * @brief Destroys the GameScene and its resources.
+     */
     ~GameScene() override;
+
+    /**
+     * @brief Gets the name of the scene.
+     * @return The scene name.
+     */
     const char* Name() const override { return "GameScene"; }
+
+    /**
+     * @brief Called when the scene is entered.
+     * @param ctx The scene context.
+     */
     void OnEnter(SceneContext& ctx) override;
+
+    /**
+     * @brief Called when the scene is exited.
+     * @param ctx The scene context.
+     */
     void OnExit(SceneContext& ctx)  override;
+
+    /**
+     * @brief Performs per-frame updates (UI, input, camera).
+     * @param ctx The scene context.
+     * @param dt Delta time.
+     */
     void FrameUpdate(SceneContext& ctx, float dt) override;
+
+    /**
+     * @brief Performs fixed-rate updates (networking, physics).
+     * @param ctx The scene context.
+     * @param dt Fixed delta time.
+     */
     void FixedUpdate(SceneContext& ctx, float dt) override;
+
+    /**
+     * @brief Renders the game world.
+     * @param ctx The scene context.
+     * @param renderer Pointer to the renderer.
+     */
     void Render(SceneContext& ctx, Renderer* renderer) override;
 
 private:
-    // --- server-side helpers (only called when hosting) ---
+    /**
+     * @brief Polls for new player connections and disconnections (Server only).
+     * @param ctx The scene context.
+     */
     void PollConnectionEvents(SceneContext& ctx);
+
+    /**
+     * @brief Processes incoming movement packets from clients (Server only).
+     * @param ctx The scene context.
+     */
     void PollClientPackets(SceneContext& ctx);
+
+    /**
+     * @brief Broadcasts entity position/velocity snapshots to all clients (Server only).
+     * @param ctx The scene context.
+     */
     void SendSnapshots(SceneContext& ctx);
 
-    // --- client-side helpers (always called when connected) ---
+    /**
+     * @brief Processes incoming state updates from the server (Client only).
+     * @param ctx The scene context.
+     */
     void PollServerPackets(SceneContext& ctx);
+
+    /**
+     * @brief Sends local player input to the server (Client only).
+     * @param ctx The scene context.
+     */
     void SendLocalInput(SceneContext& ctx);
 
-    // Server state
+    // --- Server state ---
+    /// ID for the next networked entity.
     uint32_t m_NextNetId    = 1;
+    /// ID for the next player.
     uint32_t m_NextPlayerId = 0;
-    std::unordered_map<uint32_t, entt::entity> m_ServerNetMap; // netId → server entity
-    std::unordered_map<uint32_t, uint32_t>     m_PeerToNetId;  // peerId → netId
+    /// Mapping from network ID to server-side entity.
+    std::unordered_map<uint32_t, entt::entity> m_ServerNetMap;
+    /// Mapping from peer ID to network ID.
+    std::unordered_map<uint32_t, uint32_t>     m_PeerToNetId;
 
-    // Client state
+    // --- Client state ---
+    /// Local player's player ID.
     uint32_t m_MyPlayerId = 0;
+    /// Local player's network ID.
     uint32_t m_MyNetId    = 0;
+    /// Whether the player ID has been assigned by the server.
     bool     m_IdAssigned = false;
-    std::unordered_map<uint32_t, entt::entity> m_ClientNetMap; // netId → client entity
+    /// Mapping from network ID to client-side entity.
+    std::unordered_map<uint32_t, entt::entity> m_ClientNetMap;
 
+    /// Accumulator for snapshot broadcasting.
     float m_SnapAccum = 0.f;
-    static constexpr float SNAPSHOT_RATE = 1.f / 20.f; // send snapshots at 20 Hz
+    /// Rate at which snapshots are sent (20 Hz).
+    static constexpr float SNAPSHOT_RATE = 1.f / 20.f;
 
-    // Rendering
+    // --- Rendering ---
+    /// Vertex shader for models.
     std::unique_ptr<Shader> m_VertShader;
+    /// Fragment shader for models.
     std::unique_ptr<Shader> m_FragShader;
+    /// Graphics pipeline for model rendering.
     GraphicsPipeline* m_ModelPipeline = nullptr;
+    /// Main game camera.
     std::unique_ptr<Camera> m_Camera;
-    GlobalUniforms m_Globals{};
+    /// Total time elapsed in the scene.
     float m_TotalTime = 0.0f;
+    /// Total number of frames rendered.
     uint32_t m_FrameCount = 0;
+    /// Whether free-fly camera mode is active.
+    bool m_FreeFly = false;
 };

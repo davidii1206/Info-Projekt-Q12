@@ -1,3 +1,8 @@
+/**
+ * @file Input.h
+ * @brief Static utility class for handling keyboard and mouse input.
+ */
+
 #pragma once
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
@@ -29,36 +34,42 @@ public:
     /**
      * @brief Checks if a key is currently held down.
      * @param key The SDL keycode to check.
+     * @return bool True if the key is down.
      */
     static bool IsKeyDown(SDL_Keycode key);
 
     /**
      * @brief Checks if a key was pressed exactly this frame.
      * @param key The SDL keycode to check.
+     * @return bool True if the key was pressed this frame.
      */
     static bool IsKeyPressed(SDL_Keycode key);
 
     /**
      * @brief Checks if a key was released exactly this frame.
      * @param key The SDL keycode to check.
+     * @return bool True if the key was released this frame.
      */
     static bool IsKeyReleased(SDL_Keycode key);
 
     /**
      * @brief Checks if a mouse button is currently held down.
      * @param button The SDL mouse button index (e.g., SDL_BUTTON_LEFT).
+     * @return bool True if the button is down.
      */
     static bool IsMouseButtonDown(uint8_t button);
 
     /**
      * @brief Checks if a mouse button was pressed exactly this frame.
      * @param button The SDL mouse button index.
+     * @return bool True if the button was pressed this frame.
      */
     static bool IsMouseButtonPressed(uint8_t button);
 
     /**
      * @brief Checks if a mouse button was released exactly this frame.
      * @param button The SDL mouse button index.
+     * @return bool True if the button was released this frame.
      */
     static bool IsMouseButtonReleased(uint8_t button);
 
@@ -85,13 +96,13 @@ public:
     static bool IsRelativeMouseMode();
 
 private:
-    static std::unordered_map<SDL_Keycode, bool> m_Keys;
-    static std::unordered_map<SDL_Keycode, bool> m_KeysLast;
+    static std::unordered_map<SDL_Keycode, bool> m_Keys; ///< Current key state map.
+    static std::unordered_map<SDL_Keycode, bool> m_KeysLast; ///< Key state map of the previous frame.
     
-    static std::unordered_map<uint8_t, bool> m_MouseButtons;
-    static std::unordered_map<uint8_t, bool> m_MouseButtonsLast;
+    static std::unordered_map<uint8_t, bool> m_MouseButtons; ///< Current mouse button state map.
+    static std::unordered_map<uint8_t, bool> m_MouseButtonsLast; ///< Mouse button state map of the previous frame.
 
-    static glm::vec2 m_MousePos;
-    static glm::vec2 m_MouseDelta;
-    static bool m_RelativeMouse;
+    static glm::vec2 m_MousePos; ///< Current mouse position in window space.
+    static glm::vec2 m_MouseDelta; ///< Mouse movement delta for the current frame.
+    static bool m_RelativeMouse; ///< Flag for relative mouse mode activation.
 };

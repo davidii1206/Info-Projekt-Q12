@@ -1,9 +1,14 @@
+/**
+ * @file ShapeGenerator.cpp
+ * @brief Implementation of the ShapeGenerator utility for procedural geometry.
+ */
 #include "ShapeGenerator.h"
 
 ShapeData ShapeGenerator::CreateTriangle(float size, const glm::vec4& color) {
     ShapeData data;
     float half = size * 0.5f;
 
+    // Define vertices for a simple triangle
     data.vertices = {
         { { 0.0f,  half, 0.0f }, color },
         { { half, -half, 0.0f }, color },
@@ -19,6 +24,7 @@ ShapeData ShapeGenerator::CreateCube(float size, const glm::vec4& color) {
     ShapeData data;
     float h = size * 0.5f;
 
+    // Define vertices for a unit cube
     data.vertices = {
         // Front
         { {-h, -h,  h}, color }, { { h, -h,  h}, color }, { { h,  h,  h}, color }, { {-h,  h,  h}, color },
@@ -26,6 +32,7 @@ ShapeData ShapeGenerator::CreateCube(float size, const glm::vec4& color) {
         { {-h, -h, -h}, color }, { { h, -h, -h}, color }, { { h,  h, -h}, color }, { {-h,  h, -h}, color }
     };
 
+    // Define indices for the cube's triangles
     data.indices = {
         // front
         0, 1, 2, 2, 3, 0,

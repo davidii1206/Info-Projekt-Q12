@@ -1,3 +1,7 @@
+/**
+ * @file RenderContext.cpp
+ * @brief Implementation of the RenderContext class for recording GPU commands.
+ */
 #include "RenderContext.h"
 #include <spdlog/spdlog.h>
 

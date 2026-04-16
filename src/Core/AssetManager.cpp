@@ -1,3 +1,8 @@
+/**
+ * @file AssetManager.cpp
+ * @brief Implementation of the AssetManager for handling game assets.
+ */
+
 #define GLM_ENABLE_EXPERIMENTAL
 #include "AssetManager.h"
 #include <tiny_gltf.h>
@@ -48,6 +53,15 @@ std::shared_ptr<Texture> AssetManager::LoadTexture(const std::string& name, unsi
     return nullptr;
 }
 
+/**
+ * @brief Helper template to extract vertex attributes from a tinygltf model.
+ * 
+ * @tparam T The expected type of the attribute data.
+ * @param model The tinygltf model to extract from.
+ * @param accessorIndex Index of the accessor for the attribute.
+ * @param stride Output parameter for the attribute's byte stride.
+ * @return const T* Pointer to the attribute data, or nullptr if not found.
+ */
 template<typename T>
 const T* GetAttributes(const tinygltf::Model& model, int accessorIndex, size_t& stride) {
     if (accessorIndex < 0) return nullptr;
@@ -60,17 +74,30 @@ const T* GetAttributes(const tinygltf::Model& model, int accessorIndex, size_t& 
     return reinterpret_cast<const T*>(&(model.buffers[bv.buffer].data[acc.byteOffset + bv.byteOffset]));
 }
 
+/**
+ * @struct LoaderContext
+ * @brief Context structure for passing around data during the GLTF loading process.
+ */
 struct LoaderContext {
-    std::vector<ModelVertex>& vertices;
-    std::vector<uint32_t>& indices;
-    std::vector<MeshSection>& sections;
-    std::vector<Light>& lights;
-    std::vector<MeshInstance>& meshInstances;
-    const tinygltf::Model& gltfModel;
-    const std::string& filePath;
-    const std::string& baseDir;
+    std::vector<ModelVertex>& vertices; ///< Reference to the global vertex list.
+    std::vector<uint32_t>& indices; ///< Reference to the global index list.
+    std::vector<MeshSection>& sections; ///< Reference to the global mesh section list.
+    std::vector<Light>& lights; ///< Reference to the list of lights found in the scene.
+    std::vector<MeshInstance>& meshInstances; ///< Reference to the list of mesh instances.
+    const tinygltf::Model& gltfModel; ///< Reference to the loaded tinygltf model structure.
+    const std::string& filePath; ///< Path to the source GLTF file.
+    const std::string& baseDir; ///< Directory containing the GLTF file for relative paths.
 };
 
+/**
+ * @brief Recursively processes nodes in a GLTF scene graph.
+ * 
+ * Extracts meshes, transforms, and lights from nodes and populates the LoaderContext.
+ * 
+ * @param ctx The current loader context.
+ * @param nodeIndex Index of the node to process.
+ * @param parentTransform The transformation matrix of the parent node.
+ */
 void ProcessNode(LoaderContext& ctx, int nodeIndex, const glm::mat4& parentTransform) {
     if (nodeIndex < 0) return;
     const auto& node = ctx.gltfModel.nodes[nodeIndex];
@@ -94,7 +121,7 @@ void ProcessNode(LoaderContext& ctx, int nodeIndex, const glm::mat4& parentTrans
 
     glm::mat4 globalTransform = parentTransform * localTransform;
 
-    // Handle KHR_lights_punctual
+    /// Handle KHR_lights_punctual extension.
     if (node.extensions.count("KHR_lights_punctual")) {
         spdlog::debug("Node {}: Found KHR_lights_punctual extension", nodeIndex);
         const auto& ext = node.extensions.at("KHR_lights_punctual");
@@ -114,11 +141,13 @@ void ProcessNode(LoaderContext& ctx, int nodeIndex, const glm::mat4& parentTrans
                 glm::vec3 color = (gltfLight->color.size() == 3) ? glm::vec3((float)gltfLight->color[0], (float)gltfLight->color[1], (float)gltfLight->color[2]) : glm::vec3(1.0f);
                 float intensity = static_cast<float>(gltfLight->intensity);
                 
-                // Proper intensity scaling:
-                // KHR_lights_punctual:
-                // - Directional: Lux (lm/m^2)
-                // - Point/Spot: Candela (lm/sr) or Watts (roughly)
-                // Most glTF exporters use very high values. We normalize them to a 0-10 scale for our simple shader.
+                /** 
+                 * Proper intensity scaling:
+                 * KHR_lights_punctual:
+                 * - Directional: Lux (lm/m^2)
+                 * - Point/Spot: Candela (lm/sr) or Watts (roughly)
+                 * Most glTF exporters use very high values. We normalize them to a 0-10 scale for our simple shader.
+                 */
                 if (gltfLight->type == "directional") {
                     intensity *= 0.0001f; // Normalize Sun-like Lux (100k) to ~10.0
                 } else {

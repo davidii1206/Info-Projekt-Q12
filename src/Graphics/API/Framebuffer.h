@@ -1,3 +1,7 @@
+/**
+ * @file Framebuffer.h
+ * @brief Framebuffer management for off-screen rendering.
+ */
 #pragma once
 #include <SDL3/SDL_gpu.h>
 #include "Texture.h"
@@ -22,24 +26,47 @@ public:
      * @param hasDepth Whether to include a depth target.
      */
     Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height, const std::vector<SDL_GPUTextureFormat>& formats, bool hasDepth = true);
+
+    /**
+     * @brief Destroys the framebuffer and releases all target textures.
+     */
     ~Framebuffer();
 
-    /** @brief Returns the color target at a specific index. */
+    /**
+     * @brief Returns the color target at a specific index.
+     * @param index Index of the color target.
+     * @return Pointer to the Texture.
+     */
     Texture* GetColorTarget(uint32_t index) const { return m_ColorTargets[index].get(); }
 
-    /** @brief Returns the depth target texture. */
+    /**
+     * @brief Returns the depth target texture.
+     * @return Pointer to the depth Texture, or nullptr if none.
+     */
     Texture* GetDepthTarget() const { return m_DepthTarget.get(); }
 
-    /** @brief Returns the total number of color targets. */
+    /**
+     * @brief Returns the total number of color targets.
+     * @return Number of color targets.
+     */
     uint32_t GetColorTargetCount() const { return (uint32_t)m_ColorTargets.size(); }
 
+    /**
+     * @brief Gets the width of the framebuffer.
+     * @return Width in pixels.
+     */
     uint32_t GetWidth() const { return m_Width; }
+
+    /**
+     * @brief Gets the height of the framebuffer.
+     * @return Height in pixels.
+     */
     uint32_t GetHeight() const { return m_Height; }
 
 private:
-    SDL_GPUDevice* m_Device;
-    uint32_t m_Width;
-    uint32_t m_Height;
-    std::vector<std::unique_ptr<Texture>> m_ColorTargets;
-    std::unique_ptr<Texture> m_DepthTarget;
+    SDL_GPUDevice* m_Device;                           /**< Pointer to the SDL GPU device. */
+    uint32_t m_Width;                                  /**< Width of the framebuffer in pixels. */
+    uint32_t m_Height;                                 /**< Height of the framebuffer in pixels. */
+    std::vector<std::unique_ptr<Texture>> m_ColorTargets; /**< List of color target textures. */
+    std::unique_ptr<Texture> m_DepthTarget;            /**< Optional depth target texture. */
 };

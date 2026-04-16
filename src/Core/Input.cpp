@@ -1,3 +1,8 @@
+/**
+ * @file Input.cpp
+ * @brief Implementation of the Input utility class.
+ */
+
 #include "Input.h"
 
 std::unordered_map<SDL_Keycode, bool> Input::m_Keys;

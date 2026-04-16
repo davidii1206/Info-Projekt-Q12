@@ -1,3 +1,8 @@
+/**
+ * @file Application.h
+ * @brief Main application class for the Bugmin engine.
+ */
+
 #pragma once
 #include <memory>
 #include <string>
@@ -9,7 +14,7 @@
 
 class Renderer;
 class World;
-class TestScene;
+class PostProcessor;
 
 /**
  * @class Application
@@ -45,12 +50,12 @@ private:
      */
     void ProcessEvents();
 
-    Window m_Window;
-    std::unique_ptr<Renderer> m_Renderer;
-    PhysicsServer             m_Physics;   // vor m_World — World braucht den Pointer
-    std::unique_ptr<World>    m_World;
-    std::unique_ptr<TestScene> m_TestScene;
-    Timer m_Timer;
-    NetworkManager m_Network;
-    bool m_Running = true;
+    Window m_Window; ///< Main application window.
+    std::unique_ptr<Renderer> m_Renderer; ///< Core renderer system.
+    PhysicsServer             m_Physics;   ///< Jolt physics server.
+    std::unique_ptr<World>    m_World; ///< Game world containing entities and systems.
+    std::unique_ptr<PostProcessor> m_PostProcessor; ///< Post-processing system.
+    Timer m_Timer; ///< Frame timer for delta time calculations.
+    NetworkManager m_Network; ///< Networking system.
+    bool m_Running = true; ///< Main loop execution flag.
 };

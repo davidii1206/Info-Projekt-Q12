@@ -1,7 +1,7 @@
-// =============================================================================
-// src/Core/PhysicsServer.cpp
-// Jolt Physics — full setup, fixed-step loop, body management, cleanup
-// =============================================================================
+/**
+ * @file PhysicsServer.cpp
+ * @brief Implementation of the PhysicsServer using the Jolt Physics engine.
+ */
 
 #include "PhysicsServer.h"
 
@@ -28,20 +28,23 @@
 JPH_SUPPRESS_WARNINGS
 using namespace JPH;
 
-// =============================================================================
-// A) BROADPHASE LAYER IMPLEMENTATIONS
-// =============================================================================
-
-// ---------------------------------------------------------------------------
-// Maps each ObjectLayer → a BroadPhaseLayer bucket
-// ---------------------------------------------------------------------------
+/**
+ * @namespace BPLayers
+ * @brief Broadphase layer definitions.
+ */
 namespace BPLayers
 {
-    static constexpr BroadPhaseLayer NON_MOVING(0); // static geometry
-    static constexpr BroadPhaseLayer MOVING    (1); // everything that can move
-    static constexpr uint32_t        COUNT      = 2;
+    static constexpr BroadPhaseLayer NON_MOVING(0); ///< Static geometry.
+    static constexpr BroadPhaseLayer MOVING    (1); ///< Moving objects.
+    static constexpr uint32_t        COUNT      = 2; ///< Total number of broadphase layers.
 }
 
+/**
+ * @class BugminBPLayerInterface
+ * @brief Implementation of Jolt's BroadPhaseLayerInterface.
+ * 
+ * Maps ObjectLayers to BroadPhaseLayers.
+ */
 class BugminBPLayerInterface final : public BroadPhaseLayerInterface
 {
 public:
@@ -79,9 +82,10 @@ private:
     BroadPhaseLayer mMap[ObjectLayers::COUNT];
 };
 
-// ---------------------------------------------------------------------------
-// Can an ObjectLayer potentially touch a BroadPhaseLayer?  (fast pre-filter)
-// ---------------------------------------------------------------------------
+/**
+ * @class BugminObjVsBPLayerFilter
+ * @brief Filter to determine if an ObjectLayer should collide with a BroadPhaseLayer.
+ */
 class BugminObjVsBPLayerFilter final : public ObjectVsBroadPhaseLayerFilter
 {
 public:
@@ -105,21 +109,24 @@ public:
     }
 };
 
-// ---------------------------------------------------------------------------
-// Fine-grained: can these two ObjectLayers generate contacts?
-// ---------------------------------------------------------------------------
+/**
+ * @class BugminObjLayerPairFilter
+ * @brief Filter to determine if two ObjectLayers should collide.
+ */
 class BugminObjLayerPairFilter final : public ObjectLayerPairFilter
 {
 public:
     bool ShouldCollide(ObjectLayer inLayer1, ObjectLayer inLayer2) const override
     {
-        // Collision matrix:
-        // STATIC  vs STATIC  → no  (neither moves, pointless)
-        // STATIC  vs DYNAMIC → yes
-        // STATIC  vs TRIGGER → no  (triggers are handled via overlap queries)
-        // DYNAMIC vs DYNAMIC → yes
-        // DYNAMIC vs TRIGGER → yes (so we can detect entry)
-        // TRIGGER vs TRIGGER → no
+        /**
+         * Collision matrix:
+         * STATIC  vs STATIC  → no  (neither moves, pointless)
+         * STATIC  vs DYNAMIC → yes
+         * STATIC  vs TRIGGER → no  (triggers are handled via overlap queries)
+         * DYNAMIC vs DYNAMIC → yes
+         * DYNAMIC vs TRIGGER → yes (so we can detect entry)
+         * TRIGGER vs TRIGGER → no
+         */
 
         if (inLayer1 == ObjectLayers::STATIC && inLayer2 == ObjectLayers::STATIC)
             return false;
@@ -134,10 +141,10 @@ public:
     }
 };
 
-// =============================================================================
-// B) LISTENERS
-// =============================================================================
-
+/**
+ * @class BugminContactListener
+ * @brief Listener for physics contact events.
+ */
 class BugminContactListener final : public ContactListener
 {
 public:
@@ -165,16 +172,16 @@ public:
     void OnContactRemoved(const SubShapeIDPair&) override {}
 };
 
+/**
+ * @class BugminBodyActivationListener
+ * @brief Listener for body activation/deactivation events.
+ */
 class BugminBodyActivationListener final : public BodyActivationListener
 {
 public:
     void OnBodyActivated  (const BodyID& id, uint64) override { (void)id; }
     void OnBodyDeactivated(const BodyID& id, uint64) override { (void)id; }
 };
-
-// =============================================================================
-// PhysicsServer — implementation
-// =============================================================================
 
 PhysicsServer::PhysicsServer(Config cfg)
     : mCfg(std::move(cfg))
@@ -186,30 +193,23 @@ PhysicsServer::~PhysicsServer()
         Shutdown();
 }
 
-// ---------------------------------------------------------------------------
-// INIT
-// ---------------------------------------------------------------------------
 void PhysicsServer::Init()
 {
     assert(!mInitialised && "PhysicsServer::Init called twice");
 
-    // ---- 1. Memory allocator -------------------------------------------
-    // Must be the very first Jolt call. Installs malloc/free wrappers.
+    /// 1. Memory allocator: Must be the very first Jolt call.
     RegisterDefaultAllocator();
 
-    // ---- 2. Factory (RTTI registry) ------------------------------------
-    // Jolt uses a global factory to look up type info for shapes, constraints…
+    /// 2. Factory: Jolt uses a global factory to look up type info.
     Factory::sInstance = new Factory();
 
-    // ---- 3. Register all built-in Jolt types ---------------------------
-    // Without this, creating any shape silently returns an invalid result.
+    /// 3. Register all built-in Jolt types.
     RegisterTypes();
 
-    // ---- 4. Temp allocator (per-frame scratch) --------------------------
-    // Jolt allocates heavily during Update(); this slab avoids system malloc.
+    /// 4. Temp allocator: Scratchpad for per-frame allocations.
     mTempAllocator = std::make_unique<TempAllocatorImpl>(mCfg.tempAllocatorBytes);
 
-    // ---- 5. Job system (multi-threaded solver) --------------------------
+    /// 5. Job system: Multi-threaded solver.
     const int threads = (mCfg.workerThreads < 0)
         ? std::max(1, (int)std::thread::hardware_concurrency() - 1)
         : mCfg.workerThreads;
@@ -220,10 +220,10 @@ void PhysicsServer::Init()
         threads
     );
 
-    // ---- 6. Broadphase helpers -----------------------------------------
+    /// 6. Broadphase helpers.
     BuildBroadphaseHelpers();
 
-    // ---- 7. Physics system ---------------------------------------------
+    /// 7. Physics system initialization.
     mPhysicsSystem = std::make_unique<PhysicsSystem>();
     mPhysicsSystem->Init(
         mCfg.maxBodies,
@@ -235,7 +235,7 @@ void PhysicsServer::Init()
         *mObjLayerPairFilter
     );
 
-    // ---- 8. Gravity & listeners ----------------------------------------
+    /// 8. Gravity & listeners.
     mPhysicsSystem->SetGravity(mCfg.gravity);
 
     mContactListener        = std::make_unique<BugminContactListener>();
@@ -257,9 +257,6 @@ void PhysicsServer::BuildBroadphaseHelpers()
     mObjLayerPairFilter  = std::make_unique<BugminObjLayerPairFilter>();
 }
 
-// ---------------------------------------------------------------------------
-// STEP  (fixed-timestep accumulator)
-// ---------------------------------------------------------------------------
 const std::vector<TransformSnapshot>& PhysicsServer::Step(float deltaTime)
 {
     assert(mInitialised && "Call Init() before Step()");
@@ -268,7 +265,7 @@ const std::vector<TransformSnapshot>& PhysicsServer::Step(float deltaTime)
 
     while (mAccumulator >= mCfg.fixedTimestep)
     {
-        // Core solver: broad phase → narrow phase → constraint solve → integrate
+        /// Core solver: broad phase → narrow phase → constraint solve → integrate.
         EPhysicsUpdateError err = mPhysicsSystem->Update(
             mCfg.fixedTimestep,
             mCfg.collisionSteps,
@@ -278,7 +275,6 @@ const std::vector<TransformSnapshot>& PhysicsServer::Step(float deltaTime)
 
         if (err != EPhysicsUpdateError::None)
         {
-            // In production: log to your structured logger, not stdout
             std::cerr << "[PhysicsServer] Update error flags: "
                       << static_cast<uint32_t>(err) << "\n";
         }
@@ -287,19 +283,16 @@ const std::vector<TransformSnapshot>& PhysicsServer::Step(float deltaTime)
         ++mStepCount;
     }
 
-    // Collect transforms of all tracked dynamic bodies → send to clients
+    /// Collect transforms of all tracked dynamic bodies.
     CollectSnapshots();
     return mSnapshots;
 }
 
-// ---------------------------------------------------------------------------
-// Collect transform snapshots for all entity-linked bodies
-// ---------------------------------------------------------------------------
 void PhysicsServer::CollectSnapshots()
 {
     mSnapshots.clear();
 
-    // Use the no-lock interface — safe to read between Update() calls
+    /// Use the no-lock interface for reading snapshots.
     const BodyInterface& bi = mPhysicsSystem->GetBodyInterfaceNoLock();
 
     for (auto& [entityID, bodyID] : mEntityToBody)
@@ -317,16 +310,13 @@ void PhysicsServer::CollectSnapshots()
     }
 }
 
-// ---------------------------------------------------------------------------
-// SHUTDOWN
-// ---------------------------------------------------------------------------
 void PhysicsServer::Shutdown()
 {
     assert(mInitialised && "PhysicsServer::Shutdown called without Init");
 
     BodyInterface& bi = mPhysicsSystem->GetBodyInterface();
 
-    // Remove and destroy every tracked body
+    /// Remove and destroy every tracked body.
     for (auto& [entityID, bodyID] : mEntityToBody)
     {
         if (bi.IsAdded(bodyID))
@@ -336,7 +326,7 @@ void PhysicsServer::Shutdown()
     mEntityToBody.clear();
     mBodyToEntity.clear();
 
-    // Destroy the system first (may reference allocators/job system)
+    /// Destroy the system first (may reference allocators/job system).
     mPhysicsSystem.reset();
 
     mContactListener.reset();
@@ -347,7 +337,7 @@ void PhysicsServer::Shutdown()
     mJobSystem.reset();
     mTempAllocator.reset();
 
-    // Jolt global teardown — must come after all Jolt objects are destroyed
+    /// Jolt global teardown.
     UnregisterTypes();
     delete Factory::sInstance;
     Factory::sInstance = nullptr;
@@ -357,10 +347,6 @@ void PhysicsServer::Shutdown()
     std::cout << "[PhysicsServer] Shutdown — "
               << mStepCount << " steps simulated.\n";
 }
-
-// =============================================================================
-// BODY FACTORY HELPERS
-// =============================================================================
 
 PhysicsBodyHandle PhysicsServer::AddStaticFloor(RVec3 centre, float halfExtentX, float halfExtentZ)
 {
@@ -502,7 +488,7 @@ void PhysicsServer::RemoveBody(PhysicsBodyHandle handle)
         bi.RemoveBody(handle.id);
     bi.DestroyBody(handle.id);
 
-    // Clean up maps
+    /// Clean up entity-to-body maps.
     auto bodyIt = mBodyToEntity.find(handle.id.GetIndex());
     if (bodyIt != mBodyToEntity.end())
     {
@@ -510,10 +496,6 @@ void PhysicsServer::RemoveBody(PhysicsBodyHandle handle)
         mBodyToEntity.erase(bodyIt);
     }
 }
-
-// =============================================================================
-// PER-BODY QUERIES / SETTERS
-// =============================================================================
 
 RVec3 PhysicsServer::GetPosition(PhysicsBodyHandle h) const
 {

@@ -1,11 +1,26 @@
+/**
+ * @file WorldDebugUI.h
+ * @brief Provides ImGui-based debugging tools for visualizing and manipulating the ECS world.
+ */
+
 #pragma once
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include "World.h"
 #include "Components.h"
 
+/**
+ * @namespace WorldDebugUI
+ * @brief Contains functions for drawing the debug interface of the game world.
+ */
 namespace WorldDebugUI {
 
+/**
+ * @brief Draws a table containing all entities and their primary components for a given registry.
+ * 
+ * @param label The header/title for the registry section.
+ * @param reg The entt::registry to inspect.
+ */
 inline void DrawRegistry(const char* label, entt::registry& reg) {
     if (!ImGui::CollapsingHeader(label)) return;
 
@@ -70,6 +85,12 @@ inline void DrawRegistry(const char* label, entt::registry& reg) {
     }
 }
 
+/**
+ * @brief Renders the main World Debug window.
+ * 
+ * Displays scene info, update statistics, and both server/client registries.
+ * @param world Reference to the World instance to debug.
+ */
 inline void Draw(World& world) {
     ImGui::Begin("World Debug");
 

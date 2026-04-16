@@ -1,3 +1,7 @@
+/**
+ * @file GPUBuffer.h
+ * @brief GPU buffer management for vertex, index, uniform, and compute data.
+ */
 #pragma once
 #include <SDL3/SDL_gpu.h>
 #include <cstdint>
@@ -50,15 +54,21 @@ public:
      */
     void Upload(const void* data, uint32_t size, uint32_t offset = 0, SDL_GPUCommandBuffer* cmd = nullptr, bool cycle = false);
 
-    /** @brief Gets the native SDL handle. */
+    /**
+     * @brief Gets the native SDL handle.
+     * @return Pointer to SDL_GPUBuffer.
+     */
     SDL_GPUBuffer* GetHandle() const { return m_Buffer; }
 
-    /** @brief Gets the total size of the buffer in bytes. */
+    /**
+     * @brief Gets the total size of the buffer in bytes.
+     * @return Size in bytes.
+     */
     uint32_t GetSize() const { return m_Size; }
 
 private:
-    SDL_GPUDevice* m_Device;
-    SDL_GPUBuffer* m_Buffer;
-    uint32_t m_Size;
-    BufferUsage m_Usage;
+    SDL_GPUDevice* m_Device; /**< Pointer to the SDL GPU device. */
+    SDL_GPUBuffer* m_Buffer; /**< Native SDL buffer handle. */
+    uint32_t m_Size;         /**< Total size of the buffer in bytes. */
+    BufferUsage m_Usage;     /**< Intended usage of the buffer. */
 };

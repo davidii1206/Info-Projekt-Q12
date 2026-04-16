@@ -1,3 +1,7 @@
+/**
+ * @file GraphicsPipeline.cpp
+ * @brief Implementation of the GraphicsPipeline class for GPU state management.
+ */
 #include "GraphicsPipeline.h"
 #include <spdlog/spdlog.h>
 
@@ -19,6 +23,7 @@ GraphicsPipeline::GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& 
         return;
     }
 
+    // Map vertex attributes to SDL's format
     std::vector<SDL_GPUVertexAttribute> sdlAttributes;
     sdlAttributes.reserve(config.vertexAttributes.size());
     for (const auto& attr : config.vertexAttributes) {
@@ -30,12 +35,14 @@ GraphicsPipeline::GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& 
         sdlAttributes.push_back(sdlAttr);
     }
 
+    // Set up vertex buffer description
     SDL_GPUVertexBufferDescription vertexBufferDesc = {};
     vertexBufferDesc.slot = 0;
     vertexBufferDesc.pitch = config.vertexStride;
     vertexBufferDesc.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
     vertexBufferDesc.instance_step_rate = 0;
 
+    // Set up color target descriptions and blending state
     std::vector<SDL_GPUColorTargetDescription> colorTargetDescs;
     if (!config.colorTargetFormats.empty()) {
         for (auto format : config.colorTargetFormats) {
@@ -71,6 +78,7 @@ GraphicsPipeline::GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& 
         }
     }
 
+    // Set up graphics pipeline creation info
     SDL_GPUGraphicsPipelineCreateInfo createInfo = {};
     createInfo.vertex_shader = config.vertexShader->GetHandle();
     createInfo.fragment_shader = config.fragmentShader->GetHandle();
@@ -87,6 +95,7 @@ GraphicsPipeline::GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& 
     createInfo.target_info.num_color_targets = (uint32_t)colorTargetDescs.size();
     createInfo.target_info.color_target_descriptions = colorTargetDescs.empty() ? nullptr : colorTargetDescs.data();
 
+    // Set up depth stencil state
     if (config.enableDepthTest) {
         createInfo.target_info.has_depth_stencil_target = true;
         createInfo.target_info.depth_stencil_format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;

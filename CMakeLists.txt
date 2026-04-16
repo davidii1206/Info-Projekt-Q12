@@ -37,7 +37,6 @@ add_library(imgui_lib STATIC
 target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(imgui_lib PRIVATE SDL3::SDL3)
 
-# Force re-scan for new files (TestScene.cpp, etc.)
 add_definitions(-DGLM_FORCE_DEPTH_ZERO_TO_ONE)
 file(GLOB_RECURSE BUGMIN_SOURCES "src/*.cpp" "src/*.hpp" "src/*.h")
 add_executable(Bugmin ${BUGMIN_SOURCES})

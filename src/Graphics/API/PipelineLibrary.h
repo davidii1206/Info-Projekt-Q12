@@ -1,3 +1,7 @@
+/**
+ * @file PipelineLibrary.h
+ * @brief Library for caching and managing GPU pipeline state objects.
+ */
 #pragma once
 #include <string>
 #include <unordered_map>
@@ -14,7 +18,15 @@
  */
 class PipelineLibrary {
 public:
+    /**
+     * @brief Constructs a new PipelineLibrary.
+     * @param device Pointer to the active SDL_GPUDevice.
+     */
     PipelineLibrary(SDL_GPUDevice* device);
+
+    /**
+     * @brief Destroys the PipelineLibrary and all cached pipelines.
+     */
     ~PipelineLibrary();
 
     /**
@@ -34,6 +46,6 @@ public:
     GraphicsPipeline* GetPipeline(const std::string& name) const;
 
 private:
-    SDL_GPUDevice* m_Device;
-    std::unordered_map<std::string, std::unique_ptr<GraphicsPipeline>> m_Pipelines;
+    SDL_GPUDevice* m_Device;                                                /**< Pointer to the SDL GPU device. */
+    std::unordered_map<std::string, std::unique_ptr<GraphicsPipeline>> m_Pipelines; /**< Cache of named pipelines. */
 };

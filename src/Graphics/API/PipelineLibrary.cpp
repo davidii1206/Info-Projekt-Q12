@@ -1,3 +1,7 @@
+/**
+ * @file PipelineLibrary.cpp
+ * @brief Implementation of the PipelineLibrary class for pipeline caching.
+ */
 #include "PipelineLibrary.h"
 #include <spdlog/spdlog.h>
 
@@ -6,11 +10,13 @@ PipelineLibrary::PipelineLibrary(SDL_GPUDevice* device) : m_Device(device) {}
 PipelineLibrary::~PipelineLibrary() {}
 
 GraphicsPipeline* PipelineLibrary::CreatePipeline(const std::string& name, const PipelineConfig& config, SDL_GPUTextureFormat renderTargetFormat) {
+    // Check if the pipeline already exists in the cache
     if (m_Pipelines.find(name) != m_Pipelines.end()) {
         spdlog::warn("PipelineLibrary: Pipeline '{}' already exists. Returning existing instance.", name);
         return m_Pipelines[name].get();
     }
 
+    // Compile and register the new pipeline
     auto pipeline = std::make_unique<GraphicsPipeline>(m_Device, config, renderTargetFormat);
     GraphicsPipeline* ptr = pipeline.get();
     m_Pipelines[name] = std::move(pipeline);

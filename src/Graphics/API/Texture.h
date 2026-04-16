@@ -1,3 +1,7 @@
+/**
+ * @file Texture.h
+ * @brief Texture and sampler management for the GPU.
+ */
 #pragma once
 #include <SDL3/SDL_gpu.h>
 #include <string>
@@ -49,24 +53,39 @@ public:
      */
     Texture(SDL_GPUDevice* device, uint32_t width, uint32_t height, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage, TextureFilter filter = TextureFilter::Linear);
 
+    /**
+     * @brief Destroys the texture and releases GPU resources.
+     */
     ~Texture();
 
-    /** @brief Gets the native SDL texture handle. */
+    /**
+     * @brief Gets the native SDL texture handle.
+     * @return Pointer to SDL_GPUTexture.
+     */
     SDL_GPUTexture* GetHandle() const { return m_Texture; }
 
-    /** @brief Gets the associated SDL sampler handle. */
+    /**
+     * @brief Gets the associated SDL sampler handle.
+     * @return Pointer to SDL_GPUSampler.
+     */
     SDL_GPUSampler* GetSampler() const { return m_Sampler; }
 
-    /** @brief Gets the width of the texture in pixels. */
+    /**
+     * @brief Gets the width of the texture in pixels.
+     * @return Width in pixels.
+     */
     uint32_t GetWidth() const { return m_Width; }
 
-    /** @brief Gets the height of the texture in pixels. */
+    /**
+     * @brief Gets the height of the texture in pixels.
+     * @return Height in pixels.
+     */
     uint32_t GetHeight() const { return m_Height; }
 
 private:
-    SDL_GPUDevice* m_Device;
-    SDL_GPUTexture* m_Texture;
-    SDL_GPUSampler* m_Sampler;
-    uint32_t m_Width;
-    uint32_t m_Height;
+    SDL_GPUDevice* m_Device;   /**< Pointer to the SDL GPU device. */
+    SDL_GPUTexture* m_Texture; /**< Native SDL texture handle. */
+    SDL_GPUSampler* m_Sampler; /**< Native SDL sampler handle. */
+    uint32_t m_Width;          /**< Width of the texture in pixels. */
+    uint32_t m_Height;         /**< Height of the texture in pixels. */
 };

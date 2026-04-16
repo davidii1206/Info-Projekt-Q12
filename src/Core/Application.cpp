@@ -1,7 +1,12 @@
+/**
+ * @file Application.cpp
+ * @brief Implementation of the Application class.
+ */
+
 #include "Application.h"
 #include "../Graphics/Renderer.h"
 #include "../Gameplay/World.h"
-#include "../Gameplay/TestScene.h"
+#include "../Gameplay/PostProcessor.h"
 #include "../Gameplay/WorldDebugUI.h"
 #include "../Networking/NetworkDebugUI.h"
 #include "Input.h"
@@ -25,7 +30,7 @@ Application::Application() {
     m_Renderer = std::make_unique<Renderer>(&m_Window);
     AssetManager::Init(m_Renderer->GetDevice());
 
-    // Physics zuerst starten — World braucht den Pointer
+    /// Initialize physics before world, as world needs the pointer.
     m_Physics.Init();
     m_Physics.AddStaticFloor();
     m_Physics.GetSystem().OptimizeBroadPhase();
@@ -33,11 +38,11 @@ Application::Application() {
 
     m_World = std::make_unique<World>(&m_Physics);
 
-    m_TestScene = std::make_unique<TestScene>(m_Renderer.get());
+    m_PostProcessor = std::make_unique<PostProcessor>(m_Renderer.get());
 }
 
 Application::~Application() {
-    m_TestScene.reset();
+    m_PostProcessor.reset();
     m_World.reset();
     m_Physics.Shutdown();
     AssetManager::Shutdown();
@@ -55,18 +60,19 @@ void Application::Run() {
 
         const float dt = m_Timer.GetDeltaTime();
 
-        // 1. Physics simulieren → Snapshots holen
+        /// 1. Simulate physics and retrieve snapshots.
         const auto& snapshots = m_Physics.Step(dt);
 
-        // 2. Snapshots in entt-Components schreiben
+        /// 2. Apply snapshots to Entity-Component system.
         m_World->ApplySnapshots(snapshots);
 
         if (m_Renderer->BeginFrame()) {
-            m_World->Update(dt, m_Network);
-            m_World->Render(m_Renderer.get(), m_Network);
-            if (m_TestScene) m_TestScene->Update(dt);
+            if (m_PostProcessor) m_PostProcessor->BeginFrame(m_Renderer.get());
 
-            if (m_TestScene) m_TestScene->Render(m_Renderer.get());
+            m_World->Update(dt, m_Network, m_Renderer.get());
+            m_World->Render(m_Renderer.get(), m_Network);
+
+            if (m_PostProcessor) m_PostProcessor->EndFrame(m_Renderer.get());
 
             ImGui::Begin("Bugmin Debugger");
             ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
@@ -75,7 +81,7 @@ void Application::Run() {
             if (ImGui::Button("Exit")) m_Running = false;
             ImGui::End();
 
-            if (m_TestScene) m_TestScene->OnImGui();
+            if (m_PostProcessor) m_PostProcessor->OnImGui();
             
             NetDebug::Draw(m_Network);
             WorldDebugUI::Draw(*m_World);

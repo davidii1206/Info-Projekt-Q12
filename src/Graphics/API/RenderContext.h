@@ -1,3 +1,7 @@
+/**
+ * @file RenderContext.h
+ * @brief Command recording context for graphics and compute tasks.
+ */
 #pragma once
 #include <SDL3/SDL_gpu.h>
 #include "GraphicsPipeline.h"
@@ -8,14 +12,25 @@
 /**
  * @class RenderContext
  * @brief Simplified command recorder for both Graphics and Compute tasks.
+ * 
+ * This class provides a high-level interface for recording GPU commands 
+ * into a command buffer, abstracting away some of the lower-level SDL3 GPU API.
  */
 class RenderContext {
 public:
-    // Graphics Constructor
+    /**
+     * @brief Constructs a RenderContext for graphics tasks.
+     * @param pass Pointer to the active SDL_GPURenderPass.
+     * @param cmd Pointer to the active SDL_GPUCommandBuffer.
+     */
     RenderContext(SDL_GPURenderPass* pass, SDL_GPUCommandBuffer* cmd) 
         : m_RenderPass(pass), m_ComputePass(nullptr), m_Cmd(cmd) {}
 
-    // Compute Constructor
+    /**
+     * @brief Constructs a RenderContext for compute tasks.
+     * @param pass Pointer to the active SDL_GPUComputePass.
+     * @param cmd Pointer to the active SDL_GPUCommandBuffer.
+     */
     RenderContext(SDL_GPUComputePass* pass, SDL_GPUCommandBuffer* cmd) 
         : m_RenderPass(nullptr), m_ComputePass(pass), m_Cmd(cmd) {}
 
@@ -153,7 +168,7 @@ public:
     void Dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ);
 
 private:
-    SDL_GPURenderPass* m_RenderPass;
-    SDL_GPUComputePass* m_ComputePass;
-    SDL_GPUCommandBuffer* m_Cmd;
+    SDL_GPURenderPass* m_RenderPass;   /**< Pointer to the active render pass. */
+    SDL_GPUComputePass* m_ComputePass; /**< Pointer to the active compute pass. */
+    SDL_GPUCommandBuffer* m_Cmd;       /**< Pointer to the active command buffer. */
 };
