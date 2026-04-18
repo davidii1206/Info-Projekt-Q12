@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "../Graphics/Renderer.h"
 #include "../Gameplay/GameLayer.h"
+#include "../Audio/SoundSystem.h"
 #include "Input.h"
 #include "AssetManager.h"
 #include "Events/KeyEvent.h"
@@ -12,6 +13,10 @@
 
 Application::Application() {
     AssetManager::Init();
+    // Neu: SoundSystem initialisieren
+    if (!SoundSystem::Get().Init()) {
+        spdlog::warn("SoundSystem init failed – continuing without audio");
+    }
 
     m_Window.title  = "Bugmin Engine";
     m_Window.width  = 1280;
@@ -35,6 +40,9 @@ Application::~Application() {
     m_Renderer.reset();
     DestroyWindow(&m_Window);
     AssetManager::Shutdown();
+
+    //soundsystem hernuterfahren
+    SoundSystem::Get().Shutdown();
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
