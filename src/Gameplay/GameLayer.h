@@ -35,7 +35,7 @@ public:
 
     void OnUpdate(float dt) override {
         // Sound-System jeden Frame aktualisieren (räumt beendete Sources auf)
-        SoundSystem::Get().Update();
+        SoundSystem::Get().Update(dt);
 
         if (m_World)
             m_World->Update(dt);
