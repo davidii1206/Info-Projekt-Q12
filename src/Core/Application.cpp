@@ -20,6 +20,15 @@
 #include <imgui_impl_sdl3.h>
 #include <spdlog/spdlog.h>
 
+// Win32 defines CreateWindow/DestroyWindow as macros (→ CreateWindowA/W).
+// Undefine them here so our own engine functions with the same names are usable.
+#ifdef CreateWindow
+#  undef CreateWindow
+#endif
+#ifdef DestroyWindow
+#  undef DestroyWindow
+#endif
+
 Application::Application() {
     m_Window.title  = "Bugmin Engine";
     m_Window.width  = 1280;
@@ -51,7 +60,7 @@ Application::Application() {
     m_PostProcessor = std::make_unique<PostProcessor>(m_Renderer.get());
 
     // Push the default gameplay layer
-    PushLayer(new GameLayer());
+    PushLayer(new GameLayer(&m_Physics));
 }
 
 Application::~Application() {

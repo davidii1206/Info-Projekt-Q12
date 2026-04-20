@@ -9,12 +9,32 @@
 // Dieses Beispiel zeigt, wie Biome-Sounds und Event-Sounds verdrahtet werden.
 class GameLayer : public Layer {
 public:
-    GameLayer() : Layer("GameLayer") {}
+    explicit GameLayer(PhysicsServer* physics) : m_Physics(physics) {}
+
+    World* GetWorld() { return m_World.get(); }
+
+    // Rufe das aus deiner Spiellogik auf wenn der Spieler in ein neues Biom tritt
+    void ChangeBiome(BiomeType biome) {
+        BiomeChangedEvent e(biome);
+        OnEvent(e);
+    }
+
+    // Einfaches Auslösen eines Schadens-Sounds (z.B. aus einem Combat-System)
+    void TriggerDamageSound(float amount, bool critical = false) {
+        EntityDamagedEvent e(amount, critical);
+        OnEvent(e);
+    }
+
+private:
+    // ── State ─────────────────────────────────────────────────────────────────
+
+    PhysicsServer*         m_Physics = nullptr;
+    std::unique_ptr<World> m_World;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     void OnAttach() override {
-        m_World = std::make_unique<World>();
+        m_World = std::make_unique<World>(m_Physics);
 
         // Biome-Sounds registrieren (Pfade relativ zum Arbeitsverzeichnis)
         auto& sound = SoundSystem::Get();
@@ -46,7 +66,6 @@ public:
     void OnEvent(Event& event) override {
         EventDispatcher dispatcher(event);
 
-        // Sound-relevante Events abfangen
         dispatcher.Dispatch<EntityDamagedEvent>(
             [this](EntityDamagedEvent& e) { return OnEntityDamaged(e); });
 
@@ -57,23 +76,6 @@ public:
             [this](BiomeChangedEvent& e) { return OnBiomeChanged(e); });
     }
 
-    World* GetWorld() { return m_World.get(); }
-
-    // ── Hilfsmethoden (von außen aufrufbar) ───────────────────────────────────
-
-    // Rufe das aus deiner Spiellogik auf wenn der Spieler in ein neues Biom tritt
-    void ChangeBiome(BiomeType biome) {
-        BiomeChangedEvent e(biome);
-        OnEvent(e);
-    }
-
-    // Einfaches Auslösen eines Schadens-Sounds (z.B. aus einem Combat-System)
-    void TriggerDamageSound(float amount, bool critical = false) {
-        EntityDamagedEvent e(amount, critical);
-        OnEvent(e);
-    }
-
-private:
     // ── Sound-Event-Handler ───────────────────────────────────────────────────
 
     bool OnEntityDamaged(EntityDamagedEvent& e) {
@@ -81,11 +83,10 @@ private:
         if (e.IsCritical()) {
             sound.PlaySound("assets/audio/sfx_hit_critical.wav", 1.0f, 1.2f);
         } else {
-            // Pitch leicht variieren für Abwechslung
             float pitch = 0.9f + (static_cast<float>(rand() % 20) / 100.f);
             sound.PlaySound("assets/audio/sfx_hit_normal.wav", 0.8f, pitch);
         }
-        return false; // Event nicht konsumieren – andere Layer sollen es auch erhalten
+        return false;
     }
 
     bool OnEntityDied(EntityDiedEvent& /*e*/) {
@@ -97,7 +98,4 @@ private:
         SoundSystem::Get().SetActiveBiome(e.GetBiome());
         return false;
     }
-
-    // ── State ─────────────────────────────────────────────────────────────────
-    std::unique_ptr<World> m_World;
 };
