@@ -1,3 +1,4 @@
+#if 0
 // ═══════════════════════════════════════════════════════════════════════════════
 // SoundSystem – Verwendungsbeispiele für das 3D-Spiel
 // Diese Datei zeigt typische Verwendung im Game-Code.
@@ -163,3 +164,4 @@ void ApplyAudioSettings(float master, float effects, float ambient, float music)
     sound.SetCategoryVolume(SoundCategory::Ambient, ambient);
     sound.SetCategoryVolume(SoundCategory::Music,   music);
 }
+#endif

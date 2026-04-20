@@ -8,11 +8,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
-# ── Static libraries (not fetched) ────────────────────────────────────────────
-
-add_library(glad STATIC external/glad/src/glad.c)
-target_include_directories(glad PUBLIC external/glad/include)
-
 # ── Fetched dependencies ──────────────────────────────────────────────────────
 
 FetchContent_Declare(SDL3          GIT_REPOSITORY https://github.com/libsdl-org/SDL.git          GIT_TAG main)
@@ -45,7 +40,7 @@ add_library(imgui_lib STATIC
         ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
-target_link_libraries(imgui_lib PRIVATE SDL3::SDL3 glad)
+target_link_libraries(imgui_lib PRIVATE SDL3::SDL3)
 
 # ── Main executable ───────────────────────────────────────────────────────────
 
@@ -54,7 +49,6 @@ file(GLOB_RECURSE BUGMIN_SOURCES "src/*.cpp" "src/*.hpp" "src/*.h")
 add_executable(Bugmin ${BUGMIN_SOURCES})
 
 target_link_libraries(Bugmin PRIVATE
-        glad
         SDL3::SDL3
         imgui_lib
         glm::glm
@@ -119,15 +113,23 @@ if(GLSLANG_VALIDATOR)
             ${SHADER_BINARY_DIR}
             $<TARGET_FILE_DIR:Bugmin>/shaders
     )
-
-    add_custom_command(TARGET Bugmin POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/Assets
-            $<TARGET_FILE_DIR:Bugmin>/assets
-    )
 else()
     message(WARNING "glslangValidator not found! Shaders will not be compiled automatically.")
 endif()
+
+# ── Assets & Shader kopieren (immer, unabhängig von glslangValidator) ─────────
+
+add_custom_command(TARGET Bugmin POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/Assets
+        $<TARGET_FILE_DIR:Bugmin>/Assets
+)
+
+add_custom_command(TARGET Bugmin POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/shaders
+        $<TARGET_FILE_DIR:Bugmin>/shaders
+)
 
 # ── Documentation ─────────────────────────────────────────────────────────────
 

@@ -38,11 +38,11 @@ private:
 
         // Biome-Sounds registrieren (Pfade relativ zum Arbeitsverzeichnis)
         auto& sound = SoundSystem::Get();
-        sound.RegisterBiomeSound(BiomeType::Forest, "assets/audio/ambient_forest.wav");
-        sound.RegisterBiomeSound(BiomeType::Desert, "assets/audio/ambient_desert.wav");
-        sound.RegisterBiomeSound(BiomeType::Cave,   "assets/audio/ambient_cave.wav");
-        sound.RegisterBiomeSound(BiomeType::Ocean,  "assets/audio/ambient_ocean.wav");
-        sound.RegisterBiomeSound(BiomeType::Tundra, "assets/audio/ambient_tundra.wav");
+        sound.RegisterBiomeSound(BiomeType::Forest, "Assets/audio/ambient_forest.wav");
+        sound.RegisterBiomeSound(BiomeType::Desert, "Assets/audio/ambient_desert.wav");
+        sound.RegisterBiomeSound(BiomeType::Cave,   "Assets/audio/ambient_cave.wav");
+        sound.RegisterBiomeSound(BiomeType::Ocean,  "Assets/audio/ambient_ocean.wav");
+        sound.RegisterBiomeSound(BiomeType::Tundra, "Assets/audio/ambient_tundra.wav");
 
         // Starte mit Startbiom
         sound.SetActiveBiome(BiomeType::Forest);
