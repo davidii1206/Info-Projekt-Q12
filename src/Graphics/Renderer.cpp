@@ -1,43 +1,128 @@
+/**
+ * @file Renderer.cpp
+ * @brief Implementation of the core rendering system.
+ */
 #include "Renderer.h"
 #include <spdlog/spdlog.h>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
-#include <imgui_impl_opengl3.h>
+#include <imgui_impl_sdlgpu3.h>
 
-Renderer::Renderer(Window* window) : m_Window(window) {
-    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-        spdlog::error("Failed to initialize GLAD");
+Renderer::Renderer(Window* window) 
+    : m_Window(window), m_Device(nullptr), m_CurrentCommandBuffer(nullptr), 
+      m_CurrentSwapchainTexture(nullptr) 
+{
+    // Attempt to create GPU device with Vulkan backend preference
+    m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, "vulkan");
+    
+    if (!m_Device) {
+        spdlog::warn("Vulkan not available or failed to init, falling back to default GPU driver.");
+        m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, nullptr);
     }
 
+    if (!m_Device) {
+        spdlog::critical("Failed to create SDL GPU Device: {}", SDL_GetError());
+        return;
+    }
+
+    if (!SDL_ClaimWindowForGPUDevice(m_Device, m_Window->handle)) {
+        spdlog::critical("Failed to claim window for SDL GPU Device: {}", SDL_GetError());
+        return;
+    }
+
+    spdlog::info("SDL3 GPU Renderer Initialized! Backend: {}", SDL_GetGPUDeviceDriver(m_Device));
+
+    // Initialize core rendering sub-systems
+    m_FrameGraph = std::make_unique<FrameGraph>(m_Device);
+    m_PipelineLibrary = std::make_unique<PipelineLibrary>(m_Device);
+    m_GlobalUBO = std::make_unique<GPUBuffer>(m_Device, BufferUsage::Uniform, sizeof(GlobalUniforms) + 256); // Extra space for alignment safety
+
+    // Initialize ImGui for SDL3 and SDL_GPU
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
-    ImGui_ImplSDL3_InitForOpenGL(m_Window->handle, m_Window->context);
-    ImGui_ImplOpenGL3_Init("#version 460");
-
-    spdlog::info("OpenGL 4.6 Renderer Initialized!");
+    ImGui_ImplSDL3_InitForSDLGPU(m_Window->handle);
+    
+    ImGui_ImplSDLGPU3_InitInfo init_info = {};
+    init_info.Device = m_Device;
+    init_info.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(m_Device, m_Window->handle);
+    ImGui_ImplSDLGPU3_Init(&init_info);
 }
 
 Renderer::~Renderer() {
-    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDLGPU3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
+
+    m_GlobalUBO.reset();
+    m_PipelineLibrary.reset();
+    m_FrameGraph.reset();
+
+    if (m_Device) {
+        SDL_ReleaseWindowFromGPUDevice(m_Device, m_Window->handle);
+        SDL_DestroyGPUDevice(m_Device);
+    }
 }
 
-void Renderer::BeginFrame(const glm::vec4& clearColor) {
-    glViewport(0, 0, m_Window->width, m_Window->height);
-    glClearColor(clearColor.r, clearColor.g, clearColor.b, clearColor.a);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+bool Renderer::BeginFrame() {
+    m_CurrentCommandBuffer = SDL_AcquireGPUCommandBuffer(m_Device);
+    if (!m_CurrentCommandBuffer) return false;
 
-    ImGui_ImplOpenGL3_NewFrame();
+    // Acquire swapchain texture for rendering
+    if (!SDL_WaitAndAcquireGPUSwapchainTexture(m_CurrentCommandBuffer, m_Window->handle, &m_CurrentSwapchainTexture, nullptr, nullptr)) {
+        m_CurrentSwapchainTexture = nullptr;
+        SDL_SubmitGPUCommandBuffer(m_CurrentCommandBuffer);
+        m_CurrentCommandBuffer = nullptr;
+        return false;
+    }
+
+    ImGui_ImplSDLGPU3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+    return true;
+}
+
+void Renderer::UpdateGlobalUniforms(const GlobalUniforms& uniforms) {
+    m_GlobalUniforms = uniforms;
+    if (m_CurrentCommandBuffer) {
+        m_GlobalUBO->Upload(&m_GlobalUniforms, sizeof(GlobalUniforms), 0, m_CurrentCommandBuffer, true);
+    }
+}
+
+void Renderer::AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth, std::function<void(SDL_GPUCommandBuffer*)> preFunc) {
+    m_FrameGraph->AddPass(name, target, func, needsDepth, preFunc);
 }
 
 void Renderer::EndFrame() {
+    if (!m_CurrentCommandBuffer) return;
+
+    int w, h;
+    SDL_GetWindowSizeInPixels(m_Window->handle, &w, &h);
+    
+    // Execute the recorded frame graph
+    m_FrameGraph->Execute(m_CurrentCommandBuffer, m_CurrentSwapchainTexture, (uint32_t)w, (uint32_t)h);
+    m_FrameGraph->Reset();
+
+    // Render ImGui overlay
     ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    SDL_GL_SwapWindow(m_Window->handle);
+    ImDrawData* drawData = ImGui::GetDrawData();
+    if (drawData && m_CurrentCommandBuffer) {
+        ImGui_ImplSDLGPU3_PrepareDrawData(drawData, m_CurrentCommandBuffer);
+
+        if (m_CurrentSwapchainTexture) {
+            SDL_GPUColorTargetInfo colorTarget = {};
+            colorTarget.texture = m_CurrentSwapchainTexture;
+            colorTarget.load_op = SDL_GPU_LOADOP_LOAD; 
+            colorTarget.store_op = SDL_GPU_STOREOP_STORE;
+
+            SDL_GPURenderPass* uiPass = SDL_BeginGPURenderPass(m_CurrentCommandBuffer, &colorTarget, 1, nullptr);
+            if (uiPass) {
+                ImGui_ImplSDLGPU3_RenderDrawData(drawData, m_CurrentCommandBuffer, uiPass);
+                SDL_EndGPURenderPass(uiPass);
+            }
+        }
+    }
+
+    SDL_SubmitGPUCommandBuffer(m_CurrentCommandBuffer);
+    m_CurrentCommandBuffer = nullptr;
+    m_CurrentSwapchainTexture = nullptr;
 }

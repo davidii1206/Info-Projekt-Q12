@@ -1,5 +1,14 @@
+/**
+ * @file Application.cpp
+ * @brief Implementation of the Application class.
+ */
+
 #include "Application.h"
 #include "../Graphics/Renderer.h"
+#include "../Gameplay/World.h"
+#include "../Gameplay/PostProcessor.h"
+#include "../Gameplay/WorldDebugUI.h"
+#include "../Networking/NetworkDebugUI.h"
 #include "../Gameplay/GameLayer.h"
 #include "../Audio/SoundSystem.h"
 #include "Input.h"
@@ -12,12 +21,6 @@
 #include <spdlog/spdlog.h>
 
 Application::Application() {
-    AssetManager::Init();
-    // Neu: SoundSystem initialisieren
-    if (!SoundSystem::Get().Init()) {
-        spdlog::warn("SoundSystem init failed – continuing without audio");
-    }
-
     m_Window.title  = "Bugmin Engine";
     m_Window.width  = 1280;
     m_Window.height = 720;
@@ -30,6 +33,22 @@ Application::Application() {
     }
 
     m_Renderer = std::make_unique<Renderer>(&m_Window);
+    AssetManager::Init(m_Renderer->GetDevice());
+
+    // Initialize audio
+    if (!SoundSystem::Get().Init()) {
+        spdlog::warn("SoundSystem init failed – continuing without audio");
+    }
+
+    // Initialize physics before world, as world needs the pointer.
+    m_Physics.Init();
+    m_Physics.AddStaticFloor();
+    m_Physics.GetSystem().OptimizeBroadPhase();
+    spdlog::info("Physics initialized");
+
+    m_World = std::make_unique<World>(&m_Physics);
+
+    m_PostProcessor = std::make_unique<PostProcessor>(m_Renderer.get());
 
     // Push the default gameplay layer
     PushLayer(new GameLayer());
@@ -37,15 +56,16 @@ Application::Application() {
 
 Application::~Application() {
     // LayerStack destructor calls OnDetach() on all layers automatically
+    m_PostProcessor.reset();
+    m_World.reset();
+    m_Physics.Shutdown();
     m_Renderer.reset();
     DestroyWindow(&m_Window);
     AssetManager::Shutdown();
-
-    //soundsystem hernuterfahren
     SoundSystem::Get().Shutdown();
 }
 
-// ── Public API ───────────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 
 void Application::PushLayer(Layer* layer) {
     m_LayerStack.PushLayer(layer);
@@ -63,27 +83,51 @@ void Application::Run() {
         Input::Update();
         ProcessEvents();
 
+        m_Network.Update();
+
+        const float dt = m_Timer.GetDeltaTime();
+
+        // 1. Simulate physics and retrieve snapshots.
+        const auto& snapshots = m_Physics.Step(dt);
+
+        // 2. Apply snapshots to Entity-Component system.
+        m_World->ApplySnapshots(snapshots);
+
         // Update all layers front → back
         for (Layer* layer : m_LayerStack)
-            layer->OnUpdate(m_Timer.GetDeltaTime());
+            layer->OnUpdate(dt);
 
-        m_Renderer->BeginFrame();
+        if (m_Renderer->BeginFrame()) {
+            if (m_PostProcessor) m_PostProcessor->BeginFrame(m_Renderer.get());
 
-        // ImGui rendering for all layers front → back
-        for (Layer* layer : m_LayerStack)
-            layer->OnImGuiRender();
+            m_World->Update(dt, m_Network, m_Renderer.get());
+            m_World->Render(m_Renderer.get(), m_Network);
 
-        // Built-in debug overlay
-        ImGui::Begin("Bugmin Debugger");
-        ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
-        if (ImGui::Button("Exit")) m_Running = false;
-        ImGui::End();
+            if (m_PostProcessor) m_PostProcessor->EndFrame(m_Renderer.get());
 
-        m_Renderer->EndFrame();
+            // ImGui rendering for all layers front → back
+            for (Layer* layer : m_LayerStack)
+                layer->OnImGuiRender();
+
+            // Built-in debug overlay
+            ImGui::Begin("Bugmin Debugger");
+            ImGui::Text("FPS: %.1f", m_Timer.GetFPS());
+            ImGui::Text("Physics steps: %lu", m_Physics.GetStepCount());
+            ImGui::Text("Bodies tracked: %zu", snapshots.size());
+            if (ImGui::Button("Exit")) m_Running = false;
+            ImGui::End();
+
+            if (m_PostProcessor) m_PostProcessor->OnImGui();
+
+            NetDebug::Draw(m_Network);
+            WorldDebugUI::Draw(*m_World);
+
+            m_Renderer->EndFrame();
+        }
     }
 }
 
-// ── Event processing ─────────────────────────────────────────────────────────
+// ── Event processing ──────────────────────────────────────────────────────────
 
 void Application::ProcessEvents() {
     SDL_Event sdlEvent;
@@ -133,7 +177,7 @@ void Application::ProcessEvents() {
         }
     }
 }
-//dwd
+
 void Application::OnEvent(Event& event) {
     // Application-level handlers first
     EventDispatcher dispatcher(event);
