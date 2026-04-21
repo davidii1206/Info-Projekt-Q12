@@ -18,6 +18,7 @@ struct alignas(16) GlobalUniforms {
     glm::mat4 proj;         /**< Projection matrix. */
     glm::mat4 viewProj;     /**< View-Projection matrix. */
     glm::mat4 sunVP;        /**< Sun's View-Projection matrix for shadows. */
+    glm::vec4 ambientColor;
 
     glm::vec4 sunColor;     /**< Sun light color and intensity. */
     glm::vec4 sunDir;       /**< Sun light direction. */

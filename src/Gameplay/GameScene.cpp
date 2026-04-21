@@ -15,6 +15,7 @@
 #include "../Graphics/Renderer.h"
 #include "../Graphics/API/Shader.h"
 #include "../Graphics/API/GraphicsPipeline.h"
+#include "../Graphics/Lights.h"     // LightComponent + Light
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <glm/glm.hpp>
@@ -50,7 +51,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
          * @brief Spawn a networked asset for testing purposes.
          */
         const uint32_t assetNetId = m_NextNetId++;
-        
+
         // Authoritative server entity
         auto sEntity = ctx.serverRegistry.create();
         ctx.serverRegistry.emplace<TransformComponent>(sEntity, glm::vec3{2.f, 0.f, 2.f});
@@ -65,7 +66,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
         std::strncpy(pkt.modelPath, "assets/test_scene_pixelation.glb", sizeof(pkt.modelPath)-1);
         pkt.x = 2.f; pkt.y = 0.f; pkt.z = 2.f;
         ctx.network.BroadcastToAll(pkt);
-        
+
         spdlog::info("GameScene: spawned test asset netId={}", assetNetId);
     }
 }
@@ -86,7 +87,7 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_MyNetId       = 0;
     m_IdAssigned    = false;
     m_SnapAccum     = 0.f;
-    
+
     m_VertShader.reset();
     m_FragShader.reset();
     m_ModelPipeline = nullptr;
@@ -99,25 +100,30 @@ void GameScene::OnExit(SceneContext& ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Handles 3D rendering of the game scene, including models and lights.
+ * @brief Renders the game world — models, sun, and all ECS light entities.
  * @param ctx The scene context.
  * @param renderer Pointer to the renderer.
  */
 void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
-    /**
-     * @brief Initialize graphics pipeline and shaders if they don't exist yet.
-     */
-    if (!m_ModelPipeline) {
-        ShaderResourceLayout vertLayout = {0, 0, 1, 1}; 
-        ShaderResourceLayout fragLayout = {1, 0, 2, 1}; 
 
-        m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert.spv", ShaderStage::Vertex, vertLayout);
-        m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag.spv", ShaderStage::Fragment, fragLayout);
+    // ------------------------------------------------------------------
+    // 1. Lazy-init graphics pipeline
+    // ------------------------------------------------------------------
+    if (!m_ModelPipeline) {
+        ShaderResourceLayout vertLayout = {0, 0, 1, 1};
+        ShaderResourceLayout fragLayout = {1, 0, 2, 1};
+
+        m_VertShader = std::make_unique<Shader>(
+            renderer->GetDevice(), "shaders/model.vert.spv",
+            ShaderStage::Vertex, vertLayout);
+        m_FragShader = std::make_unique<Shader>(
+            renderer->GetDevice(), "shaders/model.frag.spv",
+            ShaderStage::Fragment, fragLayout);
 
         PipelineConfig config;
-        config.vertexShader = m_VertShader.get();
+        config.vertexShader   = m_VertShader.get();
         config.fragmentShader = m_FragShader.get();
-        config.vertexStride = sizeof(ModelVertex);
+        config.vertexStride   = sizeof(ModelVertex);
         config.vertexAttributes = {
             {0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position)},
             {1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, normal)},
@@ -125,78 +131,123 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             {3, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(ModelVertex, color)},
             {4, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, tangent)}
         };
-        config.enableDepthTest = true;
-        config.depthCompareOp = SDL_GPU_COMPAREOP_GREATER;
+        config.enableDepthTest  = true;
+        config.depthCompareOp   = SDL_GPU_COMPAREOP_GREATER; // Reverse-Z
 
         // Match G-Buffer formats from PostProcessor
         config.colorTargetFormats = {
             SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Normal
             SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,     // Color (Albedo)
-            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Light Buffer
+            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Light buffer
             SDL_GPU_TEXTUREFORMAT_R16_UINT            // Object ID
         };
 
-        m_ModelPipeline = renderer->GetPipelines()->CreatePipeline("GameModelPipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
+        m_ModelPipeline = renderer->GetPipelines()->CreatePipeline(
+            "GameModelPipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
     }
 
-    /**
-     * @brief Update global uniforms for camera and scene-wide timers.
-     */
+    // ------------------------------------------------------------------
+    // 2. Camera matrices
+    // ------------------------------------------------------------------
     int w, h;
     SDL_GetWindowSizeInPixels(renderer->GetWindow()->handle, &w, &h);
     float aspect = (float)w / (float)h;
 
     GlobalUniforms& globals = renderer->GetGlobalUniforms();
-    globals.view = m_Camera->GetViewMatrix();
-    globals.proj = m_Camera->GetProjectionMatrix(aspect);
+    globals.view     = m_Camera->GetViewMatrix();
+    globals.proj     = m_Camera->GetProjectionMatrix(aspect);
     globals.viewProj = globals.proj * globals.view;
     globals.cameraPos = glm::vec4(m_Camera->m_Position, 1.0f);
-    
-    /**
-     * @brief Extract light data from networked models and update global uniforms.
-     */
+
+    // ------------------------------------------------------------------
+    // 3. Sun light (single directional — always active, no slot used)
+    // ------------------------------------------------------------------
+    globals.sunDir   = glm::vec4(glm::normalize(-m_SunDirection), 0.0f);
+        // NOTE: sunDir stores the direction pointing TOWARD the sun.
+        //       Negate m_SunDirection if it stores "light travels toward scene".
+    globals.sunColor = glm::vec4(m_SunColor, m_SunIntensity);
+
+    // ------------------------------------------------------------------
+    // 4. Ambient light
+    // ------------------------------------------------------------------
+    globals.ambientColor = glm::vec4(m_AmbientColor, m_AmbientIntensity);
+
+    // ------------------------------------------------------------------
+    // 5. Dynamic lights — from ECS LightComponents + GLB-embedded lights
+    // ------------------------------------------------------------------
     uint32_t totalLightCount = 0;
-    auto modelView = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
-    for (auto entity : modelView) {
-        auto& transform = modelView.get<TransformComponent>(entity);
-        auto& modelComp = modelView.get<ModelComponent>(entity);
-        auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
-        if (!sceneData.model) continue;
 
-        glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
-                              glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
-                              glm::scale(glm::mat4(1.0f), transform.scale);
-
-        for (const auto& light : sceneData.lights) {
+    // 5a. Lights from ECS entities with LightComponent + TransformComponent
+    {
+        auto lightView = ctx.clientRegistry.view<TransformComponent, LightComponent>();
+        for (auto entity : lightView) {
             if (totalLightCount >= 16) break;
-            
-            Light& outLight = globals.lights[totalLightCount];
-            outLight = light;
-            
-            // Transform light position into world space
-            glm::vec4 worldPos = entityMat * glm::vec4(glm::vec3(light.position_type), 1.0f);
-            outLight.position_type = glm::vec4(glm::vec3(worldPos), light.position_type.w);
-            
-            // Transform direction if it's a directional/spot light
-            if (light.position_type.w == (float)LightType::Directional || light.position_type.w == (float)LightType::Spot) {
-                glm::vec4 worldDir = entityMat * glm::vec4(glm::vec3(light.direction_range), 0.0f);
-                outLight.direction_range = glm::vec4(glm::normalize(glm::vec3(worldDir)), light.direction_range.w);
-            }
+
+            auto& tf  = lightView.get<TransformComponent>(entity);
+            auto& lc  = lightView.get<LightComponent>(entity);
+
+            Light& out = globals.lights[totalLightCount];
+            out.position_type   = glm::vec4(tf.position, (float)lc.type);
+            out.direction_range = glm::vec4(glm::normalize(lc.direction), lc.range);
+            out.color_intensity = glm::vec4(lc.color, lc.intensity);
             totalLightCount++;
         }
-        if (totalLightCount >= 16) break;
+    }
+
+    // 5b. Lights embedded inside GLB/GLTF model files
+    {
+        auto modelView = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        for (auto entity : modelView) {
+            if (totalLightCount >= 16) break;
+
+            auto& transform = modelView.get<TransformComponent>(entity);
+            auto& modelComp = modelView.get<ModelComponent>(entity);
+            auto sceneData  = AssetManager::LoadGLTF(modelComp.modelPath);
+            if (!sceneData.model) {
+                spdlog::warn("GameScene::Render — LoadGLTF fehlgeschlagen: {}", modelComp.modelPath);
+                continue;
+            }
+
+            glm::mat4 entityMat =
+                glm::translate(glm::mat4(1.0f), transform.position) *
+                glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
+                glm::scale(glm::mat4(1.0f), transform.scale);
+
+            for (const auto& light : sceneData.lights) {
+                if (totalLightCount >= 16) break;
+
+                Light& outLight = globals.lights[totalLightCount];
+                outLight = light;
+
+                // Transform position to world space
+                glm::vec4 worldPos = entityMat * glm::vec4(glm::vec3(light.position_type), 1.0f);
+                outLight.position_type = glm::vec4(glm::vec3(worldPos), light.position_type.w);
+
+                // Transform direction to world space (directional / spot)
+                if ((int)light.position_type.w == (int)LightType::Directional ||
+                    (int)light.position_type.w == (int)LightType::Spot)
+                {
+                    glm::vec4 worldDir = entityMat * glm::vec4(glm::vec3(light.direction_range), 0.0f);
+                    outLight.direction_range = glm::vec4(
+                        glm::normalize(glm::vec3(worldDir)), light.direction_range.w);
+                }
+                totalLightCount++;
+            }
+        }
     }
 
     globals.timers = glm::vec4(m_TotalTime, (float)totalLightCount, 0.016f, (float)m_FrameCount);
     renderer->UpdateGlobalUniforms(globals);
 
+    // ------------------------------------------------------------------
+    // 6. Render pass — draw all model entities into the G-Buffer
+    // ------------------------------------------------------------------
     Framebuffer* gbuffer = renderer->GetGBuffer();
     if (!gbuffer) return;
 
-    /**
-     * @brief Add a render pass to draw all entities in the client registry.
-     */
-    renderer->AddPass("GameRenderPass", gbuffer, [this, ctx, renderer](RenderContext& renderCtx) {
+    renderer->AddPass("GameRenderPass", gbuffer,
+        [this, ctx, renderer](RenderContext& renderCtx)
+    {
         renderCtx.BindPipeline(m_ModelPipeline);
         renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
         renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
@@ -207,23 +258,26 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             auto& modelComp = view.get<ModelComponent>(entity);
 
             auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
-            if (!sceneData.model) continue;
+            if (!sceneData.model) {
+                spdlog::warn("GameScene::Render — LoadGLTF fehlgeschlagen: {}", modelComp.modelPath);
+            continue;
+            }
 
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
             renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
 
-            if (sceneData.model->GetMaterialBuffer()) {
+            if (sceneData.model->GetMaterialBuffer())
                 renderCtx.BindFragmentStorageBuffer(1, sceneData.model->GetMaterialBuffer());
-            }
 
-            const auto& allSections = sceneData.model->GetSections();
+            const auto& allSections  = sceneData.model->GetSections();
             const auto& allMaterials = sceneData.model->GetMaterials();
 
             for (const auto& instance : sceneData.meshInstances) {
                 struct ModelPC { glm::mat4 model; } modelPC;
-                glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
-                                      glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
-                                      glm::scale(glm::mat4(1.0f), transform.scale);
+                glm::mat4 entityMat =
+                    glm::translate(glm::mat4(1.0f), transform.position) *
+                    glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
+                    glm::scale(glm::mat4(1.0f), transform.scale);
                 modelPC.model = entityMat * instance.transform;
                 renderCtx.PushVertexConstants(0, &modelPC, sizeof(ModelPC));
 
@@ -231,7 +285,7 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                     const auto& section = allSections[instance.firstSection + i];
                     struct FragPC { uint32_t matIdx; uint32_t objID; uint32_t pad1; uint32_t pad2; } fpc;
                     fpc.matIdx = (uint32_t)section.materialIndex;
-                    fpc.objID = 0;
+                    fpc.objID  = 0;
                     renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
 
                     if (section.materialIndex < allMaterials.size()) {
@@ -323,7 +377,7 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
                         tf.position += mv.velocity * dt;
 
                         m_Camera->m_Position = tf.position + glm::vec3(0, 2, 0); // Eye height offset
-                        
+
                         tf.rotation.y = m_Camera->m_Yaw;
                         tf.rotation.x = m_Camera->m_Pitch;
                         break;
@@ -409,7 +463,7 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
             // Sync existing entities to the new client
             for (auto& [netId, ent] : m_ServerNetMap) {
                 auto& t = ctx.serverRegistry.get<TransformComponent>(ent);
-                
+
                 auto* p = ctx.serverRegistry.try_get<PlayerComponent>(ent);
                 if (p) {
                     PlayerJoinedPacket pkt;
@@ -524,14 +578,14 @@ void GameScene::SendSnapshots(SceneContext& ctx) {
         pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
         pkt.rx = t.rotation.x; pkt.ry = t.rotation.y; pkt.rz = t.rotation.z;
         pkt.sx = t.scale.x;    pkt.sy = t.scale.y;    pkt.sz = t.scale.z;
-        
+
         auto* m = ctx.serverRegistry.try_get<MovementComponent>(entity);
         if (m) {
             pkt.vx = m->velocity.x; pkt.vy = m->velocity.y; pkt.vz = m->velocity.z;
         } else {
             pkt.vx = pkt.vy = pkt.vz = 0.f;
         }
-        
+
         ctx.network.BroadcastToAll(pkt);
     }
 }
@@ -602,11 +656,11 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
 
             // Simple smoothing (Lerp)
             t->position = glm::lerp(t->position, glm::vec3{pkt->x, pkt->y, pkt->z}, 0.5f);
-            
+
             if (!isLocalPlayer) {
                 t->rotation = glm::lerp(t->rotation, glm::vec3{pkt->rx, pkt->ry, pkt->rz}, 0.5f);
             }
-            
+
             t->scale = glm::lerp(t->scale, glm::vec3{pkt->sx, pkt->sy, pkt->sz}, 0.5f);
         }
         if (m) m->velocity = {pkt->vx, pkt->vy, pkt->vz};
@@ -643,7 +697,7 @@ void GameScene::SendLocalInput(SceneContext& ctx) {
     glm::vec3 forward = m_Camera->m_Front;
     forward.y = 0.f;
     if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
-    
+
     glm::vec3 right = m_Camera->m_Right;
     right.y = 0.f;
     if (glm::length(right) > 0.0001f) right = glm::normalize(right);
@@ -653,7 +707,7 @@ void GameScene::SendLocalInput(SceneContext& ctx) {
     if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
     if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
     if (Input::IsKeyDown(SDLK_D)) moveDir += right;
-    
+
     if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
     if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
 

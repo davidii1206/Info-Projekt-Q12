@@ -142,4 +142,14 @@ private:
     uint32_t m_FrameCount = 0;
     /// Whether free-fly camera mode is active.
     bool m_FreeFly = false;
+
+
+    // Sonnenlicht — schräg von oben (Mittag, leicht südwestlich)
+    glm::vec3 m_SunDirection     = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
+    glm::vec3 m_SunColor         = {1.0f, 0.97f, 0.88f};  // warmes Tageslicht
+    float     m_SunIntensity     = 3.5f;
+
+    // Ambient — bläuliches Himmelslicht, Schatten nicht pechschwarz
+    glm::vec3 m_AmbientColor     = {0.45f, 0.60f, 0.90f};
+    float     m_AmbientIntensity = 0.25f;
 };

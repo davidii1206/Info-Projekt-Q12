@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include "../Core/PhysicsServer.h"
+#include "../Graphics/Lights.h"   // LightComponent lives here
 
 /**
  * @struct TransformComponent
@@ -52,7 +53,7 @@ struct PlayerComponent {
 /**
  * @struct NetworkedComponent
  * @brief Links an entity to a stable network identity.
- * 
+ *
  * Client entities match server entities via this id.
  */
 struct NetworkedComponent {
@@ -86,3 +87,12 @@ struct PhysicsBodyComponent {
 struct EntityIDComponent {
     uint32_t id = 0; /**< The unique entity ID. */
 };
+
+// ---------------------------------------------------------------------------
+// NOTE: LightComponent is defined in Graphics/Lights.h and included above.
+//       Add it to any entity that should emit light:
+//
+//   registry.emplace<TransformComponent>(e, glm::vec3{0, 5, 0});
+//   registry.emplace<LightComponent>(e,
+//       LightType::Point, glm::vec3{1,0.8f,0.4f}, 4.0f, 15.0f);
+// ---------------------------------------------------------------------------
