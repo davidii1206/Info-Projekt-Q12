@@ -43,10 +43,10 @@ layout(set = 2, binding = 1, std430) readonly buffer GlobalUniforms {
     mat4 proj;
     mat4 viewProj;
     mat4 sunVP;
+    vec4 ambientColor;  // xyz: ambient color, w: ambient intensity
     vec4 sunColor;      // xyz: color,  w: intensity
     vec4 sunDir;        // xyz: direction (points TOWARD the sun), w: unused
     vec4 cameraPos;     // xyz: world-space camera pos
-    vec4 ambientColor;  // xyz: ambient color, w: ambient intensity
     vec4 timers;        // x: time, y: numLights, z: deltaTime, w: frameCount
     vec4 screen;        // xy: resolution, z: posterizeSteps, w: unused
     Light lights[16];
