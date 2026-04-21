@@ -45,6 +45,12 @@ void GameScene::OnEnter(SceneContext& ctx) {
         m_Camera->m_Pitch = 0.0f;
         m_Camera->UpdateVectors();
     }
+    // 1. Initialisiere Sonnen-Daten (Verhindert NaN/Werte)
+    m_SunDirection = glm::normalize(glm::vec3(1.0f, 0.5f, -1.0f)); // Beispiel: Oben rechts
+    m_SunIntensity = 10.0f;
+    m_SunColor = glm::vec3(1.0f, 0.95f, 0.8f);
+    m_AmbientIntensity = 0.2f;
+    m_AmbientColor = glm::vec3(0.3f, 0.3f, 0.35f); // Ein wenig dunkel für Kontrast
 
     if (ctx.network.IsHosting()) {
         /**
