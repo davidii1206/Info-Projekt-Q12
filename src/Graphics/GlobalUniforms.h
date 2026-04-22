@@ -18,12 +18,13 @@ struct alignas(16) GlobalUniforms {
     glm::mat4 proj;         /**< Projection matrix. */
     glm::mat4 viewProj;     /**< View-Projection matrix. */
     glm::mat4 sunVP;        /**< Sun's View-Projection matrix for shadows. */
-    glm::vec4 ambientColor;
 
-    glm::vec4 sunColor;     /**< Sun light color and intensity. */
-    glm::vec4 sunDir;       /**< Sun light direction. */
+    glm::vec4 sunColor;     /**< Sun light color and intensity (xyz=color, w=intensity). */
+    glm::vec4 sunDir;       /**< Sun light direction pointing TOWARD the sun (xyz), w unused. */
 
     glm::vec4 cameraPos;    /**< Camera position in world space. */
+
+    glm::vec4 ambientColor; /**< Ambient light color (xyz) and intensity (w). */
     
     /** @brief Timer data: x=time, y=numLights, z=deltaTime, w=frameCount. */
     glm::vec4 timers;       

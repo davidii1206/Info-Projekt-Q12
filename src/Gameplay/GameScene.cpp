@@ -15,6 +15,8 @@
 #include "../Graphics/Renderer.h"
 #include "../Graphics/API/Shader.h"
 #include "../Graphics/API/GraphicsPipeline.h"
+#include "../Graphics/API/Framebuffer.h"
+#include "../Graphics/API/GPUBuffer.h"
 #include "../Graphics/Lights.h"     // LightComponent + Light
 #include <imgui.h>
 #include <spdlog/spdlog.h>
@@ -45,12 +47,9 @@ void GameScene::OnEnter(SceneContext& ctx) {
         m_Camera->m_Pitch = 0.0f;
         m_Camera->UpdateVectors();
     }
-    // 1. Initialisiere Sonnen-Daten (Verhindert NaN/Werte)
-    m_SunDirection = glm::normalize(glm::vec3(1.0f, 0.5f, -1.0f)); // Beispiel: Oben rechts
-    m_SunIntensity = 10.0f;
-    m_SunColor = glm::vec3(1.0f, 0.95f, 0.8f);
-    m_AmbientIntensity = 0.2f;
-    m_AmbientColor = glm::vec3(0.3f, 0.3f, 0.35f); // Ein wenig dunkel für Kontrast
+    // Licht-Werte werden direkt aus den Klassen-Membern in GameScene.h übernommen.
+    // Die dortigen Standardwerte (m_SunDirection, m_SunIntensity, m_AmbientColor usw.)
+    // sind bereits gut abgestimmt — hier keine doppelte Initialisierung nötig.
 
     if (ctx.network.IsHosting()) {
         /**
@@ -98,6 +97,12 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_FragShader.reset();
     m_ModelPipeline = nullptr;
 
+    m_ShadowVertShader.reset();
+    m_ShadowFragShader.reset();
+    m_ShadowPipeline = nullptr;
+    m_ShadowMap.reset();
+    m_ShadowUBO.reset();
+
     spdlog::info("GameScene: exited, registries cleared");
 }
 
@@ -113,11 +118,12 @@ void GameScene::OnExit(SceneContext& ctx) {
 void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
     // ------------------------------------------------------------------
-    // 1. Lazy-init graphics pipeline
+    // 1. Lazy-init graphics pipelines
     // ------------------------------------------------------------------
     if (!m_ModelPipeline) {
+        // Model pass: 1 vert storage buf + 1 vert UB | 2 samplers + 2 frag storage bufs + 1 frag UB
         ShaderResourceLayout vertLayout = {0, 0, 1, 1};
-        ShaderResourceLayout fragLayout = {1, 0, 2, 1};
+        ShaderResourceLayout fragLayout = {2, 0, 2, 1};
 
         m_VertShader = std::make_unique<Shader>(
             renderer->GetDevice(), "shaders/model.vert.spv",
@@ -140,16 +146,59 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         config.enableDepthTest  = true;
         config.depthCompareOp   = SDL_GPU_COMPAREOP_GREATER; // Reverse-Z
 
-        // Match G-Buffer formats from PostProcessor
         config.colorTargetFormats = {
-            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Normal
-            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,     // Color (Albedo)
-            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Light buffer
-            SDL_GPU_TEXTUREFORMAT_R16_UINT            // Object ID
+            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
+            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
+            SDL_GPU_TEXTUREFORMAT_R16_UINT
         };
 
         m_ModelPipeline = renderer->GetPipelines()->CreatePipeline(
             "GameModelPipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
+    }
+
+    if (!m_ShadowPipeline ||
+        m_ShadowBiasConstant != m_LastShadowBiasConstant ||
+        m_ShadowBiasSlope    != m_LastShadowBiasSlope) {
+        // Reset so the pipeline block below always recreates it cleanly
+        m_ShadowPipeline = nullptr;
+        m_LastShadowBiasConstant = m_ShadowBiasConstant;
+        m_LastShadowBiasSlope    = m_ShadowBiasSlope;
+        // Shadow pass: depth-only, 0 vert storage bufs + 2 vert UBs (model + sunVP), no frag resources
+        ShaderResourceLayout shadowVertLayout = {0, 0, 0, 2};
+        ShaderResourceLayout shadowFragLayout = {0, 0, 0, 0};
+
+        m_ShadowVertShader = std::make_unique<Shader>(
+            renderer->GetDevice(), "shaders/shadow.vert.spv",
+            ShaderStage::Vertex, shadowVertLayout);
+        m_ShadowFragShader = std::make_unique<Shader>(
+            renderer->GetDevice(), "shaders/shadow.frag.spv",
+            ShaderStage::Fragment, shadowFragLayout);
+
+        PipelineConfig shadowCfg;
+        shadowCfg.vertexShader   = m_ShadowVertShader.get();
+        shadowCfg.fragmentShader = m_ShadowFragShader.get();
+        shadowCfg.vertexStride   = sizeof(ModelVertex);
+        shadowCfg.vertexAttributes = {
+            {0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position)}
+        };
+        shadowCfg.enableDepthTest = true;
+        shadowCfg.depthCompareOp  = SDL_GPU_COMPAREOP_LESS;
+        shadowCfg.cullMode        = SDL_GPU_CULLMODE_FRONT; // Cull front faces: eliminates self-shadowing acne
+
+        // GPU-side polygon offset — the correct place to fight shadow acne.
+        // Values driven by m_ShadowBiasConstant/Slope, adjustable via ImGui at runtime.
+        shadowCfg.enableDepthBias         = true;
+        shadowCfg.depthBiasConstantFactor = m_ShadowBiasConstant;
+        shadowCfg.depthBiasSlopeFactor    = m_ShadowBiasSlope;
+        shadowCfg.depthBiasClamp          = 0.0f;
+        // No color targets — depth only
+        shadowCfg.colorTargetFormats = {};
+
+        m_ShadowPipeline = renderer->GetPipelines()->CreatePipeline(
+            "ShadowPipeline", shadowCfg, SDL_GPU_TEXTUREFORMAT_INVALID);
+
+        // sunVP is now pushed as a vertex uniform constant (slot 1) — no dedicated buffer needed.
     }
 
     // ------------------------------------------------------------------
@@ -166,12 +215,76 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     globals.cameraPos = glm::vec4(m_Camera->m_Position, 1.0f);
 
     // ------------------------------------------------------------------
-    // 3. Sun light (single directional — always active, no slot used)
+    // 3. Sun light + sunVP matrix for shadow mapping
     // ------------------------------------------------------------------
     globals.sunDir   = glm::vec4(glm::normalize(-m_SunDirection), 0.0f);
-        // NOTE: sunDir stores the direction pointing TOWARD the sun.
-        //       Negate m_SunDirection if it stores "light travels toward scene".
     globals.sunColor = glm::vec4(m_SunColor, m_SunIntensity);
+
+    // Build an orthographic projection from the sun's point of view.
+    // The frustum is centered on the camera position so shadows follow the player
+    // and there is no "ring" artifact at the frustum boundary.
+    {
+        const float shadowOrthoSize = m_ShadowOrthoSize;
+        const float shadowNear      = 0.1f;
+        const float shadowFar       = 200.0f;
+
+
+        glm::vec3 camPos = m_Camera->m_Position;
+        glm::vec3 sunDir = glm::normalize(m_SunDirection);
+
+        // ✅ UP ZUERST!
+        glm::vec3 up = (glm::abs(sunDir.y) < 0.99f)
+            ? glm::vec3(0, 1, 0)
+            : glm::vec3(1, 0, 0); // Avoid gimbal lock
+
+        // Mittelpunkt = fester Weltmittelpunkt (Option A)
+        glm::vec3 center = glm::vec3(0.0f, 0.0f, 0.0f);
+
+
+
+
+        // Lichtposition entlang Richtung
+        glm::vec3 sunPos = center - sunDir * 100.0f;
+
+        // Blickrichtung entlang Licht (WICHTIG!)
+        glm::vec3 target = center + sunDir;
+
+        // ✅ Jetzt korrekt
+        glm::mat4 sunView = glm::lookAt(sunPos, target, up);
+
+        float size = shadowOrthoSize;
+
+        glm::mat4 sunProj = glm::ortho(
+            -size, size,
+            -size, size,
+            shadowNear, shadowFar  // Forward-Z: near=0.1, far=200
+        );
+
+        // --- Texel Snapping ---
+        // Snap in light-view space (BEFORE projection) to prevent shadow swimming.
+        // The previous approach snapped in clip-space after projection, which is
+        // mathematically wrong and caused the shadow pattern to shift with camera movement.
+        //
+        // Correct approach:
+        // 1. Transform world origin into light-view space.
+        // 2. Snap XY to nearest texel boundary in world-unit scale.
+        // 3. Reconstruct sunPos from the snapped offset so the view matrix is stable.
+        float texelSize = (2.0f * shadowOrthoSize) / 2048.0f; // world units per shadow texel
+
+        glm::vec4 originLV = sunView * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        glm::vec2 snappedXY = glm::round(glm::vec2(originLV) / texelSize) * texelSize;
+        glm::vec2 snapDelta = snappedXY - glm::vec2(originLV);
+
+        // Extract light-space axes from the view matrix rows
+        glm::vec3 lightRight = glm::vec3(sunView[0][0], sunView[1][0], sunView[2][0]);
+        glm::vec3 lightUp    = glm::vec3(sunView[0][1], sunView[1][1], sunView[2][1]);
+        sunPos += lightRight * snapDelta.x + lightUp * snapDelta.y;
+        sunView = glm::lookAt(sunPos, sunPos + sunDir, up);
+
+        globals.sunVP = sunProj * sunView;
+    }
+
+    // sunVP is pushed as a vertex uniform constant directly in the shadow pass lambda.
 
     // ------------------------------------------------------------------
     // 4. Ambient light
@@ -246,7 +359,63 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     renderer->UpdateGlobalUniforms(globals);
 
     // ------------------------------------------------------------------
-    // 6. Render pass — draw all model entities into the G-Buffer
+    // 6. Shadow Pass — render scene depth from sun's POV
+    // ------------------------------------------------------------------
+    constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+
+    if (!m_ShadowMap) {
+        // Depth-only framebuffer with compare sampler for sampler2DShadow
+        m_ShadowMap = std::make_unique<Framebuffer>(
+            renderer->GetDevice(), SHADOW_MAP_SIZE, SHADOW_MAP_SIZE,
+            std::vector<SDL_GPUTextureFormat>{}, // No color targets
+            true,
+            TextureFilter::ShadowCompare);
+        spdlog::info("GameScene: Shadow map created ({}x{})", SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    }
+
+    // Copy sunVP before the lambda — globals is a local reference and cannot be captured.
+    glm::mat4 sunVP = globals.sunVP;
+
+    renderer->AddPass("ShadowPass", m_ShadowMap.get(),
+        [this, ctx, renderer, sunVP](RenderContext& renderCtx)
+    {
+        if (!m_ShadowPipeline) return;
+
+        renderCtx.BindPipeline(m_ShadowPipeline);
+        // Push sunVP as vertex uniform slot 1 (slot 0 = model matrix, pushed per-instance below)
+        renderCtx.PushVertexConstants(1, &sunVP, sizeof(glm::mat4));
+
+        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        for (auto entity : view) {
+            auto& transform = view.get<TransformComponent>(entity);
+            auto& modelComp = view.get<ModelComponent>(entity);
+
+            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
+            if (!sceneData.model) continue;
+
+            renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
+            renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
+
+            for (const auto& instance : sceneData.meshInstances) {
+                struct ShadowPC { glm::mat4 model; } spc;
+                glm::mat4 entityMat =
+                    glm::translate(glm::mat4(1.0f), transform.position) *
+                    glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
+                    glm::scale(glm::mat4(1.0f), transform.scale);
+                spc.model = entityMat * instance.transform;
+                renderCtx.PushVertexConstants(0, &spc, sizeof(ShadowPC));
+
+                const auto& allSections = sceneData.model->GetSections();
+                for (uint32_t i = 0; i < instance.sectionCount; ++i) {
+                    const auto& section = allSections[instance.firstSection + i];
+                    renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
+                }
+            }
+        }
+    }, true, nullptr, 1.0f); // Forward-Z shadow map: 1.0 = Far
+
+    // ------------------------------------------------------------------
+    // 7. Render pass — draw all model entities into the G-Buffer
     // ------------------------------------------------------------------
     Framebuffer* gbuffer = renderer->GetGBuffer();
     if (!gbuffer) return;
@@ -257,6 +426,10 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         renderCtx.BindPipeline(m_ModelPipeline);
         renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
         renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
+
+        // Bind shadow map to sampler slot 1 (slot 0 = base color texture, bound per-mesh below)
+        if (m_ShadowMap && m_ShadowMap->GetDepthTarget())
+            renderCtx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
 
         auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
         for (auto entity : view) {
@@ -412,6 +585,20 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
         ctx.network.Disconnect();
         ctx.scenes.RequestTransition(new MainMenuScene());
     }
+    ImGui::End();
+
+    // ----------------------------------------------------------------
+    // Shadow Debug — live-tune bias and frustum size without recompiling
+    // ----------------------------------------------------------------
+    ImGui::Begin("Shadow Debug");
+    ImGui::TextDisabled("GPU Depth Bias (rebuilds pipeline on change)");
+    ImGui::SliderFloat("Bias Constant", &m_ShadowBiasConstant, 0.0f, 10.0f);
+    ImGui::SliderFloat("Bias Slope",    &m_ShadowBiasSlope,    0.0f, 10.0f);
+    ImGui::Spacing();
+    ImGui::TextDisabled("Shadow Frustum");
+    ImGui::SliderFloat("Ortho Size",    &m_ShadowOrthoSize,    5.0f, 50.0f);
+    ImGui::Spacing();
+    ImGui::TextDisabled("Acne = raise Bias | Peter-Pan = lower Bias");
     ImGui::End();
 }
 

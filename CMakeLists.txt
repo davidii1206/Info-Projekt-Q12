@@ -125,12 +125,6 @@ add_custom_command(TARGET Bugmin POST_BUILD
         $<TARGET_FILE_DIR:Bugmin>/Assets
 )
 
-add_custom_command(TARGET Bugmin POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/shaders
-        $<TARGET_FILE_DIR:Bugmin>/shaders
-)
-
 # ── Documentation ─────────────────────────────────────────────────────────────
 
 find_package(Doxygen)

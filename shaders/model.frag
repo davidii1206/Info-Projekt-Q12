@@ -34,26 +34,29 @@ struct GPUMaterial {
 //   Set 3  = Fragment Uniform Buffers
 // ---------------------------------------------------------------------------
 
-// Binding 0: base color texture (1 sampler before storage buffers)
+// Binding 0: base color texture
 layout(set = 2, binding = 0) uniform sampler2D baseColorTexture;
 
-// Binding 1: GlobalUniforms SSBO (offset by 1 sampler)
-layout(set = 2, binding = 1, std430) readonly buffer GlobalUniforms {
+// Binding 1 (sampler): shadow map depth texture
+layout(set = 2, binding = 1) uniform sampler2DShadow shadowMap;
+
+// Binding 2: GlobalUniforms SSBO (offset by 2 samplers)
+layout(set = 2, binding = 2, std430) readonly buffer GlobalUniforms {
     mat4 view;
     mat4 proj;
     mat4 viewProj;
     mat4 sunVP;
-    vec4 ambientColor;  // xyz: ambient color, w: ambient intensity
     vec4 sunColor;      // xyz: color,  w: intensity
     vec4 sunDir;        // xyz: direction (points TOWARD the sun), w: unused
     vec4 cameraPos;     // xyz: world-space camera pos
+    vec4 ambientColor;  // xyz: ambient color, w: ambient intensity
     vec4 timers;        // x: time, y: numLights, z: deltaTime, w: frameCount
     vec4 screen;        // xy: resolution, z: posterizeSteps, w: unused
     Light lights[16];
 } globals;
 
-// Binding 2: Material buffer SSBO
-layout(set = 2, binding = 2, std430) readonly buffer MaterialBuffer {
+// Binding 3: Material buffer SSBO
+layout(set = 2, binding = 3, std430) readonly buffer MaterialBuffer {
     GPUMaterial materials[];
 } matBuffer;
 
@@ -109,6 +112,49 @@ vec3 BlinnPhong(vec3 L, vec3 N, vec3 V,
 }
 
 // ---------------------------------------------------------------------------
+// PCF Shadow Sampling
+// ---------------------------------------------------------------------------
+
+/**
+ * Samples the shadow map with a 5x5 PCF kernel and slope-scale bias.
+ *
+ * @param shadowCoord  Fragment position in sun clip space (xyz/w = NDC).
+ * @param N            Surface normal (world space), used for slope-scale bias.
+ * @return             Shadow factor: 1.0 = fully lit, 0.0 = fully shadowed.
+ */
+float SampleShadowPCF(vec4 shadowCoord, vec3 N) {
+    // Perspective divide
+    vec3 proj = shadowCoord.xyz / shadowCoord.w;
+
+    // NDC [-1,1] -> UV [0,1]
+    // Note: In Vulkan, NDC Y already increases downward, so * 0.5 + 0.5
+    // maps correctly to UV space — no Y-flip needed.
+    vec2 uv = proj.xy * 0.5 + 0.5;
+    float depth = proj.z;
+
+    // Fragments outside the shadow frustum are fully lit — no shadow
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        depth < 0.0 || depth > 1.0)
+        return 1.0;
+
+    // Slope-scale bias: grazing angles need more bias to avoid acne.
+    float NdotL_sun = clamp(dot(N, normalize(globals.sunDir.xyz)), 0.0, 1.0);
+    float slopeBias = mix(0.002, 0.0005, NdotL_sun);
+
+    // 5x5 PCF kernel — soft shadow edges
+    vec2  texelSize = vec2(1.0) / vec2(textureSize(shadowMap, 0));
+    float shadow    = 0.0;
+    for (int x = -2; x <= 2; ++x) {
+        for (int y = -2; y <= 2; ++y) {
+            vec2 offset = vec2(x, y) * texelSize;
+            shadow += texture(shadowMap, vec3(uv + offset, depth - slopeBias));
+        }
+    }
+
+    return shadow / 25.0;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 void main() {
@@ -130,14 +176,24 @@ void main() {
 
     // ----------------------------------------------------------------
     // 2. SUN (directional, always active)
-    //    sunDir stores the direction pointing TOWARD the sun.
+    //    sunDir already points TOWARD the sun (set in GameScene.cpp as
+    //    normalize(-m_SunDirection)), so use it directly — no negation.
     // ----------------------------------------------------------------
     vec3 totalLight = ambient;
     {
-        vec3  sunL     = normalize(globals.sunDir.xyz);
+        vec3  sunL     = normalize(globals.sunDir.xyz); // FIX: was normalize(-globals.sunDir.xyz) — double negation
         float sunInten = globals.sunColor.w;
         vec3  sunCol   = globals.sunColor.rgb;
-        totalLight    += BlinnPhong(sunL, N, V, 1.0, sunCol, sunInten);
+
+        // PCF soft shadow — transform fragment to sun clip space
+        float NdotSun  = dot(N, sunL);
+        // Surfaces facing away from the sun get shadowFactor = 0 (fully shadowed).
+        // Smoothstep over [0, 0.1] creates a soft terminator instead of a hard black edge.
+        float shadowFactor = (NdotSun <= 0.0)
+            ? 0.0
+            : SampleShadowPCF(globals.sunVP * vec4(vPos, 1.0), N) * smoothstep(0.0, 0.1, NdotSun);
+
+        totalLight += BlinnPhong(sunL, N, V, shadowFactor, sunCol, sunInten);
     }
 
     // ----------------------------------------------------------------

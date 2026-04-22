@@ -7,6 +7,8 @@
 #include "Scene.h"
 #include "../Graphics/Camera.h"
 #include "../Graphics/GlobalUniforms.h"
+#include "../Graphics/API/Framebuffer.h"
+#include "../Graphics/API/GPUBuffer.h"
 #include <unordered_map>
 #include <cstdint>
 #include <memory>
@@ -143,6 +145,18 @@ private:
     /// Whether free-fly camera mode is active.
     bool m_FreeFly = false;
 
+    // --- Shadow Map ---
+    /// Vertex shader for the depth-only shadow pass.
+    std::unique_ptr<Shader> m_ShadowVertShader;
+    /// Fragment shader for the depth-only shadow pass.
+    std::unique_ptr<Shader> m_ShadowFragShader;
+    /// Graphics pipeline for the shadow pass.
+    GraphicsPipeline* m_ShadowPipeline = nullptr;
+    /// Depth-only framebuffer rendered from the sun's perspective.
+    std::unique_ptr<Framebuffer> m_ShadowMap;
+    /// GPU buffer holding only the sunVP matrix for the shadow pass.
+    std::unique_ptr<GPUBuffer> m_ShadowUBO;
+
 
     // Sonnenlicht — schräg von oben (Mittag, leicht südwestlich)
     glm::vec3 m_SunDirection     = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
@@ -152,4 +166,18 @@ private:
     // Ambient — bläuliches Himmelslicht, Schatten nicht pechschwarz
     glm::vec3 m_AmbientColor     = {0.45f, 0.60f, 0.90f};
     float     m_AmbientIntensity = 0.25f;
+
+    // Shadow tuning — adjustable at runtime via the "Shadow Debug" ImGui window.
+    // GPU depth bias: push shadow-map depths slightly away from the light so
+    // rendered fragments don't self-shadow (shadow acne).  Too much → Peter-Panning.
+    // Empfohlene Startwerte für D32_FLOAT Forward-Z Shadow Map:
+    //   Constant = 1.5  (war 1.0 → zu wenig Acne-Schutz, aber 2.0 zu viel Peter-Pan)
+    //   Slope    = 1.75 (war 2.0 → etwas zu aggressiv bei flachen Winkeln)
+    float m_ShadowBiasConstant = 1.5f;  ///< Uniform depth offset (world-unit scale)
+    float m_ShadowBiasSlope    = 1.75f; ///< Extra offset for grazing-angle surfaces
+    float m_ShadowOrthoSize    = 40.0f; ///< Half-size of the orthographic shadow frustum
+
+    // Cached values to detect when the shadow pipeline needs to be rebuilt
+    float m_LastShadowBiasConstant = -1.0f;
+    float m_LastShadowBiasSlope    = -1.0f;
 };

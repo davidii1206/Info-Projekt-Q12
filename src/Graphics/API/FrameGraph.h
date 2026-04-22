@@ -32,6 +32,7 @@ struct RenderPassDesc {
     // Outputs (Graphics Only)
     Framebuffer* target = nullptr; /**< Target framebuffer, or nullptr for swapchain. */
     bool needsDepth = true;        /**< Whether the pass needs a depth buffer. */
+    float depthClearValue = 0.0f;  /**< Value to clear depth to (0.0 = Far in Reverse-Z, 1.0 = Far in Forward-Z). */
     
     /** @brief Commands to run BEFORE the pass begins (e.g. PushConstants). */
     std::function<void(SDL_GPUCommandBuffer*)> preExecute;
@@ -68,7 +69,7 @@ public:
      * @param needsDepth Whether depth is needed.
      * @param preFunc Optional function to run before the pass.
      */
-    void AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth = true, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr);
+    void AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth = true, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr, float depthClearValue = 0.0f);
 
     /**
      * @brief Adds a compute pass.

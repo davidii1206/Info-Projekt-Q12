@@ -94,7 +94,10 @@ void main() {
     if (nStrength > 0.0) 
         nei = normalEdgeIndicator(depth, normal);
 
-    float finalStrength = dei > 0.0 ? (1.0 - dStrength * dei) : (1.0 + nStrength * nei);
+    // Combine both edge types — take the stronger edge, then darken.
+    // Previously: nei term was ignored when dei > 0, and nei brightened instead of darkened.
+    float edgeFactor = max(dStrength * dei, nStrength * nei);
+    float finalStrength = 1.0 - edgeFactor;
 
     // Debugging
     int mode = int(pc.params.w);
