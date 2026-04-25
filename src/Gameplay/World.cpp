@@ -39,7 +39,7 @@ World::~World() {
  * @param renderer Pointer to the renderer.
  */
 void World::Update(float dt, NetworkManager& net, Renderer* renderer) {
-    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer};
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
 
     /**
      * @brief Apply any pending scene transitions.
@@ -72,7 +72,7 @@ void World::Update(float dt) {
  * @param net Reference to the network manager.
  */
 void World::Render(Renderer* renderer, NetworkManager& net) {
-    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer};
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
     m_SceneManager.Render(ctx, renderer);
 }
 
@@ -89,7 +89,11 @@ void World::ApplySnapshots(const std::vector<TransformSnapshot>& snapshots) {
         tf.position = glm::vec3(snap.position.GetX(), snap.position.GetY(), snap.position.GetZ());
         
         JPH::Vec3 euler = snap.rotation.GetEulerAngles();
-        tf.rotation = glm::vec3(euler.GetX(), euler.GetY(), euler.GetZ());
+        tf.rotation = glm::vec3(
+            glm::degrees(euler.GetX()),
+            glm::degrees(euler.GetY()),
+            glm::degrees(euler.GetZ())
+        );
     }
 }
 
@@ -117,6 +121,6 @@ void World::UnregisterPhysicsEntity(uint32_t id) {
  * @param renderer Pointer to the renderer.
  */
 void World::FixedUpdate(float dt, NetworkManager& net, Renderer* renderer) {
-    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer};
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
     m_SceneManager.FixedUpdate(ctx, dt);
 }

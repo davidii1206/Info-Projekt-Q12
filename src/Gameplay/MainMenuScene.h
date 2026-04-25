@@ -6,7 +6,11 @@
 #pragma once
 #include "Scene.h"
 #include "../Graphics/Camera.h"
+#include "../Graphics/API/Texture.h"
+#include "../Core/WorldManager.h"
 #include <memory>
+#include <vector>
+#include <glm/glm.hpp>
 
 /**
  * @class MainMenuScene
@@ -62,4 +66,9 @@ public:
 
 private:
     std::unique_ptr<Camera> m_Camera; /**< Main camera for the menu. */
+
+    // Generation parameters
+    WorldGenConfig m_GenConfig;
+    Texture* m_DebugTexture = nullptr;
+    std::unique_ptr<WorldManager> m_WorldManager;
 };

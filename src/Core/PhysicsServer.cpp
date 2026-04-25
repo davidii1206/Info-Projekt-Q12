@@ -261,9 +261,13 @@ const std::vector<TransformSnapshot>& PhysicsServer::Step(float deltaTime)
 {
     assert(mInitialised && "Call Init() before Step()");
 
+    // Cap deltaTime to avoid "death spiral" if the app hangs or loads assets
+    if (deltaTime > 0.25f) deltaTime = 0.25f;
+
     mAccumulator += deltaTime;
 
-    while (mAccumulator >= mCfg.fixedTimestep)
+    int stepsPerformed = 0;
+    while (mAccumulator >= mCfg.fixedTimestep && stepsPerformed < 5)
     {
         /// Core solver: broad phase → narrow phase → constraint solve → integrate.
         EPhysicsUpdateError err = mPhysicsSystem->Update(
@@ -281,6 +285,13 @@ const std::vector<TransformSnapshot>& PhysicsServer::Step(float deltaTime)
 
         mAccumulator -= mCfg.fixedTimestep;
         ++mStepCount;
+        ++stepsPerformed;
+    }
+
+    // If we were lagging too much, just drop the remaining time to stay responsive
+    if (mAccumulator > mCfg.fixedTimestep)
+    {
+        mAccumulator = 0.0f;
     }
 
     /// Collect transforms of all tracked dynamic bodies.

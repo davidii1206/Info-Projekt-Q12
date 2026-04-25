@@ -19,10 +19,14 @@ FetchContent_Declare(tinygltf GIT_REPOSITORY https://github.com/syoyo/tinygltf.g
 FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git GIT_TAG master)
 FetchContent_Declare(openal-soft GIT_REPOSITORY https://github.com/kcat/openal-soft.git GIT_TAG master)
 FetchContent_Declare(enet GIT_REPOSITORY https://github.com/lsalzman/enet.git GIT_TAG master)
+FetchContent_Declare(perlin_noise GIT_REPOSITORY https://github.com/Reputeless/PerlinNoise.git GIT_TAG master)
+FetchContent_Declare(voronoi GIT_REPOSITORY https://github.com/JCash/voronoi.git GIT_TAG master)
 
 FetchContent_MakeAvailable(
         SDL3 imgui glm spdlog nlohmann_json
         Jolt EnTT tinygltf stb openal-soft enet
+        perlin_noise
+        voronoi
 )
 
 add_library(imgui_lib STATIC
@@ -58,6 +62,8 @@ target_include_directories(Bugmin PRIVATE
         ${stb_SOURCE_DIR}
         ${tinygltf_SOURCE_DIR}
         ${enet_SOURCE_DIR}/include
+        ${perlin_noise_SOURCE_DIR}
+        ${voronoi_SOURCE_DIR}/src
 )
 
 # Shader Compilation

@@ -7,6 +7,7 @@
 #include "Scene.h"
 #include "../Graphics/Camera.h"
 #include "../Graphics/GlobalUniforms.h"
+#include "../Core/PhysicsServer.h"
 #include <unordered_map>
 #include <cstdint>
 #include <memory>
@@ -101,6 +102,13 @@ private:
      * @param ctx The scene context.
      */
     void SendLocalInput(SceneContext& ctx);
+
+    /**
+     * @brief Spawns a physics-driven cube in the world (Server only).
+     * @param ctx The scene context.
+     * @param pos Initial position.
+     */
+    void SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos);
 
     // --- Server state ---
     /// ID for the next networked entity.

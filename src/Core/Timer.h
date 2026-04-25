@@ -26,8 +26,21 @@ public:
      */
     void Update() {
         uint64_t currentTime = SDL_GetTicks();
-        m_DeltaTime = (currentTime - m_LastTime) / 1000.0f;
+        float dt = (currentTime - m_LastTime) / 1000.0f;
+        
+        // Cap delta time to 100ms (10 FPS) to prevent physics explosions
+        if (dt > 0.1f) dt = 0.1f;
+        
+        m_DeltaTime = dt;
         m_LastTime = currentTime;
+    }
+
+    /**
+     * @brief Resets the timer's last tick value to now.
+     */
+    void Reset() {
+        m_LastTime = SDL_GetTicks();
+        m_DeltaTime = 0.0f;
     }
 
     /**

@@ -75,7 +75,7 @@ struct PhysicsServerConfig
     uint32_t maxBodies             = 4096; ///< Maximum number of physics bodies supported.
     uint32_t maxBodyPairs          = 65536; ///< Maximum number of body pairs for broadphase.
     uint32_t maxContactConstraints = 16384; ///< Maximum number of contact constraints.
-    uint32_t tempAllocatorBytes    = 10u * 1024u * 1024u; ///< Size of the temporary allocator slab (10 MB).
+    uint32_t tempAllocatorBytes    = 20u * 1024u * 1024u; ///< Size of the temporary allocator slab (20 MB).
     int      workerThreads         = -1; ///< Number of worker threads (-1 for auto-detect).
     JPH::Vec3 gravity              = JPH::Vec3(0.f, -9.81f, 0.f); ///< Global gravity vector.
 };

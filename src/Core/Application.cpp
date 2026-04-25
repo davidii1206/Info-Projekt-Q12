@@ -39,6 +39,9 @@ Application::Application() {
     m_World = std::make_unique<World>(&m_Physics);
 
     m_PostProcessor = std::make_unique<PostProcessor>(m_Renderer.get());
+    
+    // Reset timer so first frame delta is 0
+    m_Timer.Reset();
 }
 
 Application::~Application() {

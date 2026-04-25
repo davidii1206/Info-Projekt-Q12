@@ -5,6 +5,7 @@
 
 #pragma once
 #include <entt/entt.hpp>
+#include "../Core/PhysicsServer.h"
 
 /**
  * @namespace Systems
@@ -21,4 +22,11 @@ namespace Systems {
      * @param dt Delta time for the current frame.
      */
     void MovementSystem(entt::registry& registry, float dt);
+
+    /**
+     * @brief Synchronizes EnTT Transform components with Jolt Physics bodies.
+     * @param registry The server's EnTT registry.
+     * @param physicsServer The active physics server.
+     */
+    void PhysicsSyncSystem(entt::registry& registry, PhysicsServer& physicsServer);
 }

@@ -1,8 +1,3 @@
-/**
- * @file MainMenuScene.cpp
- * @brief Implementation of the MainMenuScene class.
- */
-
 #include "MainMenuScene.h"
 #include "GameScene.h"
 #include "../Networking/NetworkManager.h"
@@ -17,6 +12,7 @@
  */
 MainMenuScene::MainMenuScene() {
     m_Camera = std::make_unique<Camera>();
+    m_WorldManager = std::make_unique<WorldManager>();
 }
 
 /**
@@ -28,13 +24,21 @@ MainMenuScene::MainMenuScene() {
 void MainMenuScene::OnEnter(SceneContext& ctx) {
     ctx.serverRegistry.clear();
     ctx.clientRegistry.clear();
+
+    m_WorldManager->Generate(m_GenConfig);
+    m_WorldManager->UpdateDebugTexture(ctx.renderer->GetDevice(), &m_DebugTexture);
 }
 
 /**
  * @brief Called when the scene is exited.
  * @param ctx Reference to the SceneContext.
  */
-void MainMenuScene::OnExit(SceneContext& ctx) {}
+void MainMenuScene::OnExit(SceneContext& ctx) {
+    if (m_DebugTexture) {
+        delete m_DebugTexture;
+        m_DebugTexture = nullptr;
+    }
+}
 
 /**
  * @brief Called every frame to update scene logic.
@@ -44,15 +48,10 @@ void MainMenuScene::OnExit(SceneContext& ctx) {}
  * @param dt Delta time since last frame in seconds.
  */
 void MainMenuScene::FrameUpdate(SceneContext& ctx, float dt) {
-    /** 
-     * Transition automatically when the network becomes active.
-     * The Host/Join action itself comes from NetworkDebugUI.
-     */
     if (ctx.network.IsConnected()) {
         ctx.scenes.RequestTransition(new GameScene());
     }
 
-    /** Camera movement even in menu for testing input. */
     if (Input::IsRelativeMouseMode()) {
         glm::vec2 delta = Input::GetMouseDelta();
         m_Camera->Rotate(delta.x, delta.y);
@@ -73,6 +72,42 @@ void MainMenuScene::FrameUpdate(SceneContext& ctx, float dt) {
         SDL_Event quitEvent;
         quitEvent.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&quitEvent);
+    }
+    ImGui::End();
+
+    // Terrain Generation Debug Window
+    ImGui::Begin("World Generation (WorldManager)");
+    ImGui::SliderInt("Terrains", &m_GenConfig.numTerrains, 2, 16);
+    ImGui::SliderInt("Relaxation", &m_GenConfig.relaxationIterations, 0, 10);
+    ImGui::Checkbox("Random Spawn In Territory", &m_GenConfig.randomSpawnInTerrain);
+    
+    ImGui::SeparatorText("Thronefall Style");
+    ImGui::SliderInt("Altitude Levels", &m_GenConfig.numAltitudeLevels, 1, 8);
+    ImGui::DragFloat("Altitude Noise Scale", &m_GenConfig.altitudeNoiseScale, 0.001f, 0.0001f, 0.1f);
+    ImGui::SliderFloat("Altitude Max Height", &m_GenConfig.altitudeMaxHeight, 0.1f, 1.0f);
+    ImGui::SliderFloat("Slope Sharpness", &m_GenConfig.slopeSharpness, 0.01f, 0.49f);
+    ImGui::SliderFloat("Slope Width", &m_GenConfig.slopeWidth, 1.0f, 100.0f);
+    ImGui::Checkbox("Show Heightmap", &m_GenConfig.showHeightmap);
+
+    ImGui::SeparatorText("Noise Parameters");
+    ImGui::DragFloat("Noise Scale", &m_GenConfig.noiseScale, 0.001f, 0.0001f, 1.0f);
+    ImGui::DragInt("Noise Octaves", &m_GenConfig.noiseOctaves, 1, 1, 8);
+    ImGui::DragInt("Seed", &m_GenConfig.seed, 1, 0, 999999);
+    
+    if (ImGui::Button("Generate")) {
+        m_WorldManager->Generate(m_GenConfig);
+        m_WorldManager->UpdateDebugTexture(ctx.renderer->GetDevice(), &m_DebugTexture);
+    }
+
+    if (m_DebugTexture) {
+        ImTextureID texID = (ImTextureID)m_DebugTexture->GetHandle();
+        ImGui::Image(texID, ImVec2((float)m_GenConfig.width, (float)m_GenConfig.height));
+    }
+
+    if (ImGui::CollapsingHeader("Spawn Points")) {
+        for (const auto& td : m_WorldManager->GetTerrains()) {
+            ImGui::Text("Base %d: (%.1f, %.1f)", td.id, td.spawnPoint.x, td.spawnPoint.y);
+        }
     }
     ImGui::End();
 

@@ -10,6 +10,8 @@ class NetworkManager;
 class Renderer;
 class IScene;
 class SceneManager;
+class PhysicsServer;
+class World;
 
 /**
  * @struct SceneContext
@@ -26,6 +28,10 @@ struct SceneContext {
     SceneManager&   scenes;
     /// Pointer to the renderer.
     Renderer*       renderer;
+    /// Pointer to the physics server.
+    PhysicsServer*  physics;
+    /// Pointer to the game world.
+    World*          world;
 };
 
 /**

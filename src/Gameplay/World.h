@@ -97,6 +97,12 @@ public:
     float           GetAccumulator()      const { return m_Accumulator; }
 
     /**
+     * @brief Gets the next available physics ID for synchronization.
+     * @return The next physics ID.
+     */
+    uint32_t        GetNextPhysicsID()    { return m_NextEntityID++; }
+
+    /**
      * @brief Gets the physics server instance.
      * @return Pointer to the PhysicsServer.
      */

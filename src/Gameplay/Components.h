@@ -80,6 +80,13 @@ struct PhysicsBodyComponent {
 };
 
 /**
+ * @brief Links an ECS entity to a Jolt Physics body.
+ */
+struct PhysicsComponent {
+    JPH::BodyID bodyID;
+};
+
+/**
  * @struct EntityIDComponent
  * @brief Optional tag for mapping world IDs back to entt entities.
  */

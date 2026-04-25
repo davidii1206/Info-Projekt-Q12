@@ -6,6 +6,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "GameScene.h"
 #include "MainMenuScene.h"
+#include "World.h"
 #include "Components.h"
 #include "Systems.h"
 #include "../Networking/NetworkManager.h"
@@ -67,6 +68,11 @@ void GameScene::OnEnter(SceneContext& ctx) {
         ctx.network.BroadcastToAll(pkt);
         
         spdlog::info("GameScene: spawned test asset netId={}", assetNetId);
+
+        /**
+         * @brief Spawn an initial physics-driven cube.
+         */
+        SpawnPhysicsCube(ctx, glm::vec3{0.f, 10.f, 0.f});
     }
 }
 
@@ -75,6 +81,19 @@ void GameScene::OnEnter(SceneContext& ctx) {
  * @param ctx The scene context.
  */
 void GameScene::OnExit(SceneContext& ctx) {
+    if (ctx.network.IsHosting()) {
+        auto view = ctx.serverRegistry.view<PhysicsBodyComponent>();
+        for (auto entity : view) {
+            auto& body = view.get<PhysicsBodyComponent>(entity);
+            if (ctx.physics && body.handle.IsValid()) {
+                // Retrieve the physics ID from Jolt UserData to unregister from World
+                uint32_t physicsId = static_cast<uint32_t>(ctx.physics->GetSystem().GetBodyInterface().GetUserData(body.handle.id));
+                ctx.world->UnregisterPhysicsEntity(physicsId);
+                ctx.physics->RemoveBody(body.handle);
+            }
+        }
+    }
+
     ctx.serverRegistry.clear();
     ctx.clientRegistry.clear();
     m_ServerNetMap.clear();
@@ -348,11 +367,55 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
         ImGui::Text("playerId=%u  netId=%u", m_MyPlayerId, m_MyNetId);
     else
         ImGui::Text("Waiting for server assignment...");
+
+    if (ctx.network.IsHosting()) {
+        if (ImGui::Button("Spawn Physics Cube")) {
+            SpawnPhysicsCube(ctx, m_Camera->m_Position + m_Camera->m_Front * 5.0f);
+        }
+    }
+
     if (ImGui::Button("Disconnect")) {
         ctx.network.Disconnect();
         ctx.scenes.RequestTransition(new MainMenuScene());
     }
     ImGui::End();
+}
+
+/**
+ * @brief Spawns a physics-driven cube in the world (Server only).
+ * @param ctx The scene context.
+ * @param pos Initial position.
+ */
+void GameScene::SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos) {
+    if (!ctx.network.IsHosting()) return;
+
+    const uint32_t cubeNetId = m_NextNetId++;
+    auto cubeEntity = ctx.serverRegistry.create();
+    
+    uint32_t physicsId = ctx.world->GetNextPhysicsID();
+    auto handle = ctx.physics->AddDynamicBox(
+        physicsId,
+        JPH::RVec3(pos.x, pos.y, pos.z),
+        JPH::Vec3(1.f, 1.f, 1.f)
+    );
+    
+    ctx.world->RegisterPhysicsEntity(physicsId, cubeEntity);
+    
+    ctx.serverRegistry.emplace<TransformComponent>(cubeEntity, pos);
+    ctx.serverRegistry.emplace<MovementComponent>(cubeEntity);
+    ctx.serverRegistry.emplace<PhysicsBodyComponent>(cubeEntity, handle);
+    ctx.serverRegistry.emplace<NetworkedComponent>(cubeEntity, cubeNetId);
+    ctx.serverRegistry.emplace<ModelComponent>(cubeEntity, "assets/cube.glb");
+    m_ServerNetMap[cubeNetId] = cubeEntity;
+
+    AssetJoinedPacket cubePkt;
+    cubePkt.netId = cubeNetId;
+    std::strncpy(cubePkt.modelPath, "assets/cube.glb", sizeof(cubePkt.modelPath)-1);
+    cubePkt.x = pos.x; cubePkt.y = pos.y; cubePkt.z = pos.z;
+    ctx.network.BroadcastToAll(cubePkt);
+
+    spdlog::info("GameScene: spawned physics cube netId={} at ({}, {}, {})", 
+                 cubeNetId, pos.x, pos.y, pos.z);
 }
 
 // ---------------------------------------------------------------------------
