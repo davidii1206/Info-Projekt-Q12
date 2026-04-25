@@ -27,3 +27,19 @@ struct Light {
     glm::vec4 direction_range;  /**< xyz: direction, w: range. */
     glm::vec4 color_intensity;  /**< xyz: color, w: intensity. */
 };
+/**
+ * @struct LightComponent
+ * @brief ECS component for entities that emit light.
+ */
+struct LightComponent {
+    LightType type      = LightType::Point;
+    glm::vec3 color     = {1.0f, 1.0f, 1.0f};
+    float     intensity = 1.0f;
+    float     range     = 10.0f;
+    glm::vec3 direction = {0.0f, -1.0f, 0.0f};
+
+    LightComponent() = default;
+    LightComponent(LightType t, glm::vec3 c, float i, float r,
+                   glm::vec3 d = {0.f, -1.f, 0.f})
+        : type(t), color(c), intensity(i), range(r), direction(d) {}
+};

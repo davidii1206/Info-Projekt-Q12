@@ -32,6 +32,7 @@ layout(set = 0, binding = 0, std430) readonly buffer GlobalUniforms {
     vec4 sunColor;
     vec4 sunDir;
     vec4 cameraPos;
+    vec4 ambientColor;  // xyz: ambient color, w: ambient intensity — must match C++ GlobalUniforms
     vec4 timers; // x: time, y: numLights, z: deltaTime, w: frameCount
     vec4 screen; // xy: resolution, zw: padding
     Light lights[16];
@@ -58,7 +59,7 @@ void main() {
         viewProj = mat4(1.0);
     }
 
-    vec4 worldPos = model * vec4(inPosition, 1.0);
+    vec4 worldPos = model * vec4(inPosition, 1.0); // FIX: use NaN-checked model, not raw pc.model
     vPos = worldPos.xyz;
     gl_Position = viewProj * worldPos;
     

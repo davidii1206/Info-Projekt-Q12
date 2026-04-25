@@ -169,10 +169,26 @@ Texture::Texture(SDL_GPUDevice* device, uint32_t width, uint32_t height, SDL_GPU
 
     if (usage & SDL_GPU_TEXTUREUSAGE_SAMPLER) {
         SDL_GPUSamplerCreateInfo samplerDesc = {};
-        SetupSampler(samplerDesc, filter);
-        samplerDesc.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-        samplerDesc.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
-        samplerDesc.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+
+        if (filter == TextureFilter::ShadowCompare) {
+            // Depth compare sampler for sampler2DShadow (PCF shadow mapping)
+            samplerDesc.min_filter     = SDL_GPU_FILTER_LINEAR;
+            samplerDesc.mag_filter     = SDL_GPU_FILTER_LINEAR;
+            samplerDesc.mipmap_mode    = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+            samplerDesc.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+            samplerDesc.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+            samplerDesc.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+            samplerDesc.enable_compare = true;
+            samplerDesc.compare_op     = SDL_GPU_COMPAREOP_LESS_OR_EQUAL; // FIX: LESS misses equal-depth fragments on flat surfaces
+            samplerDesc.min_lod        = 0.0f;
+            samplerDesc.max_lod        = 1.0f;
+        } else {
+            SetupSampler(samplerDesc, filter);
+            samplerDesc.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+            samplerDesc.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+            samplerDesc.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        }
+
         m_Sampler = SDL_CreateGPUSampler(m_Device, &samplerDesc);
     }
 }

@@ -9,6 +9,12 @@
 #include <optional>
 #include <chrono>
 
+// Windows definiert PlaySound als Makro (→ PlaySoundA/W) – das kollidiert
+// mit SoundSystem::PlaySound. Hier sauber entfernen.
+#ifdef PlaySound
+#  undef PlaySound
+#endif
+
 // ── Sound Handles ─────────────────────────────────────────────────────────────
 
 using SoundBuffer = ALuint;

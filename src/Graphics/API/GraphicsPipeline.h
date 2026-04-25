@@ -54,6 +54,15 @@ struct PipelineConfig {
     
     /** @brief The comparison operator for the depth test (Less, Greater, etc.). */
     SDL_GPUCompareOp depthCompareOp = SDL_GPU_COMPAREOP_ALWAYS;
+
+    /** @brief Enable GPU-side depth bias (polygon offset) to fight shadow acne. */
+    bool  enableDepthBias         = false;
+    /** @brief Constant depth offset added to every fragment's depth. */
+    float depthBiasConstantFactor = 0.0f;
+    /** @brief Slope-proportional depth offset (handles grazing angles). */
+    float depthBiasSlopeFactor    = 0.0f;
+    /** @brief Maximum absolute depth bias (prevents over-offsetting). */
+    float depthBiasClamp          = 0.0f;
 };
 
 /**

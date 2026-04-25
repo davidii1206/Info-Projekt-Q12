@@ -91,6 +91,10 @@ GraphicsPipeline::GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& 
     createInfo.primitive_type = config.primitiveType;
     createInfo.rasterizer_state.fill_mode = config.fillMode;
     createInfo.rasterizer_state.cull_mode = config.cullMode;
+    createInfo.rasterizer_state.enable_depth_bias    = config.enableDepthBias;
+    createInfo.rasterizer_state.depth_bias_constant_factor = config.depthBiasConstantFactor;
+    createInfo.rasterizer_state.depth_bias_slope_factor    = config.depthBiasSlopeFactor;
+    createInfo.rasterizer_state.depth_bias_clamp           = config.depthBiasClamp;
 
     createInfo.target_info.num_color_targets = (uint32_t)colorTargetDescs.size();
     createInfo.target_info.color_target_descriptions = colorTargetDescs.empty() ? nullptr : colorTargetDescs.data();

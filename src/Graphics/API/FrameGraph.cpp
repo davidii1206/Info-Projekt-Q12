@@ -9,12 +9,12 @@ FrameGraph::FrameGraph(SDL_GPUDevice* device) : m_Device(device) {}
 
 FrameGraph::~FrameGraph() {}
 
-void FrameGraph::AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth, std::function<void(SDL_GPUCommandBuffer*)> preFunc) {
-    m_Passes.push_back({ name, PassType::Graphics, target, needsDepth, preFunc, func });
+void FrameGraph::AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth, std::function<void(SDL_GPUCommandBuffer*)> preFunc, float depthClearValue) {
+    m_Passes.push_back({ name, PassType::Graphics, target, needsDepth, depthClearValue, preFunc, func });
 }
 
 void FrameGraph::AddComputePass(const std::string& name, std::function<void(RenderContext&)> func, std::function<void(SDL_GPUCommandBuffer*)> preFunc) {
-    m_Passes.push_back({ name, PassType::Compute, nullptr, false, preFunc, func });
+    m_Passes.push_back({ name, PassType::Compute, nullptr, false, 0.0f, preFunc, func });
 }
 
 void FrameGraph::Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTexture, uint32_t width, uint32_t height) {
@@ -50,7 +50,7 @@ void FrameGraph::Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTex
                 if (passDesc.needsDepth) {
                     // Create swapchain depth buffer if it doesn't exist or is the wrong size
                     if (!m_SwapchainDepth || m_SwapchainDepth->GetWidth() != width || m_SwapchainDepth->GetHeight() != height) {
-                        m_SwapchainDepth = std::make_unique<Texture>(m_Device, width, height, SDL_GPU_TEXTUREFORMAT_D32_FLOAT, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
+                        m_SwapchainDepth = std::make_unique<Texture>(m_Device, width, height, SDL_GPU_TEXTUREFORMAT_D32_FLOAT, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
                     }
 
                     depthTarget.texture = m_SwapchainDepth->GetHandle();
@@ -74,7 +74,7 @@ void FrameGraph::Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTex
 
                 if (passDesc.target->GetDepthTarget()) {
                     depthTarget.texture = passDesc.target->GetDepthTarget()->GetHandle();
-                    depthTarget.clear_depth = 0.0f; // 0.0 is Far in Reverse-Z
+                    depthTarget.clear_depth = passDesc.depthClearValue;
                     depthTarget.load_op = (!alreadyCleared) ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
                     depthTarget.store_op = SDL_GPU_STOREOP_STORE;
                     hasDepth = true;
@@ -82,7 +82,7 @@ void FrameGraph::Execute(SDL_GPUCommandBuffer* cmd, SDL_GPUTexture* swapchainTex
                 m_ClearedTargets.insert(passDesc.target);
             }
             
-            SDL_GPURenderPass* sdlPass = SDL_BeginGPURenderPass(cmd, colorTargets.data(), (uint32_t)colorTargets.size(), hasDepth ? &depthTarget : nullptr);
+            SDL_GPURenderPass* sdlPass = SDL_BeginGPURenderPass(cmd, colorTargets.empty() ? nullptr : colorTargets.data(), (uint32_t)colorTargets.size(), hasDepth ? &depthTarget : nullptr);
             if (sdlPass) {
                 uint32_t passW = passDesc.target ? passDesc.target->GetWidth() : width;
                 uint32_t passH = passDesc.target ? passDesc.target->GetHeight() : height;

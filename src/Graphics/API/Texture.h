@@ -11,8 +11,9 @@
  * @brief Defines how the texture is sampled when scaled.
  */
 enum class TextureFilter {
-    Nearest, ///< Pixelated/Blocky filtering.
-    Linear   ///< Smooth/Blurred filtering.
+    Nearest,      ///< Pixelated/Blocky filtering.
+    Linear,       ///< Smooth/Blurred filtering.
+    ShadowCompare ///< Depth compare sampler for sampler2DShadow (PCF).
 };
 
 /**
