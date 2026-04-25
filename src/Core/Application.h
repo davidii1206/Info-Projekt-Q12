@@ -6,11 +6,13 @@
 #pragma once
 #include <memory>
 #include <string>
-#include <vector>
 #include "Window/Window.h"
 #include "Core/Timer.h"
 #include "Networking/NetworkManager.h"
 #include "Core/PhysicsServer.h"
+#include "Core/LayerStack.h"
+#include "Core/Events/Event.h"
+#include "Core/Events/WindowEvent.h"
 
 class Renderer;
 class World;
@@ -42,6 +44,11 @@ public:
      */
     void Run();
 
+    // Push a regular layer (below overlays)
+    void PushLayer(Layer* layer);
+    // Push an overlay (always on top, receives events first)
+    void PushOverlay(Layer* overlay);
+
 private:
     /**
      * @brief Processes SDL system events.
@@ -49,6 +56,11 @@ private:
      * Handles window events, keyboard/mouse input, and quit requests.
      */
     void ProcessEvents();
+    void OnEvent(Event& event);
+
+    // Built-in event handlers
+    bool OnWindowResize(WindowResizeEvent& e);
+    bool OnWindowClose(WindowCloseEvent& e);
 
     Window m_Window; ///< Main application window.
     std::unique_ptr<Renderer> m_Renderer; ///< Core renderer system.
@@ -57,5 +69,6 @@ private:
     std::unique_ptr<PostProcessor> m_PostProcessor; ///< Post-processing system.
     Timer m_Timer; ///< Frame timer for delta time calculations.
     NetworkManager m_Network; ///< Networking system.
+    LayerStack              m_LayerStack;
     bool m_Running = true; ///< Main loop execution flag.
 };
