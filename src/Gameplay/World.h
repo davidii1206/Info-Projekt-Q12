@@ -54,6 +54,14 @@ public:
     void Render(Renderer* renderer, NetworkManager& net);
 
     /**
+     * @brief Renders ImGui UI for the current world state.
+     * @param dt Delta time.
+     * @param net Reference to the network manager.
+     * @param renderer Pointer to the renderer instance.
+     */
+    void OnImGuiRender(float dt, NetworkManager& net, Renderer* renderer);
+
+    /**
      * @brief Applies physics snapshots to EnTT components.
      * @param snapshots Vector of transform snapshots from the physics server.
      */

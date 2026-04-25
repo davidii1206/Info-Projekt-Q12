@@ -266,15 +266,15 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-frame update
+// Logic update
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Handles per-frame logic such as input processing, camera movement, and ImGui.
+ * @brief Handles per-frame logic such as input processing and camera movement.
  * @param ctx The scene context.
  * @param dt Delta time.
  */
-void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
+void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
     if (!ctx.network.IsConnected()) {
         ctx.scenes.RequestTransition(new MainMenuScene());
         return;
@@ -284,7 +284,9 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
     if (Input::IsKeyPressed(SDLK_F1)) {
         m_FreeFly = !m_FreeFly;
         spdlog::info("Control Mode: {}", m_FreeFly ? "Free Fly" : "Player");
-        if (m_FreeFly) Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
+        
+        // Ensure mouse is captured in both modes for now
+        Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
     }
 
     // F2 toggles mouse capture independently
@@ -355,10 +357,14 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
 
     m_TotalTime += dt;
     m_FrameCount++;
+}
 
-    /**
-     * @brief Render ImGui overlay for gameplay information.
-     */
+/**
+ * @brief Render ImGui overlay for gameplay information.
+ * @param ctx The scene context.
+ * @param dt Delta time.
+ */
+void GameScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
     ImGui::Begin("Game");
     ImGui::Text("Mode: %s", ctx.network.IsHosting() ? "Host" : "Client");
     ImGui::Text("Control: %s (F1)", m_FreeFly ? "Free Fly" : "Player");
@@ -399,6 +405,7 @@ void GameScene::SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos) {
         JPH::Vec3(1.f, 1.f, 1.f)
     );
     
+    // Register the server entity first
     ctx.world->RegisterPhysicsEntity(physicsId, cubeEntity);
     
     ctx.serverRegistry.emplace<TransformComponent>(cubeEntity, pos);
@@ -655,6 +662,10 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         auto it = m_ClientNetMap.find(pkt->netId);
         if (it == m_ClientNetMap.end()) continue;
 
+        // HOST OPTIMIZATION: If we are the host, we already have 60Hz smooth transforms 
+        // from local physics. Ignore the 20Hz delayed network packets for our own visual entities.
+        if (ctx.network.IsHosting()) continue;
+
         auto* t = ctx.clientRegistry.try_get<TransformComponent>(it->second);
         auto* m = ctx.clientRegistry.try_get<MovementComponent>(it->second);
         if (t) {
@@ -663,14 +674,14 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
                 if (p->isLocal) isLocalPlayer = true;
             }
 
-            // Simple smoothing (Lerp)
-            t->position = glm::lerp(t->position, glm::vec3{pkt->x, pkt->y, pkt->z}, 0.5f);
+            // Snap to authoritative position
+            t->position = glm::vec3{pkt->x, pkt->y, pkt->z};
             
             if (!isLocalPlayer) {
-                t->rotation = glm::lerp(t->rotation, glm::vec3{pkt->rx, pkt->ry, pkt->rz}, 0.5f);
+                t->rotation = glm::vec3{pkt->rx, pkt->ry, pkt->rz};
             }
             
-            t->scale = glm::lerp(t->scale, glm::vec3{pkt->sx, pkt->sy, pkt->sz}, 0.5f);
+            t->scale = glm::vec3{pkt->sx, pkt->sy, pkt->sz};
         }
         if (m) m->velocity = {pkt->vx, pkt->vy, pkt->vz};
     }

@@ -2,6 +2,8 @@
 #include <string>
 #include "Events/Event.h"
 
+class Renderer;
+
 class Layer {
 public:
     explicit Layer(const std::string& name = "Layer") : m_DebugName(name) {}
@@ -15,8 +17,11 @@ public:
     virtual void OnUpdate(float dt) {}
     // Called for every event; set event.Handled = true to consume it
     virtual void OnEvent(Event& event) {}
+
+    // Called every frame for 3D rendering
+    virtual void OnRender(Renderer* renderer) {}
     // Called every frame for ImGui rendering
-    virtual void OnImGuiRender() {}
+    virtual void OnImGuiRender(Renderer* renderer) {}
 
     const std::string& GetName() const { return m_DebugName; }
 

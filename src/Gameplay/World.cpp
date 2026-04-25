@@ -7,6 +7,7 @@
 #include "MainMenuScene.h"
 #include "../Networking/NetworkManager.h"
 #include <spdlog/spdlog.h>
+#include <glm/gtc/quaternion.hpp>
 
 /**
  * @brief Initializes the world and starts in the main menu scene.
@@ -15,28 +16,27 @@
 World::World(PhysicsServer* physics)
     : m_Physics(physics)
 {
+    // Start physics IDs high to avoid conflict with early network IDs
+    m_NextEntityID = 10000;
+    
     m_SceneManager.RequestTransition(new MainMenuScene());
     spdlog::info("World: initialized, starting in MainMenuScene");
 }
 
 /**
- * @brief Cleans up physics bodies before destruction.
+ * @brief Cleans up the world and destroys all entities.
  */
 World::~World() {
-    // Clean up bodies in PhysicsServer (for ServerRegistry)
-    auto view = m_ServerRegistry.view<PhysicsBodyComponent>();
-    for (auto entity : view) {
-        auto& body = view.get<PhysicsBodyComponent>(entity);
-        if (m_Physics && body.handle.IsValid())
-            m_Physics->RemoveBody(body.handle);
-    }
+    m_ClientRegistry.clear();
+    m_ServerRegistry.clear();
+    spdlog::info("World: destroyed");
 }
 
 /**
- * @brief Updates the world, handling scene transitions and fixed/variable updates.
- * @param dt Delta time since last frame.
- * @param net Reference to the network manager.
- * @param renderer Pointer to the renderer.
+ * @brief Updates all game logic for the current frame.
+ * @param dt The time elapsed since the last frame in seconds.
+ * @param net The network manager to handle sync.
+ * @param renderer Pointer to the renderer instance.
  */
 void World::Update(float dt, NetworkManager& net, Renderer* renderer) {
     SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
@@ -57,9 +57,9 @@ void World::Update(float dt, NetworkManager& net, Renderer* renderer) {
     }
 
     /**
-     * @brief Handle per-frame updates.
+     * @brief Handle per-frame logic updates.
      */
-    m_SceneManager.FrameUpdate(ctx, dt);
+    m_SceneManager.LogicUpdate(ctx, dt);
 }
 
 void World::Update(float dt) {
@@ -77,48 +77,64 @@ void World::Render(Renderer* renderer, NetworkManager& net) {
 }
 
 /**
+ * @brief Renders ImGui UI for the current world state.
+ */
+void World::OnImGuiRender(float dt, NetworkManager& net, Renderer* renderer) {
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
+    m_SceneManager.UIUpdate(ctx, dt);
+}
+
+/**
  * @brief Updates entity transforms from physics snapshots.
- * @param snapshots Vector of transform snapshots.
+ * @param snapshots Vector of transform snapshots from the physics server.
  */
 void World::ApplySnapshots(const std::vector<TransformSnapshot>& snapshots) {
-    for (const auto& snap : snapshots) {
-        auto it = m_IDToEntity.find(snap.entityID);
-        if (it == m_IDToEntity.end()) continue;
+    for (const auto& snapshot : snapshots) {
+        auto it = m_IDToEntity.find(snapshot.entityID);
+        if (it != m_IDToEntity.end()) {
+            auto entity = it->second;
 
-        auto& tf = m_ServerRegistry.get<TransformComponent>(it->second);
-        tf.position = glm::vec3(snap.position.GetX(), snap.position.GetY(), snap.position.GetZ());
-        
-        JPH::Vec3 euler = snap.rotation.GetEulerAngles();
-        tf.rotation = glm::vec3(
-            glm::degrees(euler.GetX()),
-            glm::degrees(euler.GetY()),
-            glm::degrees(euler.GetZ())
-        );
+            glm::vec3 pos(snapshot.position.GetX(), snapshot.position.GetY(), snapshot.position.GetZ());
+            JPH::Vec3 euler = snapshot.rotation.GetEulerAngles();
+            glm::vec3 rot(glm::degrees(euler.GetX()), glm::degrees(euler.GetY()), glm::degrees(euler.GetZ()));
+
+            // Update Server Registry (Authoritative state)
+            if (m_ServerRegistry.valid(entity)) {
+                if (auto* tf = m_ServerRegistry.try_get<TransformComponent>(entity)) {
+                    tf->position = pos;
+                    tf->rotation = rot;
+                }
+            }
+
+            // Update Client Registry (for smooth visual feedback on the Host)
+            if (m_ClientRegistry.valid(entity)) {
+                if (auto* tf = m_ClientRegistry.try_get<TransformComponent>(entity)) {
+                    tf->position = pos;
+                    tf->rotation = rot;
+                }
+            }
+        }
     }
 }
 
 /**
- * @brief Registers an entity for physics synchronization.
- * @param id Physics ID.
- * @param entity EnTT entity.
+ * @brief Registers an entity for physics snapshot synchronization.
  */
 void World::RegisterPhysicsEntity(uint32_t id, entt::entity entity) {
+    spdlog::debug("World: registering physics entity ID {} to entt entity {}", id, (uint32_t)entity);
     m_IDToEntity[id] = entity;
 }
 
 /**
  * @brief Unregisters an entity from physics synchronization.
- * @param id Physics ID.
  */
 void World::UnregisterPhysicsEntity(uint32_t id) {
+    spdlog::debug("World: unregistering physics ID {}", id);
     m_IDToEntity.erase(id);
 }
 
 /**
- * @brief Performs a fixed-rate logic update via the scene manager.
- * @param dt Fixed delta time.
- * @param net Reference to the network manager.
- * @param renderer Pointer to the renderer.
+ * @brief Performs a fixed-rate logic update.
  */
 void World::FixedUpdate(float dt, NetworkManager& net, Renderer* renderer) {
     SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};

@@ -44,11 +44,18 @@ public:
     void OnExit(SceneContext& ctx)  override;
 
     /**
-     * @brief Called every frame to update scene logic.
+     * @brief Performs per-frame logic updates (input, camera).
      * @param ctx Reference to the SceneContext.
      * @param dt Delta time since last frame in seconds.
      */
-    void FrameUpdate(SceneContext& ctx, float dt) override;
+    void LogicUpdate(SceneContext& ctx, float dt) override;
+
+    /**
+     * @brief Performs per-frame UI updates (ImGui).
+     * @param ctx Reference to the SceneContext.
+     * @param dt Delta time since last frame in seconds.
+     */
+    void UIUpdate(SceneContext& ctx, float dt) override;
 
     /**
      * @brief Called at a fixed rate for physics and consistent updates.

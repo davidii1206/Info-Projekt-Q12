@@ -175,7 +175,7 @@ public:
         if (serverPeer) {
             enet_peer_disconnect(serverPeer, 0);
             ENetEvent event;
-            while (enet_host_service(client, &event, 3000) > 0) {
+            while (enet_host_service(client, &event, 500) > 0) {
                 if (event.type == ENET_EVENT_TYPE_DISCONNECT) break;
             }
         }

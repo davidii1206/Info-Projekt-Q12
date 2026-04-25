@@ -52,11 +52,18 @@ public:
     void OnExit(SceneContext& ctx)  override;
 
     /**
-     * @brief Performs per-frame updates (UI, input, camera).
+     * @brief Performs per-frame logic updates (input, camera).
      * @param ctx The scene context.
      * @param dt Delta time.
      */
-    void FrameUpdate(SceneContext& ctx, float dt) override;
+    void LogicUpdate(SceneContext& ctx, float dt) override;
+
+    /**
+     * @brief Performs per-frame UI updates (ImGui).
+     * @param ctx The scene context.
+     * @param dt Delta time.
+     */
+    void UIUpdate(SceneContext& ctx, float dt) override;
 
     /**
      * @brief Performs fixed-rate updates (networking, physics).

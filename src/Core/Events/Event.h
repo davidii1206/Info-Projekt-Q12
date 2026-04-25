@@ -6,7 +6,8 @@ enum class EventType {
     None = 0,
     KeyPressed, KeyReleased,
     MouseMoved, MouseButtonPressed, MouseButtonReleased,
-    WindowResize, WindowClose
+    WindowResize, WindowClose,
+    EntityDamaged, EntityDied, BiomeChanged, Footstep, UIClick, MusicRequest
 };
 
 enum class EventCategory {
@@ -14,7 +15,9 @@ enum class EventCategory {
     Input       = 1 << 0,
     Keyboard    = 1 << 1,
     Mouse       = 1 << 2,
-    Window      = 1 << 3
+    Window      = 1 << 3,
+    Sound       = 1 << 4,
+    Game        = 1 << 5
 };
 
 inline int operator|(EventCategory a, EventCategory b) {

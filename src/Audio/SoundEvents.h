@@ -6,20 +6,6 @@
 // SoundEvents.h
 //
 // Events die das SoundSystem automatisch triggern kann.
-// Registrierung im GameLayer (oder ähnlichem):
-//
-//   EventDispatcher d(event);
-//   d.Dispatch<EntityDamagedEvent>([](EntityDamagedEvent& e) {
-//       PlaySoundParams p;
-//       p.pitchMin = 0.9f; p.pitchMax = 1.15f;
-//       p.priority = e.IsCritical() ? SoundPriority::High : SoundPriority::Normal;
-//       if (e.IsCritical())
-//           SoundSystem::Get().Play("assets/audio/sfx_hit_critical.wav", p);
-//       else
-//           SoundSystem::Get().Play("assets/audio/sfx_hit.wav", p);
-//       return false;
-//   });
-//
 // ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -36,8 +22,8 @@ public:
     bool      IsCritical()  const { return m_IsCritical; }
     SoundVec3 GetPosition() const { return m_Position;  }
 
-    EVENT_CLASS_TYPE(None)
-    EVENT_CLASS_CATEGORY(EventCategory::None)
+    EVENT_CLASS_TYPE(EntityDamaged)
+    EVENT_CLASS_CATEGORY(EventCategory::Game | EventCategory::Sound)
 
 private:
     float     m_Amount;
@@ -54,8 +40,8 @@ public:
 
     SoundVec3 GetPosition() const { return m_Position; }
 
-    EVENT_CLASS_TYPE(None)
-    EVENT_CLASS_CATEGORY(EventCategory::None)
+    EVENT_CLASS_TYPE(EntityDied)
+    EVENT_CLASS_CATEGORY(EventCategory::Game | EventCategory::Sound)
 
 private:
     SoundVec3 m_Position;
@@ -71,8 +57,8 @@ public:
     BiomeType GetBiome()    const { return m_NewBiome; }
     BiomeType GetOldBiome() const { return m_OldBiome; }
 
-    EVENT_CLASS_TYPE(None)
-    EVENT_CLASS_CATEGORY(EventCategory::None)
+    EVENT_CLASS_TYPE(BiomeChanged)
+    EVENT_CLASS_CATEGORY(EventCategory::Game | EventCategory::Sound)
 
 private:
     BiomeType m_NewBiome;
@@ -80,7 +66,6 @@ private:
 };
 
 // ── FootstepEvent ─────────────────────────────────────────────────────────────
-// Wird z.B. vom Animation-System pro Schritt gefeuert.
 
 enum class SurfaceType { Stone, Grass, Wood, Sand, Water, Metal };
 
@@ -93,8 +78,8 @@ public:
     SoundVec3   GetPosition() const { return m_Position; }
     float       GetSpeed()    const { return m_Speed;    }
 
-    EVENT_CLASS_TYPE(None)
-    EVENT_CLASS_CATEGORY(EventCategory::None)
+    EVENT_CLASS_TYPE(Footstep)
+    EVENT_CLASS_CATEGORY(EventCategory::Game | EventCategory::Sound)
 
 private:
     SurfaceType m_Surface;
@@ -107,12 +92,11 @@ private:
 class UIClickEvent : public Event {
 public:
     UIClickEvent() = default;
-    EVENT_CLASS_TYPE(None)
-    EVENT_CLASS_CATEGORY(EventCategory::None)
+    EVENT_CLASS_TYPE(UIClick)
+    EVENT_CLASS_CATEGORY(EventCategory::Input | EventCategory::Sound)
 };
 
 // ── MusicRequestEvent ─────────────────────────────────────────────────────────
-// Starte ein Musikstück mit optionalem Fade-In.
 
 class MusicRequestEvent : public Event {
 public:
@@ -127,8 +111,8 @@ public:
     float GetFadeOut() const { return m_FadeOut; }
     bool  GetLoop()    const { return m_Loop;    }
 
-    EVENT_CLASS_TYPE(None)
-    EVENT_CLASS_CATEGORY(EventCategory::None)
+    EVENT_CLASS_TYPE(MusicRequest)
+    EVENT_CLASS_CATEGORY(EventCategory::Sound)
 
 private:
     std::string m_Filepath;
