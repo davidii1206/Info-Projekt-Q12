@@ -36,14 +36,6 @@ struct SceneData {
 /**
  * @class AssetManager
  * @brief Singleton-style manager for loading and caching engine assets.
- * 
- * Performance:
- * - Caches textures and models to avoid redundant I/O and GPU uploads.
- * - Simple API for fast access during runtime.
- * 
- * Ease of Use:
- * - Centralized management of GPU resources.
- * - Automatic cleanup of assets during shutdown.
  */
 class AssetManager {
 public:
