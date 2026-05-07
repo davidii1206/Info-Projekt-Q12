@@ -39,13 +39,6 @@ float neighborNormalEdgeIndicator(int x, int y, float depth, vec3 normal) {
     float normalDiff = dot(normal - neighborNormal, normalEdgeBias);
     float normalIndicator = clamp(smoothstep(-.01, .01, normalDiff), 0.0, 1.0);
     
-    // Only the shallower pixel should detect the normal edge.
-    // In Reverse-Z, shallower = larger value, so depthDiff (depth - neighbor) is positive if I am shallower?
-    // Wait: depth is current pixel. getDepth(x,y) is neighbor.
-    // If I am at 0.6 (shallower) and neighbor at 0.5 (deeper).
-    // depthDiff = 0.6 - 0.5 = 0.1.
-    // sign(0.1 * .25 + .0025) = 1.
-    // So the SHALLOWER pixel detects the edge. Correct.
     float depthIndicator = clamp(sign(depthDiff * .25 + .0025), 0.0, 1.0);
 
     return (1.0 - dot(normal, neighborNormal)) * depthIndicator * normalIndicator;
