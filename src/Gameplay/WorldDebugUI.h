@@ -103,7 +103,7 @@ inline void Draw(World& world) {
     DrawRegistry("Server Registry (Authoritative)", world.GetServerRegistry());
 
     // Only show client registry to non-hosts, or as read-only for hosts to verify sync.
-    // For this prototype, let's keep it visible but label it.
+   
     ImGui::Separator();
     DrawRegistry("Client Registry (Visual/Interpolated)", world.GetClientRegistry());
 
