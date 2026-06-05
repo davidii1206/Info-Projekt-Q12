@@ -5,11 +5,12 @@
 #include <SDL3/SDL_gpu.h>
 #include <PerlinNoise.hpp>
 #include <jc_voronoi.h>
-#include "../Gameplay/Bug_classes.h"
+#include "Biome.h"
 
 struct TerrainData {
     int id;
     BugClass bugClass;
+    BiomeType biomeType;
     int altitude = 0;
     glm::vec2 site;
     glm::vec2 spawnPoint;
@@ -19,7 +20,7 @@ struct TerrainData {
 };
 
 struct WorldGenConfig {
-    int numTerrains = 8;
+    int numTerrains = 32;
     int seed = 12345;
     float noiseScale = 0.05f;
     int noiseOctaves = 4;
@@ -56,10 +57,10 @@ private:
     void GenerateHeightmap();
     
     // Biome-specific height generators
-    float GetAntHeight(float x, float y, const jcv_diagram* diagram);
-    float GetTermiteHeight(float x, float y);
-    float GetSpiderHeight(float x, float y);
-    float GetWoodliceHeight(float x, float y);
+    float GetWetlandHeight(float x, float y, const TerrainData& td, float noiseVal);
+    float GetDesertHeight(float x, float y, const TerrainData& td, float noiseVal);
+    float GetForestHeight(float x, float y, const TerrainData& td, float noiseVal);
+    float GetGladeHeight(float x, float y, const TerrainData& td, float noiseVal);
 
     WorldGenConfig m_CurrentConfig;
     std::vector<TerrainData> m_Terrains;

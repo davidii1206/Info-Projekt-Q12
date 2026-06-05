@@ -83,7 +83,7 @@ void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
 
     // Terrain Generation Debug Window
     ImGui::Begin("World Generation (WorldManager)");
-    ImGui::SliderInt("Terrains", &m_GenConfig.numTerrains, 2, 16);
+    ImGui::SliderInt("Terrains", &m_GenConfig.numTerrains, 4, 64);
     ImGui::SliderInt("Relaxation", &m_GenConfig.relaxationIterations, 0, 10);
     ImGui::Checkbox("Random Spawn In Territory", &m_GenConfig.randomSpawnInTerrain);
     
@@ -111,8 +111,28 @@ void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
     }
 
     if (ImGui::CollapsingHeader("Spawn Points")) {
-        for (const auto& td : m_WorldManager->GetTerrains()) {
-            ImGui::Text("Base %d: (%.1f, %.1f)", td.id, td.spawnPoint.x, td.spawnPoint.y);
+        if (ImGui::BeginTable("SpawnPointsTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("ID");
+            ImGui::TableSetupColumn("Biome");
+            ImGui::TableSetupColumn("Bug Class");
+            ImGui::TableSetupColumn("Position");
+            ImGui::TableHeadersRow();
+
+            for (const auto& td : m_WorldManager->GetTerrains()) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%d", td.id);
+                
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s", BiomeTypeToString(td.biomeType));
+                
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("%s", BugClassToString(td.bugClass));
+                
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("(%.0f, %.0f)", td.site.x, td.site.y);
+            }
+            ImGui::EndTable();
         }
     }
     ImGui::End();

@@ -26,16 +26,10 @@ struct SoundVec3 {
     float x = 0.f, y = 0.f, z = 0.f;
 };
 
-// ── Biome-Typen ───────────────────────────────────────────────────────────────
+#include "../Core/Biome.h"
 
-enum class BiomeType {
-    None,
-    Forest,
-    Desert,
-    Cave,
-    Ocean,
-    Tundra
-};
+// ── Biome-Typen ───────────────────────────────────────────────────────────────
+// (BiomeType now defined in Biome.h)
 
 // ── Lautstärke-Kategorien ─────────────────────────────────────────────────────
 
