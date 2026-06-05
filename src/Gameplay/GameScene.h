@@ -175,15 +175,15 @@ private:
     // Sonnenlicht — schräg von oben (Mittag, leicht südwestlich)
     glm::vec3 m_SunDirection     = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
     glm::vec3 m_SunColor         = {1.0f, 0.97f, 0.88f};  // warmes Tageslicht
-    float     m_SunIntensity     = 3.5f;
+    float     m_SunIntensity     = 1.0f;
 
     // Ambient — bläuliches Himmelslicht, Schatten nicht pechschwarz
     glm::vec3 m_AmbientColor     = {0.45f, 0.60f, 0.90f};
     float     m_AmbientIntensity = 0.25f;
 
     // Shadow tuning — adjustable at runtime via the "Shadow Debug" ImGui window.
-    float m_ShadowBiasConstant = 1.5f;  ///< Uniform depth offset (world-unit scale)
-    float m_ShadowBiasSlope    = 1.75f; ///< Extra offset for grazing-angle surfaces
+    float m_ShadowBiasConstant = 0.1f;  ///< Uniform depth offset (world-unit scale)
+    float m_ShadowBiasSlope    = 0.25f; ///< Extra offset for grazing-angle surfaces
     float m_ShadowOrthoSize    = 40.0f; ///< Half-size of the orthographic shadow frustum
 
     // Cached values to detect when the shadow pipeline needs to be rebuilt

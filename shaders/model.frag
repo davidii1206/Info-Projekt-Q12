@@ -127,9 +127,9 @@ float SampleShadowPCF(vec4 shadowCoord, vec3 N) {
     vec3 proj = shadowCoord.xyz / shadowCoord.w;
 
     // NDC [-1,1] -> UV [0,1]
-    // Note: In Vulkan, NDC Y already increases downward, so * 0.5 + 0.5
-    // maps correctly to UV space — no Y-flip needed.
-    vec2 uv = proj.xy * 0.5 + 0.5;
+    // Note: SDL3 GPU uses +Y up in NDC but +Y down in UV space (top-left origin).
+    // Thus, Y must be flipped: uv.y = -proj.y * 0.5 + 0.5.
+    vec2 uv = vec2(proj.x * 0.5 + 0.5, proj.y * -0.5 + 0.5);
     float depth = proj.z;
 
     // Fragments outside the shadow frustum are fully lit — no shadow
@@ -139,7 +139,7 @@ float SampleShadowPCF(vec4 shadowCoord, vec3 N) {
 
     // Slope-scale bias: grazing angles need more bias to avoid acne.
     float NdotL_sun = clamp(dot(N, normalize(globals.sunDir.xyz)), 0.0, 1.0);
-    float slopeBias = mix(0.002, 0.0005, NdotL_sun);
+    float slopeBias = mix(0.001, 0.0002, NdotL_sun);
 
     // 5x5 PCF kernel — soft shadow edges
     vec2  texelSize = vec2(1.0) / vec2(textureSize(shadowMap, 0));
@@ -193,7 +193,14 @@ void main() {
             ? 0.0
             : SampleShadowPCF(globals.sunVP * vec4(vPos, 1.0), N) * smoothstep(0.0, 0.1, NdotSun);
 
-        totalLight += BlinnPhong(sunL, N, V, shadowFactor, sunCol, sunInten);
+        // Posterize / toon-shade the sun intensity
+        float lightBrightness = max(NdotSun, 0.0) * shadowFactor;
+        if (posterizeSteps > 0.0) {
+            lightBrightness = floor(lightBrightness * posterizeSteps) / posterizeSteps;
+            totalLight += sunCol * sunInten * lightBrightness;
+        } else {
+            totalLight += BlinnPhong(sunL, N, V, shadowFactor, sunCol, sunInten);
+        }
     }
 
     // ----------------------------------------------------------------

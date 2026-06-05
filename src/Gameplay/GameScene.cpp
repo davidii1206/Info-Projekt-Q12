@@ -108,6 +108,8 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_MyNetId       = 0;
     m_IdAssigned    = false;
     m_SnapAccum     = 0.f;
+
+    ctx.world->ClearPhysicsState();
     
     m_VertShader.reset();
     m_FragShader.reset();

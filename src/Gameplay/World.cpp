@@ -90,27 +90,35 @@ void World::OnImGuiRender(float dt, NetworkManager& net, Renderer* renderer) {
  */
 void World::ApplySnapshots(const std::vector<TransformSnapshot>& snapshots) {
     for (const auto& snapshot : snapshots) {
+        // 1. Authoritative Server Update
         auto it = m_IDToEntity.find(snapshot.entityID);
         if (it != m_IDToEntity.end()) {
-            auto entity = it->second;
+            auto sEntity = it->second;
 
-            glm::vec3 pos(snapshot.position.GetX(), snapshot.position.GetY(), snapshot.position.GetZ());
-            JPH::Vec3 euler = snapshot.rotation.GetEulerAngles();
-            glm::vec3 rot(glm::degrees(euler.GetX()), glm::degrees(euler.GetY()), glm::degrees(euler.GetZ()));
+            if (m_ServerRegistry.valid(sEntity) && m_ServerRegistry.any_of<PhysicsBodyComponent>(sEntity)) {
+                glm::vec3 pos(snapshot.position.GetX(), snapshot.position.GetY(), snapshot.position.GetZ());
+                JPH::Vec3 euler = snapshot.rotation.GetEulerAngles();
+                glm::vec3 rot(glm::degrees(euler.GetX()), glm::degrees(euler.GetY()), glm::degrees(euler.GetZ()));
 
-            // Update Server Registry (Authoritative state)
-            if (m_ServerRegistry.valid(entity)) {
-                if (auto* tf = m_ServerRegistry.try_get<TransformComponent>(entity)) {
+                if (auto* tf = m_ServerRegistry.try_get<TransformComponent>(sEntity)) {
                     tf->position = pos;
                     tf->rotation = rot;
                 }
-            }
 
-            // Update Client Registry (for smooth visual feedback on the Host)
-            if (m_ClientRegistry.valid(entity)) {
-                if (auto* tf = m_ClientRegistry.try_get<TransformComponent>(entity)) {
-                    tf->position = pos;
-                    tf->rotation = rot;
+                // 2. Visual Client Update (for Host)
+                // We MUST find the visual entity in the client registry that matches the server entity's netId.
+                if (auto* net = m_ServerRegistry.try_get<NetworkedComponent>(sEntity)) {
+                    uint32_t targetNetId = net->netId;
+                    
+                    auto clientView = m_ClientRegistry.view<NetworkedComponent, TransformComponent>();
+                    for (auto cEntity : clientView) {
+                        if (clientView.get<NetworkedComponent>(cEntity).netId == targetNetId) {
+                            auto& cTf = clientView.get<TransformComponent>(cEntity);
+                            cTf.position = pos;
+                            cTf.rotation = rot;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -131,6 +139,12 @@ void World::RegisterPhysicsEntity(uint32_t id, entt::entity entity) {
 void World::UnregisterPhysicsEntity(uint32_t id) {
     spdlog::debug("World: unregistering physics ID {}", id);
     m_IDToEntity.erase(id);
+}
+
+void World::ClearPhysicsState() {
+    spdlog::info("World: clearing all physics mappings and resetting ID counter");
+    m_IDToEntity.clear();
+    m_NextEntityID = 10000;
 }
 
 /**

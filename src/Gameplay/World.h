@@ -81,6 +81,12 @@ public:
     void UnregisterPhysicsEntity(uint32_t id);
 
     /**
+     * @brief Fully clears the physics-to-entity mapping and resets ID counter.
+     * Used when transitioning between scenes or restarting sessions.
+     */
+    void ClearPhysicsState();
+
+    /**
      * @brief Gets the authoritative server registry.
      * @return Reference to the server entt::registry.
      */
