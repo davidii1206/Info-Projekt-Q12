@@ -88,8 +88,8 @@ void Renderer::UpdateGlobalUniforms(const GlobalUniforms& uniforms) {
     }
 }
 
-void Renderer::AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth, std::function<void(SDL_GPUCommandBuffer*)> preFunc) {
-    m_FrameGraph->AddPass(name, target, func, needsDepth, preFunc);
+void Renderer::AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth, std::function<void(SDL_GPUCommandBuffer*)> preFunc, float depthClearValue) {
+    m_FrameGraph->AddPass(name, target, func, needsDepth, preFunc, depthClearValue);
 }
 
 void Renderer::EndFrame() {

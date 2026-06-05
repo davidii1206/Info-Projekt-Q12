@@ -25,7 +25,7 @@ public:
      * @param formats List of pixel formats for each color target.
      * @param hasDepth Whether to include a depth target.
      */
-    Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height, const std::vector<SDL_GPUTextureFormat>& formats, bool hasDepth = true);
+    Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height, const std::vector<SDL_GPUTextureFormat>& formats, bool hasDepth = true, TextureFilter depthFilter = TextureFilter::Nearest);
 
     /**
      * @brief Destroys the framebuffer and releases all target textures.

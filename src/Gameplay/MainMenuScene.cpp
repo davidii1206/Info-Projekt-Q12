@@ -42,12 +42,8 @@ void MainMenuScene::OnExit(SceneContext& ctx) {
 
 /**
  * @brief Called every frame to update scene logic.
- * 
- * Checks for network connection to trigger transitions and handles free-fly camera movement.
- * @param ctx Reference to the SceneContext.
- * @param dt Delta time since last frame in seconds.
  */
-void MainMenuScene::FrameUpdate(SceneContext& ctx, float dt) {
+void MainMenuScene::LogicUpdate(SceneContext& ctx, float dt) {
     if (ctx.network.IsConnected()) {
         ctx.scenes.RequestTransition(new GameScene());
     }
@@ -65,6 +61,16 @@ void MainMenuScene::FrameUpdate(SceneContext& ctx, float dt) {
     }
     m_Camera->Update(dt);
 
+    if (Input::IsKeyPressed(SDLK_F1)) {
+        bool newState = !Input::IsRelativeMouseMode();
+        Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
+    }
+}
+
+/**
+ * @brief Called every frame to update scene UI.
+ */
+void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
     ImGui::Begin("Main Menu");
     ImGui::Text("Bugmin Engine - Main Menu");
     ImGui::Text("F1 to toggle Free-Fly Camera");
@@ -110,28 +116,17 @@ void MainMenuScene::FrameUpdate(SceneContext& ctx, float dt) {
         }
     }
     ImGui::End();
-
-    if (Input::IsKeyPressed(SDLK_F1)) {
-        bool newState = !Input::IsRelativeMouseMode();
-        Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
-    }
 }
 
 /**
  * @brief Called at a fixed rate for physics and consistent updates.
- * @param ctx Reference to the SceneContext.
- * @param dt Fixed delta time in seconds.
  */
-void MainMenuScene::FixedUpdate(SceneContext& ctx, float dt) {}
+void MainMenuScene::FixedUpdate(SceneContext& /*ctx*/, float /*dt*/) {}
 
 /**
  * @brief Called to render the scene.
- * 
- * Updates Global Uniforms so shaders have a valid camera even in menu.
- * @param ctx Reference to the SceneContext.
- * @param renderer Pointer to the renderer instance.
  */
-void MainMenuScene::Render(SceneContext& ctx, Renderer* renderer) {
+void MainMenuScene::Render(SceneContext& /*ctx*/, Renderer* renderer) {
     int w, h;
     SDL_GetWindowSizeInPixels(renderer->GetWindow()->handle, &w, &h);
     float aspect = (float)w / (float)h;

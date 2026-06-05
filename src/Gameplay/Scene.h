@@ -61,11 +61,18 @@ public:
     virtual void OnExit(SceneContext& ctx)  = 0;
 
     /**
-     * @brief Performs per-frame updates (ImGui, input).
+     * @brief Performs per-frame logic updates (input, etc.).
      * @param ctx The current scene context.
      * @param dt Delta time for the current frame.
      */
-    virtual void FrameUpdate(SceneContext& ctx, float dt) = 0;
+    virtual void LogicUpdate(SceneContext& ctx, float dt) = 0;
+
+    /**
+     * @brief Performs per-frame UI updates (ImGui).
+     * @param ctx The current scene context.
+     * @param dt Delta time for the current frame.
+     */
+    virtual void UIUpdate(SceneContext& ctx, float dt) = 0;
 
     /**
      * @brief Performs fixed-rate updates (logic, networking).
@@ -97,7 +104,7 @@ public:
      * @brief Queues a scene transition.
      * 
      * Applied at the start of the next World::Update call.
-     * Safe to call from inside FrameUpdate or FixedUpdate.
+     * Safe to call from inside logic or fixed updates.
      * 
      * @param next Pointer to the next scene to transition to.
      */
@@ -116,7 +123,14 @@ public:
      * @param ctx The current scene context.
      * @param dt Delta time.
      */
-    void FrameUpdate(SceneContext& ctx, float dt);
+    void LogicUpdate(SceneContext& ctx, float dt);
+
+    /**
+     * @brief Updates the current scene's UI (ImGui).
+     * @param ctx The current scene context.
+     * @param dt Delta time.
+     */
+    void UIUpdate(SceneContext& ctx, float dt);
 
     /**
      * @brief Updates the current scene's fixed logic.

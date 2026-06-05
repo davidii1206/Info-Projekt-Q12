@@ -61,7 +61,7 @@ public:
      * @param needsDepth Whether the pass needs a depth buffer.
      * @param preFunc Optional function to execute before the pass (e.g., for clearing).
      */
-    void AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth = true, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr);
+    void AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth = true, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr, float depthClearValue = 0.0f);
 
     /**
      * @brief Sets the current G-Buffer.
@@ -104,6 +104,12 @@ public:
      * @return Pointer to GPUBuffer.
      */
     GPUBuffer* GetGlobalUBO() const { return m_GlobalUBO.get(); }
+
+    /**
+     * @brief Gets the current frame's command buffer.
+     * @return Pointer to SDL_GPUCommandBuffer, or nullptr if no frame is active.
+     */
+    SDL_GPUCommandBuffer* GetCurrentCommandBuffer() const { return m_CurrentCommandBuffer; }
 
 private:
     Window* m_Window; /**< Pointer to the system window. */

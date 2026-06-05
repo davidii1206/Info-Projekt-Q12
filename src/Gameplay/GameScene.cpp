@@ -16,6 +16,9 @@
 #include "../Graphics/Renderer.h"
 #include "../Graphics/API/Shader.h"
 #include "../Graphics/API/GraphicsPipeline.h"
+#include "../Graphics/API/Framebuffer.h"
+#include "../Graphics/API/GPUBuffer.h"
+#include "../Graphics/Lights.h"
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <glm/glm.hpp>
@@ -105,10 +108,18 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_MyNetId       = 0;
     m_IdAssigned    = false;
     m_SnapAccum     = 0.f;
+
+    ctx.world->ClearPhysicsState();
     
     m_VertShader.reset();
     m_FragShader.reset();
     m_ModelPipeline = nullptr;
+
+    m_ShadowVertShader.reset();
+    m_ShadowFragShader.reset();
+    m_ShadowPipeline = nullptr;
+    m_ShadowMap.reset();
+    m_ShadowUBO.reset();
 
     spdlog::info("GameScene: exited, registries cleared");
 }
@@ -123,12 +134,12 @@ void GameScene::OnExit(SceneContext& ctx) {
  * @param renderer Pointer to the renderer.
  */
 void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
-    /**
-     * @brief Initialize graphics pipeline and shaders if they don't exist yet.
-     */
+    // ------------------------------------------------------------------
+    // 1. Lazy-init graphics pipelines
+    // ------------------------------------------------------------------
     if (!m_ModelPipeline) {
         ShaderResourceLayout vertLayout = {0, 0, 1, 1}; 
-        ShaderResourceLayout fragLayout = {1, 0, 2, 1}; 
+        ShaderResourceLayout fragLayout = {2, 0, 2, 1}; 
 
         m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert.spv", ShaderStage::Vertex, vertLayout);
         m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag.spv", ShaderStage::Fragment, fragLayout);
@@ -158,9 +169,43 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         m_ModelPipeline = renderer->GetPipelines()->CreatePipeline("GameModelPipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
     }
 
-    /**
-     * @brief Update global uniforms for camera and scene-wide timers.
-     */
+    if (!m_ShadowPipeline ||
+        m_ShadowBiasConstant != m_LastShadowBiasConstant ||
+        m_ShadowBiasSlope    != m_LastShadowBiasSlope) {
+        
+        m_ShadowPipeline = nullptr;
+        m_LastShadowBiasConstant = m_ShadowBiasConstant;
+        m_LastShadowBiasSlope    = m_ShadowBiasSlope;
+
+        ShaderResourceLayout shadowVertLayout = {0, 0, 0, 2};
+        ShaderResourceLayout shadowFragLayout = {0, 0, 0, 0};
+
+        m_ShadowVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.vert.spv", ShaderStage::Vertex, shadowVertLayout);
+        m_ShadowFragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.frag.spv", ShaderStage::Fragment, shadowFragLayout);
+
+        PipelineConfig shadowCfg;
+        shadowCfg.vertexShader = m_ShadowVertShader.get();
+        shadowCfg.fragmentShader = m_ShadowFragShader.get();
+        shadowCfg.vertexStride = sizeof(ModelVertex);
+        shadowCfg.vertexAttributes = {
+            {0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position)}
+        };
+        shadowCfg.enableDepthTest = true;
+        shadowCfg.depthCompareOp = SDL_GPU_COMPAREOP_LESS;
+        shadowCfg.cullMode = SDL_GPU_CULLMODE_FRONT;
+
+        shadowCfg.enableDepthBias = true;
+        shadowCfg.depthBiasConstantFactor = m_ShadowBiasConstant;
+        shadowCfg.depthBiasSlopeFactor = m_ShadowBiasSlope;
+        shadowCfg.depthBiasClamp = 0.0f;
+        shadowCfg.colorTargetFormats = {};
+
+        m_ShadowPipeline = renderer->GetPipelines()->CreatePipeline("ShadowPipeline", shadowCfg, SDL_GPU_TEXTUREFORMAT_INVALID);
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Camera matrices
+    // ------------------------------------------------------------------
     int w, h;
     SDL_GetWindowSizeInPixels(renderer->GetWindow()->handle, &w, &h);
     float aspect = (float)w / (float)h;
@@ -171,54 +216,115 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     globals.viewProj = globals.proj * globals.view;
     globals.cameraPos = glm::vec4(m_Camera->m_Position, 1.0f);
     
-    /**
-     * @brief Extract light data from networked models and update global uniforms.
-     */
+    // ------------------------------------------------------------------
+    // 3. Sun light + sunVP matrix for shadow mapping
+    // ------------------------------------------------------------------
+    globals.sunDir = glm::vec4(glm::normalize(-m_SunDirection), 0.0f);
+    globals.sunColor = glm::vec4(m_SunColor, m_SunIntensity);
+
+    {
+        const float shadowOrthoSize = m_ShadowOrthoSize;
+        const float shadowNear = 0.1f;
+        const float shadowFar = 200.0f;
+
+        glm::vec3 sunDir = glm::normalize(m_SunDirection);
+        glm::vec3 up = (glm::abs(sunDir.y) < 0.99f) ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+
+        glm::vec3 center = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::vec3 sunPos = center - sunDir * 100.0f;
+        glm::vec3 target = center + sunDir;
+
+        glm::mat4 sunView = glm::lookAt(sunPos, target, up);
+        glm::mat4 sunProj = glm::ortho(-shadowOrthoSize, shadowOrthoSize, -shadowOrthoSize, shadowOrthoSize, shadowNear, shadowFar);
+
+        // Texel Snapping
+        float texelSize = (2.0f * shadowOrthoSize) / 2048.0f;
+        glm::vec4 originLV = sunView * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        glm::vec2 snappedXY = glm::round(glm::vec2(originLV) / texelSize) * texelSize;
+        glm::vec2 snapDelta = snappedXY - glm::vec2(originLV);
+
+        glm::vec3 lightRight = glm::vec3(sunView[0][0], sunView[1][0], sunView[2][0]);
+        glm::vec3 lightUp    = glm::vec3(sunView[0][1], sunView[1][1], sunView[2][1]);
+        sunPos += lightRight * snapDelta.x + lightUp * snapDelta.y;
+        sunView = glm::lookAt(sunPos, sunPos + sunDir, up);
+
+        globals.sunVP = sunProj * sunView;
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Ambient light
+    // ------------------------------------------------------------------
+    globals.ambientColor = glm::vec4(m_AmbientColor, m_AmbientIntensity);
+
+    // ------------------------------------------------------------------
+    // 5. Dynamic lights
+    // ------------------------------------------------------------------
     uint32_t totalLightCount = 0;
-    auto modelView = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
-    for (auto entity : modelView) {
-        auto& transform = modelView.get<TransformComponent>(entity);
-        auto& modelComp = modelView.get<ModelComponent>(entity);
-        auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
-        if (!sceneData.model) continue;
 
-        glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
-                              glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
-                              glm::scale(glm::mat4(1.0f), transform.scale);
-
-        for (const auto& light : sceneData.lights) {
+    // 5a. Lights from ECS entities
+    {
+        auto lightView = ctx.clientRegistry.view<TransformComponent, LightComponent>();
+        for (auto entity : lightView) {
             if (totalLightCount >= 16) break;
-            
-            Light& outLight = globals.lights[totalLightCount];
-            outLight = light;
-            
-            // Transform light position into world space
-            glm::vec4 worldPos = entityMat * glm::vec4(glm::vec3(light.position_type), 1.0f);
-            outLight.position_type = glm::vec4(glm::vec3(worldPos), light.position_type.w);
-            
-            // Transform direction if it's a directional/spot light
-            if (light.position_type.w == (float)LightType::Directional || light.position_type.w == (float)LightType::Spot) {
-                glm::vec4 worldDir = entityMat * glm::vec4(glm::vec3(light.direction_range), 0.0f);
-                outLight.direction_range = glm::vec4(glm::normalize(glm::vec3(worldDir)), light.direction_range.w);
-            }
+            auto& tf = lightView.get<TransformComponent>(entity);
+            auto& lc = lightView.get<LightComponent>(entity);
+
+            Light& out = globals.lights[totalLightCount];
+            out.position_type = glm::vec4(tf.position, (float)lc.type);
+            out.direction_range = glm::vec4(glm::normalize(lc.direction), lc.range);
+            out.color_intensity = glm::vec4(lc.color, lc.intensity);
             totalLightCount++;
         }
-        if (totalLightCount >= 16) break;
+    }
+
+    // 5b. Lights embedded inside models
+    {
+        auto modelView = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        for (auto entity : modelView) {
+            if (totalLightCount >= 16) break;
+            auto& transform = modelView.get<TransformComponent>(entity);
+            auto& modelComp = modelView.get<ModelComponent>(entity);
+            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
+            if (!sceneData.model) continue;
+
+            glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
+                                  glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
+                                  glm::scale(glm::mat4(1.0f), transform.scale);
+
+            for (const auto& light : sceneData.lights) {
+                if (totalLightCount >= 16) break;
+                Light& outLight = globals.lights[totalLightCount];
+                outLight = light;
+
+                glm::vec4 worldPos = entityMat * glm::vec4(glm::vec3(light.position_type), 1.0f);
+                outLight.position_type = glm::vec4(glm::vec3(worldPos), light.position_type.w);
+
+                if ((int)light.position_type.w == (int)LightType::Directional || (int)light.position_type.w == (int)LightType::Spot) {
+                    glm::vec4 worldDir = entityMat * glm::vec4(glm::vec3(light.direction_range), 0.0f);
+                    outLight.direction_range = glm::vec4(glm::normalize(glm::vec3(worldDir)), light.direction_range.w);
+                }
+                totalLightCount++;
+            }
+        }
     }
 
     globals.timers = glm::vec4(m_TotalTime, (float)totalLightCount, 0.016f, (float)m_FrameCount);
     renderer->UpdateGlobalUniforms(globals);
 
-    Framebuffer* gbuffer = renderer->GetGBuffer();
-    if (!gbuffer) return;
+    // ------------------------------------------------------------------
+    // 6. Shadow Pass
+    // ------------------------------------------------------------------
+    constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+    if (!m_ShadowMap) {
+        m_ShadowMap = std::make_unique<Framebuffer>(renderer->GetDevice(), SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, std::vector<SDL_GPUTextureFormat>{}, true, TextureFilter::ShadowCompare);
+        spdlog::info("GameScene: Shadow map created ({}x{})", SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    }
 
-    /**
-     * @brief Add a render pass to draw all entities in the client registry.
-     */
-    renderer->AddPass("GameRenderPass", gbuffer, [this, ctx, renderer](RenderContext& renderCtx) {
-        renderCtx.BindPipeline(m_ModelPipeline);
-        renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
-        renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
+    glm::mat4 sunVP = globals.sunVP;
+    renderer->AddPass("ShadowPass", m_ShadowMap.get(), [this, ctx, renderer, sunVP](RenderContext& renderCtx) {
+        if (!m_ShadowPipeline) return;
+        renderCtx.BindPipeline(m_ShadowPipeline);
+        renderCtx.PushVertexConstants(1, &sunVP, sizeof(glm::mat4));
 
         auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
         for (auto entity : view) {
@@ -231,9 +337,50 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
             renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
 
-            if (sceneData.model->GetMaterialBuffer()) {
-                renderCtx.BindFragmentStorageBuffer(1, sceneData.model->GetMaterialBuffer());
+            for (const auto& instance : sceneData.meshInstances) {
+                struct ShadowPC { glm::mat4 model; } spc;
+                glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
+                                      glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
+                                      glm::scale(glm::mat4(1.0f), transform.scale);
+                spc.model = entityMat * instance.transform;
+                renderCtx.PushVertexConstants(0, &spc, sizeof(ShadowPC));
+
+                const auto& allSections = sceneData.model->GetSections();
+                for (uint32_t i = 0; i < instance.sectionCount; ++i) {
+                    const auto& section = allSections[instance.firstSection + i];
+                    renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
+                }
             }
+        }
+    }, true, nullptr, 1.0f);
+
+    // ------------------------------------------------------------------
+    // 7. Render pass
+    // ------------------------------------------------------------------
+    Framebuffer* gbuffer = renderer->GetGBuffer();
+    if (!gbuffer) return;
+
+    renderer->AddPass("GameRenderPass", gbuffer, [this, ctx, renderer](RenderContext& renderCtx) {
+        renderCtx.BindPipeline(m_ModelPipeline);
+        renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
+        renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
+
+        if (m_ShadowMap && m_ShadowMap->GetDepthTarget())
+            renderCtx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
+
+        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        for (auto entity : view) {
+            auto& transform = view.get<TransformComponent>(entity);
+            auto& modelComp = view.get<ModelComponent>(entity);
+
+            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
+            if (!sceneData.model) continue;
+
+            renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
+            renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
+
+            if (sceneData.model->GetMaterialBuffer())
+                renderCtx.BindFragmentStorageBuffer(1, sceneData.model->GetMaterialBuffer());
 
             const auto& allSections = sceneData.model->GetSections();
             const auto& allMaterials = sceneData.model->GetMaterials();
@@ -266,43 +413,32 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-frame update
+// Logic update
 // ---------------------------------------------------------------------------
 
-/**
- * @brief Handles per-frame logic such as input processing, camera movement, and ImGui.
- * @param ctx The scene context.
- * @param dt Delta time.
- */
-void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
+void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
     if (!ctx.network.IsConnected()) {
         ctx.scenes.RequestTransition(new MainMenuScene());
         return;
     }
 
-    // F1 toggles between Player and Free Fly
     if (Input::IsKeyPressed(SDLK_F1)) {
         m_FreeFly = !m_FreeFly;
         spdlog::info("Control Mode: {}", m_FreeFly ? "Free Fly" : "Player");
-        if (m_FreeFly) Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
+        Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
     }
 
-    // F2 toggles mouse capture independently
     if (Input::IsKeyPressed(SDLK_F2)) {
         bool newState = !Input::IsRelativeMouseMode();
         Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
         spdlog::info("Mouse Capture: {}", newState ? "On" : "Off");
     }
 
-    /**
-     * @brief Process camera rotation and movement based on input mode.
-     */
     if (Input::IsRelativeMouseMode()) {
         glm::vec2 delta = Input::GetMouseDelta();
         m_Camera->Rotate(delta.x, delta.y);
 
         if (m_FreeFly) {
-            // --- FREE FLY MODE (Captured) ---
             if (Input::IsKeyDown(SDLK_W)) m_Camera->MoveForward(dt);
             if (Input::IsKeyDown(SDLK_S)) m_Camera->MoveBackward(dt);
             if (Input::IsKeyDown(SDLK_A)) m_Camera->MoveLeft(dt);
@@ -310,9 +446,6 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
             if (Input::IsKeyDown(SDLK_SPACE)) m_Camera->MoveUp(dt);
             if (Input::IsKeyDown(SDLK_LSHIFT)) m_Camera->MoveDown(dt);
         } else {
-            /**
-             * @brief Handle movement for the local player entity.
-             */
             if (m_IdAssigned) {
                 auto view = ctx.clientRegistry.view<PlayerComponent, TransformComponent, MovementComponent>();
                 for (auto entity : view) {
@@ -341,7 +474,7 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
                         mv.velocity = moveDir * mv.speed;
                         tf.position += mv.velocity * dt;
 
-                        m_Camera->m_Position = tf.position + glm::vec3(0, 2, 0); // Eye height offset
+                        m_Camera->m_Position = tf.position + glm::vec3(0, 2, 0);
                         
                         tf.rotation.y = m_Camera->m_Yaw;
                         tf.rotation.x = m_Camera->m_Pitch;
@@ -355,10 +488,9 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
 
     m_TotalTime += dt;
     m_FrameCount++;
+}
 
-    /**
-     * @brief Render ImGui overlay for gameplay information.
-     */
+void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     ImGui::Begin("Game");
     ImGui::Text("Mode: %s", ctx.network.IsHosting() ? "Host" : "Client");
     ImGui::Text("Control: %s (F1)", m_FreeFly ? "Free Fly" : "Player");
@@ -378,6 +510,12 @@ void GameScene::FrameUpdate(SceneContext& ctx, float dt) {
         ctx.network.Disconnect();
         ctx.scenes.RequestTransition(new MainMenuScene());
     }
+    ImGui::End();
+
+    ImGui::Begin("Shadow Debug");
+    ImGui::SliderFloat("Bias Constant", &m_ShadowBiasConstant, 0.0f, 10.0f);
+    ImGui::SliderFloat("Bias Slope", &m_ShadowBiasSlope, 0.0f, 10.0f);
+    ImGui::SliderFloat("Ortho Size", &m_ShadowOrthoSize, 5.0f, 100.0f);
     ImGui::End();
 }
 
@@ -399,6 +537,7 @@ void GameScene::SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos) {
         JPH::Vec3(1.f, 1.f, 1.f)
     );
     
+    // Register the server entity first
     ctx.world->RegisterPhysicsEntity(physicsId, cubeEntity);
     
     ctx.serverRegistry.emplace<TransformComponent>(cubeEntity, pos);
@@ -422,11 +561,6 @@ void GameScene::SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos) {
 // Fixed-rate update
 // ---------------------------------------------------------------------------
 
-/**
- * @brief Handles logic and networking at a fixed rate.
- * @param ctx The scene context.
- * @param dt Fixed delta time.
- */
 void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
     if (ctx.network.IsHosting()) {
         PollConnectionEvents(ctx);
@@ -456,10 +590,6 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
 // Server-side: connection / disconnection
 // ---------------------------------------------------------------------------
 
-/**
- * @brief Polls for network connection events and manages networked entities accordingly.
- * @param ctx The scene context.
- */
 void GameScene::PollConnectionEvents(SceneContext& ctx) {
     uint32_t peerId;
     bool     isConnect;
@@ -516,50 +646,32 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
             spdlog::info("GameScene: player joined  peerId={} playerId={} netId={}",
                          peerId, newPlayerId, newNetId);
         } else {
-            /**
-             * @brief Handle player disconnection.
-             */
             auto it = m_PeerToNetId.find(peerId);
             if (it != m_PeerToNetId.end()) {
                 const uint32_t netId = it->second;
-
                 ctx.serverRegistry.destroy(m_ServerNetMap[netId]);
                 m_ServerNetMap.erase(netId);
                 m_PeerToNetId.erase(peerId);
-
                 PlayerLeftPacket pkt;
                 pkt.netId = netId;
                 ctx.network.BroadcastToAll(pkt);
-
                 spdlog::info("GameScene: player left  peerId={} netId={}", peerId, netId);
             }
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Server-side: process client input
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Processes movement packets received from clients.
- * @param ctx The scene context.
- */
 void GameScene::PollClientPackets(SceneContext& ctx) {
     while (true) {
         auto result = ctx.network.ReceiveFromClient<PlayerInputPacket>(PacketType::PLAYER_INPUT);
         if (!result) break;
         auto [packet, senderPeerId] = *result;
-
         auto peerIt = m_PeerToNetId.find(senderPeerId);
         if (peerIt == m_PeerToNetId.end()) continue;
-
         auto entIt = m_ServerNetMap.find(peerIt->second);
         if (entIt == m_ServerNetMap.end()) continue;
-
         auto* movement = ctx.serverRegistry.try_get<MovementComponent>(entIt->second);
         if (movement) movement->inputDir = {packet.dx, packet.dy, packet.dz};
-
         auto* transform = ctx.serverRegistry.try_get<TransformComponent>(entIt->second);
         if (transform) {
             transform->rotation.y = packet.yaw;
@@ -568,47 +680,27 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Server-side: broadcast snapshots
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Sends authoritative entity snapshots to all connected clients.
- * @param ctx The scene context.
- */
 void GameScene::SendSnapshots(SceneContext& ctx) {
     auto view = ctx.serverRegistry.view<NetworkedComponent, TransformComponent>();
     for (auto entity : view) {
         auto& net = view.get<NetworkedComponent>(entity);
         auto& t   = view.get<TransformComponent>(entity);
-
         EntitySnapshotPacket pkt;
         pkt.netId = net.netId;
         pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
         pkt.rx = t.rotation.x; pkt.ry = t.rotation.y; pkt.rz = t.rotation.z;
         pkt.sx = t.scale.x;    pkt.sy = t.scale.y;    pkt.sz = t.scale.z;
-        
         auto* m = ctx.serverRegistry.try_get<MovementComponent>(entity);
         if (m) {
             pkt.vx = m->velocity.x; pkt.vy = m->velocity.y; pkt.vz = m->velocity.z;
         } else {
             pkt.vx = pkt.vy = pkt.vz = 0.f;
         }
-        
         ctx.network.BroadcastToAll(pkt);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Client-side: process server packets
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Polls and processes all incoming packets from the server.
- * @param ctx The scene context.
- */
 void GameScene::PollServerPackets(SceneContext& ctx) {
-    // Identity assignment
     if (!m_IdAssigned) {
         auto idPkt = ctx.network.ReceiveFromServer<PlayerIdAssignPacket>(PacketType::PLAYER_ID_ASSIGN);
         if (idPkt) {
@@ -619,25 +711,18 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         }
     }
 
-    // New entity joins
     while (true) {
         auto pkt = ctx.network.ReceiveFromServer<PlayerJoinedPacket>(PacketType::PLAYER_JOINED);
         if (!pkt) break;
         if (m_ClientNetMap.count(pkt->netId)) continue;
-
         auto entity = ctx.clientRegistry.create();
         ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
         ctx.clientRegistry.emplace<MovementComponent>(entity);
-        ctx.clientRegistry.emplace<PlayerComponent>(entity, pkt->playerId,
-                                                     pkt->playerId == m_MyPlayerId);
+        ctx.clientRegistry.emplace<PlayerComponent>(entity, pkt->playerId, pkt->playerId == m_MyPlayerId);
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         m_ClientNetMap[pkt->netId] = entity;
-
-        spdlog::info("GameScene: client entity created  netId={} playerId={}",
-                     pkt->netId, pkt->playerId);
     }
 
-    // Removed entities
     while (true) {
         auto pkt = ctx.network.ReceiveFromServer<PlayerLeftPacket>(PacketType::PLAYER_LEFT);
         if (!pkt) break;
@@ -648,12 +733,12 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         }
     }
 
-    // Entity state snapshots
     while (true) {
         auto pkt = ctx.network.ReceiveFromServer<EntitySnapshotPacket>(PacketType::ENTITY_SNAPSHOT);
         if (!pkt) break;
         auto it = m_ClientNetMap.find(pkt->netId);
         if (it == m_ClientNetMap.end()) continue;
+        if (ctx.network.IsHosting()) continue;
 
         auto* t = ctx.clientRegistry.try_get<TransformComponent>(it->second);
         auto* m = ctx.clientRegistry.try_get<MovementComponent>(it->second);
@@ -662,71 +747,44 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
             if (auto* p = ctx.clientRegistry.try_get<PlayerComponent>(it->second)) {
                 if (p->isLocal) isLocalPlayer = true;
             }
-
-            // Simple smoothing (Lerp)
-            t->position = glm::lerp(t->position, glm::vec3{pkt->x, pkt->y, pkt->z}, 0.5f);
-            
-            if (!isLocalPlayer) {
-                t->rotation = glm::lerp(t->rotation, glm::vec3{pkt->rx, pkt->ry, pkt->rz}, 0.5f);
-            }
-            
-            t->scale = glm::lerp(t->scale, glm::vec3{pkt->sx, pkt->sy, pkt->sz}, 0.5f);
+            t->position = glm::vec3{pkt->x, pkt->y, pkt->z};
+            if (!isLocalPlayer) t->rotation = glm::vec3{pkt->rx, pkt->ry, pkt->rz};
+            t->scale = glm::vec3{pkt->sx, pkt->sy, pkt->sz};
         }
         if (m) m->velocity = {pkt->vx, pkt->vy, pkt->vz};
     }
 
-    // Asset joins
     while (true) {
         auto pkt = ctx.network.ReceiveFromServer<AssetJoinedPacket>(PacketType::ASSET_JOINED);
         if (!pkt) break;
         if (m_ClientNetMap.count(pkt->netId)) continue;
-
         auto entity = ctx.clientRegistry.create();
         ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         ctx.clientRegistry.emplace<ModelComponent>(entity, std::string(pkt->modelPath));
         m_ClientNetMap[pkt->netId] = entity;
-
-        spdlog::info("GameScene: asset entity created  netId={} path={}",
-                     pkt->netId, pkt->modelPath);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Client-side: send local input
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Sends the local player's input commands to the server.
- * @param ctx The scene context.
- */
 void GameScene::SendLocalInput(SceneContext& ctx) {
     if (!ctx.network.IsConnected() || !Input::IsRelativeMouseMode()) return;
-
     glm::vec3 forward = m_Camera->m_Front;
     forward.y = 0.f;
     if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
-    
     glm::vec3 right = m_Camera->m_Right;
     right.y = 0.f;
     if (glm::length(right) > 0.0001f) right = glm::normalize(right);
-
     glm::vec3 moveDir{0.f};
     if (Input::IsKeyDown(SDLK_W)) moveDir += forward;
     if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
     if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
     if (Input::IsKeyDown(SDLK_D)) moveDir += right;
-    
     if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
     if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
-
     if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
 
     PlayerInputPacket pkt;
-    pkt.dx = moveDir.x;
-    pkt.dy = moveDir.y;
-    pkt.dz = moveDir.z;
-    pkt.yaw = m_Camera->m_Yaw;
-    pkt.pitch = m_Camera->m_Pitch;
+    pkt.dx = moveDir.x; pkt.dy = moveDir.y; pkt.dz = moveDir.z;
+    pkt.yaw = m_Camera->m_Yaw; pkt.pitch = m_Camera->m_Pitch;
     ctx.network.Send(pkt);
 }

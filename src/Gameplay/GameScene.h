@@ -7,7 +7,8 @@
 #include "Scene.h"
 #include "../Graphics/Camera.h"
 #include "../Graphics/GlobalUniforms.h"
-#include "../Core/PhysicsServer.h"
+#include "../Graphics/API/Framebuffer.h"
+#include "../Graphics/API/GPUBuffer.h"
 #include <unordered_map>
 #include <cstdint>
 #include <memory>
@@ -52,11 +53,18 @@ public:
     void OnExit(SceneContext& ctx)  override;
 
     /**
-     * @brief Performs per-frame updates (UI, input, camera).
+     * @brief Performs per-frame logic updates (input, camera).
      * @param ctx The scene context.
      * @param dt Delta time.
      */
-    void FrameUpdate(SceneContext& ctx, float dt) override;
+    void LogicUpdate(SceneContext& ctx, float dt) override;
+
+    /**
+     * @brief Performs per-frame UI updates (ImGui).
+     * @param ctx The scene context.
+     * @param dt Delta time.
+     */
+    void UIUpdate(SceneContext& ctx, float dt) override;
 
     /**
      * @brief Performs fixed-rate updates (networking, physics).
@@ -150,4 +158,35 @@ private:
     uint32_t m_FrameCount = 0;
     /// Whether free-fly camera mode is active.
     bool m_FreeFly = false;
+
+    // --- Shadow Map ---
+    /// Vertex shader for the depth-only shadow pass.
+    std::unique_ptr<Shader> m_ShadowVertShader;
+    /// Fragment shader for the depth-only shadow pass.
+    std::unique_ptr<Shader> m_ShadowFragShader;
+    /// Graphics pipeline for the shadow pass.
+    GraphicsPipeline* m_ShadowPipeline = nullptr;
+    /// Depth-only framebuffer rendered from the sun's perspective.
+    std::unique_ptr<Framebuffer> m_ShadowMap;
+    /// GPU buffer holding only the sunVP matrix for the shadow pass.
+    std::unique_ptr<GPUBuffer> m_ShadowUBO;
+
+
+    // Sonnenlicht — schräg von oben (Mittag, leicht südwestlich)
+    glm::vec3 m_SunDirection     = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
+    glm::vec3 m_SunColor         = {1.0f, 0.97f, 0.88f};  // warmes Tageslicht
+    float     m_SunIntensity     = 1.0f;
+
+    // Ambient — bläuliches Himmelslicht, Schatten nicht pechschwarz
+    glm::vec3 m_AmbientColor     = {0.45f, 0.60f, 0.90f};
+    float     m_AmbientIntensity = 0.25f;
+
+    // Shadow tuning — adjustable at runtime via the "Shadow Debug" ImGui window.
+    float m_ShadowBiasConstant = 0.1f;  ///< Uniform depth offset (world-unit scale)
+    float m_ShadowBiasSlope    = 0.25f; ///< Extra offset for grazing-angle surfaces
+    float m_ShadowOrthoSize    = 40.0f; ///< Half-size of the orthographic shadow frustum
+
+    // Cached values to detect when the shadow pipeline needs to be rebuilt
+    float m_LastShadowBiasConstant = -1.0f;
+    float m_LastShadowBiasSlope    = -1.0f;
 };
