@@ -13,6 +13,15 @@
 #include "Events/KeyEvent.h"
 #include "Events/MouseEvent.h"
 #include "Events/WindowEvent.h"
+
+// Windows headers (pulled in transitively via enet/winsock) define macros that
+// clash with our own method names. Undefine them after all includes.
+#ifdef CreateWindow
+#  undef CreateWindow
+#endif
+#ifdef PlaySound
+#  undef PlaySound
+#endif
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <spdlog/spdlog.h>
@@ -38,6 +47,10 @@ Application::Application() {
     AssetManager::Init(m_Renderer->GetDevice());
 
     m_Physics.Init();
+    // NOTE: The flat AddStaticFloor() below acts as a global safety net for
+    // scenes that do not register their own mesh collision (e.g. MainMenuScene).
+    // GameScene::LoadSceneMeshCollision() provides accurate per-mesh collision
+    // for gameplay levels and is called from GameScene::OnEnter().
     m_Physics.AddStaticFloor();
     m_Physics.GetSystem().OptimizeBroadPhase();
     spdlog::info("Physics initialized");

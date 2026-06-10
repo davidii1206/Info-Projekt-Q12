@@ -13,7 +13,13 @@
 #include "../Networking/Packets.h"
 #include "../Core/Input.h"
 #include "../Core/AssetManager.h"
+#include "../Core/MeshCollisionBuilder.h"
 #include "../Graphics/Renderer.h"
+#include "ResourceTypes.h"
+#include "ResourceHUD.h"
+#include "FogOfWar.h"
+#include "TerritorySystem.h"
+#include "HUDTextureRegistry.h"
 #include "../Graphics/API/Shader.h"
 #include "../Graphics/API/GraphicsPipeline.h"
 #include "../Graphics/API/Framebuffer.h"
@@ -50,6 +56,38 @@ void GameScene::OnEnter(SceneContext& ctx) {
     }
 
     if (ctx.network.IsHosting()) {
+        /**
+         * @brief Load the scene's mesh geometry as static physics collision.
+         *
+         * This replaces the flat AddStaticFloor() placeholder with accurate
+         * per-triangle collision derived from the actual GLTF scene mesh.
+         * The same asset path used for visual rendering is reused here —
+         * AssetManager returns cached CPU-side vertices/indices at no extra
+         * file-IO cost.
+         */
+        LoadSceneMeshCollision(ctx, "assets/test_scene_pixelation.glb");
+
+        // Initialize resource system
+        m_ResourceManager.Init();
+        m_ResourceManager.SpawnPermanentResources(ctx.serverRegistry);
+
+        // Demo: spawn a Fleisch drop that disappears after 15 s
+        m_ResourceManager.SpawnMeatDrop(ctx.serverRegistry,
+                                        glm::vec3{0.f, 0.f, 3.f},
+                                        /*amount=*/2,
+                                        /*dropLifetime=*/15.f);
+
+        // Fog of War – initialise grid to match the map extents
+        m_Fog.Init(glm::vec3{-50.f, 0.f, -50.f},
+                   glm::vec3{ 50.f, 0.f,  50.f},
+                   /*cellSize=*/2.f);
+
+        // Territory zones
+        TerritorySystem::SpawnZones(ctx.serverRegistry);
+
+        // HUD-Texturen laden (Pixel-Art-Icons des HUD-Designers)
+        HUDTextures::Load(ctx.renderer->GetDevice());
+
         /**
          * @brief Spawn a networked asset for testing purposes.
          */
@@ -95,6 +133,15 @@ void GameScene::OnExit(SceneContext& ctx) {
                 ctx.physics->RemoveBody(body.handle);
             }
         }
+
+        // Remove static mesh collision bodies
+        if (ctx.physics) {
+            for (auto& meshBody : m_MeshCollisionBodies) {
+                if (meshBody.IsValid())
+                    ctx.physics->RemoveBody(meshBody);
+            }
+        }
+        m_MeshCollisionBodies.clear();
     }
 
     ctx.serverRegistry.clear();
@@ -108,6 +155,12 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_MyNetId       = 0;
     m_IdAssigned    = false;
     m_SnapAccum     = 0.f;
+
+    // Reset fog grid for next session
+    m_Fog.Reset();
+
+    // HUD-Texturen freigeben
+    HUDTextures::Unload();
 
     ctx.world->ClearPhysicsState();
     
@@ -512,6 +565,37 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     }
     ImGui::End();
 
+    // Resource stockpile HUD (top-right overlay) – always visible on host.
+    if (ctx.network.IsHosting()) {
+        ResourceHUD::Draw(ctx.serverRegistry, /*teamId=*/0);
+    }
+
+    // Map overlay (Fog of War + Territory zones) – toggled by button.
+    if (ctx.network.IsHosting()) {
+        // Toggle button lives in the existing "Game" window – reopen it briefly.
+        ImGui::Begin("Game");
+        if (ImGui::Button(m_ShowMapOverlay ? "Karte schliessen" : "Karte [M]"))
+            m_ShowMapOverlay = !m_ShowMapOverlay;
+        ImGui::End();
+
+        // Keyboard shortcut M
+        if (ImGui::IsKeyPressed(ImGuiKey_M))
+            m_ShowMapOverlay = !m_ShowMapOverlay;
+
+        if (m_ShowMapOverlay) {
+            ImGuiIO& io = ImGui::GetIO();
+            FogOfWarSystem::DrawOverlay(m_Fog,
+                ImVec2(0.f, 0.f),
+                ImVec2(io.DisplaySize.x, io.DisplaySize.y));
+            TerritorySystem::DrawOverlay(
+                ctx.serverRegistry,
+                ImVec2(0.f, 0.f),
+                ImVec2(io.DisplaySize.x, io.DisplaySize.y),
+                glm::vec2{-50.f, -50.f},
+                glm::vec2{ 50.f,  50.f});
+        }
+    }
+
     ImGui::Begin("Shadow Debug");
     ImGui::SliderFloat("Bias Constant", &m_ShadowBiasConstant, 0.0f, 10.0f);
     ImGui::SliderFloat("Bias Slope", &m_ShadowBiasSlope, 0.0f, 10.0f);
@@ -573,6 +657,10 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
 
     if (ctx.network.IsHosting()) {
         Systems::MovementSystem(ctx.serverRegistry, dt);
+        m_ResourceManager.Update(ctx.serverRegistry, dt);
+        ResourceSystem::Update(ctx.serverRegistry, m_ResourceManager, dt);
+        FogOfWarSystem::Update(m_Fog, ctx.serverRegistry);
+        TerritorySystem::Update(ctx.serverRegistry, dt);
     }
 
     SendLocalInput(ctx);
@@ -787,4 +875,84 @@ void GameScene::SendLocalInput(SceneContext& ctx) {
     pkt.dx = moveDir.x; pkt.dy = moveDir.y; pkt.dz = moveDir.z;
     pkt.yaw = m_Camera->m_Yaw; pkt.pitch = m_Camera->m_Pitch;
     ctx.network.Send(pkt);
+}
+
+// ---------------------------------------------------------------------------
+// Mesh Collision
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Loads scene geometry as static Jolt MeshShape collision bodies.
+ *
+ * Workflow:
+ *  1. Load (or retrieve from cache) the GLTF scene via AssetManager.
+ *  2. Extract CPU-side vertices + indices from the cached SceneData.
+ *  3. Build a Jolt MeshShape using MeshCollisionBuilder.
+ *  4. Register the resulting body with the PhysicsServer.
+ *  5. Store the handle in m_MeshCollisionBodies for cleanup on OnExit().
+ *
+ * The function logs a warning and returns gracefully if the physics server
+ * is unavailable, the asset fails to load, or the shape cannot be created.
+ *
+ * @param ctx       Scene context providing access to the PhysicsServer.
+ * @param glbPath   Path to the .glb file whose geometry is used for collision.
+ * @param transform Optional world-space transform baked into the shape vertices.
+ */
+void GameScene::LoadSceneMeshCollision(
+    SceneContext&      ctx,
+    const std::string& glbPath,
+    const glm::mat4&   transform)
+{
+    if (!ctx.physics) {
+        spdlog::warn("GameScene::LoadSceneMeshCollision: no PhysicsServer available.");
+        return;
+    }
+
+    // 1. Load (or retrieve cached) GLTF scene data including CPU vertices/indices.
+    SceneData sceneData = AssetManager::LoadGLTF(glbPath);
+    if (!sceneData.model) {
+        spdlog::error("GameScene::LoadSceneMeshCollision: failed to load '{}'", glbPath);
+        return;
+    }
+
+    if (sceneData.cpuVertices.empty() || sceneData.cpuIndices.empty()) {
+        spdlog::error("GameScene::LoadSceneMeshCollision: '{}' has no CPU mesh data.", glbPath);
+        return;
+    }
+
+    spdlog::info("GameScene::LoadSceneMeshCollision: building mesh shape for '{}' "
+                 "({} vertices, {} indices)",
+                 glbPath,
+                 sceneData.cpuVertices.size(),
+                 sceneData.cpuIndices.size());
+
+    // 2. Build the Jolt MeshShape from CPU geometry.
+    JPH::Shape::ShapeResult result = MeshCollisionBuilder::Build(
+        sceneData.cpuVertices,
+        sceneData.cpuIndices,
+        transform
+    );
+
+    if (!result.IsValid()) {
+        spdlog::error("GameScene::LoadSceneMeshCollision: MeshShape creation failed for '{}': {}",
+                      glbPath, result.GetError().c_str());
+        return;
+    }
+
+    // 3. Register the static mesh body with the physics server.
+    PhysicsBodyHandle handle = ctx.physics->AddStaticMesh(
+        result.Get(),
+        JPH::RVec3::sZero(),
+        JPH::Quat::sIdentity()
+    );
+
+    if (!handle.IsValid()) {
+        spdlog::error("GameScene::LoadSceneMeshCollision: AddStaticMesh failed for '{}'", glbPath);
+        return;
+    }
+
+    // 4. Store for later cleanup.
+    m_MeshCollisionBodies.push_back(handle);
+
+    spdlog::info("GameScene::LoadSceneMeshCollision: mesh collision active for '{}'", glbPath);
 }

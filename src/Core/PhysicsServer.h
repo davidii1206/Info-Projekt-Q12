@@ -11,6 +11,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Collision/Shape/Shape.h>
 
 #include <memory>
 #include <vector>
@@ -136,6 +137,29 @@ public:
         JPH::RVec3 position,
         JPH::Vec3  halfExtents,
         JPH::Quat  rotation = JPH::Quat::sIdentity());
+
+    /**
+     * @brief Adds a static body using an arbitrary pre-built Jolt Shape.
+     *
+     * This is the primary entry point for mesh collision: build a MeshShape via
+     * MeshCollisionBuilder::Build(), then pass the result here.
+     *
+     * @code
+     *   auto result = MeshCollisionBuilder::Build(verts, inds, transform);
+     *   if (result.IsValid())
+     *       physics->AddStaticMesh(result.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity());
+     * @endcode
+     *
+     * @param shape    A validated Jolt RefConst<Shape> (e.g. from MeshShape::Create()).
+     * @param position World-space origin of the body (usually RVec3::sZero() for scenes
+     *                 where the transform is already baked into the shape vertices).
+     * @param rotation World-space rotation quaternion.
+     * @return PhysicsBodyHandle Handle to the created body, or an invalid handle on failure.
+     */
+    PhysicsBodyHandle AddStaticMesh(
+        JPH::RefConst<JPH::Shape> shape,
+        JPH::RVec3                position = JPH::RVec3::sZero(),
+        JPH::Quat                 rotation = JPH::Quat::sIdentity());
 
     /**
      * @brief Adds a dynamic box linked to an entity.

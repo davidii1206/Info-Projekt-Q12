@@ -4,6 +4,14 @@
 #include "../Core/Timer.h"
 #include <spdlog/spdlog.h>
 
+// Windows-Header (indirekt über enet/winsock) definieren Makros,
+// die mit unseren eigenen Methodennamen kollidiert. Diese werden
+// nach allen Includes undefiniert.
+
+#ifdef PlaySound
+#  undef PlaySound
+#endif
+
 GameLayer::GameLayer(PhysicsServer* physics, NetworkManager* network, Renderer* renderer, Timer* timer)
     : Layer("GameLayer"), m_Physics(physics), m_Network(network), m_Renderer(renderer), m_Timer(timer)
 {

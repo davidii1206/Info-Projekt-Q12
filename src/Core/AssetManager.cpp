@@ -332,7 +332,7 @@ SceneData AssetManager::LoadGLTF(const std::string& filePath) {
     for (int nodeIndex : scene.nodes) ProcessNode(ctx, nodeIndex, glm::mat4(1.0f));
 
     auto model = std::make_shared<Model>(s_Device, vertices, indices, sections, materials);
-    SceneData sceneData = { model, lights, meshInstances };
+    SceneData sceneData = { model, lights, meshInstances, vertices, indices };
     s_Scenes[filePath] = sceneData;
     spdlog::info("Scene loaded successfully: {} ({} vertices, {} indices, {} lights, {} meshes)", filePath, (uint32_t)vertices.size(), (uint32_t)indices.size(), (uint32_t)lights.size(), (uint32_t)meshInstances.size());
     return sceneData;

@@ -103,3 +103,9 @@ struct EntityIDComponent {
 //   registry.emplace<LightComponent>(e,
 //       LightType::Point, glm::vec3{1,0.8f,0.4f}, 4.0f, 15.0f);
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Resource / Collector components — see ResourceTypes.h for full definitions.
+// Included here so all ECS users get them transitively via Components.h.
+// ---------------------------------------------------------------------------
+#include "ResourceTypes.h"

@@ -26,11 +26,21 @@ struct MeshInstance {
 /**
  * @struct SceneData
  * @brief Container for models, lights, and mesh instances loaded from a GLTF file.
+ *
+ * cpuVertices / cpuIndices retain the raw CPU-side geometry so that callers can
+ * build physics mesh shapes without re-parsing the file.  They are populated by
+ * LoadGLTF() and cached alongside the GPU model.  Pass them to
+ * MeshCollisionBuilder::Build() to create a Jolt MeshShape for static collision.
  */
 struct SceneData {
     std::shared_ptr<Model> model; ///< Shared pointer to the loaded Model.
     std::vector<Light> lights;    ///< List of lights found in the scene.
     std::vector<MeshInstance> meshInstances; ///< List of mesh instances in the scene.
+
+    /// CPU-seitige Vertex-Positionen - für die Konstruktion der physikalischen Mesh-Shapes beibehalten.
+    std::vector<ModelVertex> cpuVertices;
+    /// CPU-seitige Triangle-Indices - für die Konstruktion der physikalischen Mesh-Shapes beibehalten.
+    std::vector<uint32_t>    cpuIndices;
 };
 
 /**

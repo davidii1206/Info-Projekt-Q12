@@ -13,6 +13,7 @@
 // Shapes
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 
 // Body creation
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -357,6 +358,38 @@ void PhysicsServer::Shutdown()
 
     std::cout << "[PhysicsServer] Shutdown — "
               << mStepCount << " steps simulated.\n";
+}
+
+PhysicsBodyHandle PhysicsServer::AddStaticMesh(
+    RefConst<Shape> shape, RVec3 position, Quat rotation)
+{
+    if (!shape)
+    {
+        std::cerr << "[PhysicsServer] AddStaticMesh: null shape provided\n";
+        return {};
+    }
+
+    BodyInterface& bi = mPhysicsSystem->GetBodyInterface();
+
+    BodyCreationSettings bcs(
+        shape,
+        position,
+        rotation,
+        EMotionType::Static,
+        ObjectLayers::STATIC
+    );
+
+    BodyID id = bi.CreateAndAddBody(bcs, EActivation::DontActivate);
+    if (id.IsInvalid())
+    {
+        std::cerr << "[PhysicsServer] AddStaticMesh: body creation failed "
+                     "(body budget exhausted?)\n";
+        return {};
+    }
+
+    std::cout << "[PhysicsServer] AddStaticMesh: added mesh body id="
+              << id.GetIndex() << "\n";
+    return PhysicsBodyHandle{ id };
 }
 
 PhysicsBodyHandle PhysicsServer::AddStaticFloor(RVec3 centre, float halfExtentX, float halfExtentZ)

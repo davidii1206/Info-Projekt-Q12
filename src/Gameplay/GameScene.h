@@ -9,7 +9,15 @@
 #include "../Graphics/GlobalUniforms.h"
 #include "../Graphics/API/Framebuffer.h"
 #include "../Graphics/API/GPUBuffer.h"
+#include "../Core/PhysicsServer.h"
+#include "ResourceManager.h"
+#include "ResourceSystem.h"
+#include "ResourceHUD.h"
+#include "FogOfWar.h"
+#include "TerritorySystem.h"
+#include "HUDTextureRegistry.h"
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 #include <memory>
 
@@ -117,6 +125,37 @@ private:
      * @param pos Initial position.
      */
     void SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos);
+
+    /**
+     * @brief Loads the scene GLTF and registers its geometry as static mesh collision.
+     *
+     * Called once from OnEnter() on the server.  Extracts the CPU-side vertex/index
+     * data from AssetManager (cached from the same LoadGLTF call used for rendering)
+     * and passes it to MeshCollisionBuilder + PhysicsServer::AddStaticMesh().
+     *
+     * @param ctx     The scene context (provides access to physics).
+     * @param glbPath Path to the .glb scene file (same as the visual model path).
+     * @param transform Optional world transform to bake into the physics vertices.
+     *                  Defaults to identity (no transform).
+     */
+    void LoadSceneMeshCollision(
+        SceneContext&     ctx,
+        const std::string& glbPath,
+        const glm::mat4&   transform = glm::mat4(1.f));
+
+    /// Handles for static mesh collision bodies (scene geometry).
+    /// Stored so they can be removed on OnExit().
+    std::vector<PhysicsBodyHandle> m_MeshCollisionBodies;
+
+    /// Server-side resource manager: owns spawn points, depletion, respawn.
+    ResourceManager m_ResourceManager;
+
+    /// Fog of War grid – tracks which map cells have been explored.
+    FogGrid m_Fog;
+
+    /// Whether the map overlay (Fog + Territory) is currently visible.
+    /// Toggled by the "Karte" button in the Game window.
+    bool m_ShowMapOverlay = false;
 
     // --- Server state ---
     /// ID for the next networked entity.
