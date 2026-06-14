@@ -143,6 +143,34 @@ private:
         const std::string& glbPath,
         const glm::mat4&   transform = glm::mat4(1.f));
 
+    // -----------------------------------------------------------------------
+    // Gameplay systems
+    // -----------------------------------------------------------------------
+
+    /** @brief Spawns a unit entity on the server and broadcasts to clients. */
+    void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, float hp = 100.f);
+
+    /** @brief Server: pick a random territory spawn point for a team. */
+    glm::vec3 RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId);
+
+    /** @brief Server tick: auto-combat – units attack nearest enemies. */
+    void UpdateCombat(SceneContext& ctx, float dt);
+
+    /** @brief Server tick: move units toward their commander order destination. */
+    void UpdateUnitMovement(SceneContext& ctx, float dt);
+
+    /** @brief Server tick: check win condition (all enemy bases destroyed). */
+    void CheckWinCondition(SceneContext& ctx);
+
+    /** @brief Handle death of a unit: drop resource, broadcast, remove. */
+    void HandleUnitDeath(SceneContext& ctx, entt::entity entity, uint32_t netId);
+
+    /** @brief Commander: unproject screen pos to XZ plane in world space. */
+    glm::vec3 ScreenToWorldXZ(float sx, float sy, int winW, int winH);
+
+    /** @brief Draw HP bars above units via ImGui overlay. */
+    void DrawUnitHPBars(SceneContext& ctx);
+
     /// Handles for static mesh collision bodies (scene geometry).
     /// Stored so they can be removed on OnExit().
     std::vector<PhysicsBodyHandle> m_MeshCollisionBodies;
@@ -156,6 +184,23 @@ private:
     /// Whether the map overlay (Fog + Territory) is currently visible.
     /// Toggled by the "Karte" button in the Game window.
     bool m_ShowMapOverlay = false;
+
+    // --- Commander / Camera Mode ---
+    /// true = top-down Commander view; false = 1st-person Exploring view.
+    bool m_CommanderMode = false;
+    /// Stored 1st-person camera position to restore when leaving Commander.
+    glm::vec3 m_SavedCamPos{0.f};
+    float     m_SavedCamYaw   = 0.f;
+    float     m_SavedCamPitch = 0.f;
+    /// Commander camera height above ground.
+    float m_CmdHeight = 40.f;
+
+    // --- Unit system ---
+    /// Network IDs of units currently selected by this client's Commander.
+    std::vector<uint32_t> m_SelectedUnits;
+    /// Whether the game has ended.
+    bool     m_GameOver      = false;
+    uint32_t m_WinnerTeam    = 0xFFFFFFFFu;
 
     // --- Server state ---
     /// ID for the next networked entity.

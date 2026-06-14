@@ -109,3 +109,66 @@ struct EntityIDComponent {
 // Included here so all ECS users get them transitively via Components.h.
 // ---------------------------------------------------------------------------
 #include "ResourceTypes.h"
+
+// ---------------------------------------------------------------------------
+// Unit / Combat Components
+// ---------------------------------------------------------------------------
+
+#include "Bug_classes.h"
+
+/**
+ * @struct UnitComponent
+ * @brief Tags an entity as a controllable unit belonging to a team.
+ */
+struct UnitComponent {
+    uint32_t teamId   = 0;                    ///< Owning team.
+    BugClass bugClass = BugClass::Ants;       ///< Unit type / faction.
+    bool     selected = false;                ///< Currently selected by Commander.
+};
+
+/**
+ * @struct HealthComponent
+ * @brief Tracks hit points for any entity that can take damage.
+ */
+struct HealthComponent {
+    float hp    = 100.f; ///< Current hit points.
+    float maxHp = 100.f; ///< Maximum hit points.
+    bool  dead  = false; ///< True once hp <= 0.
+
+    HealthComponent() = default;
+    explicit HealthComponent(float max) : hp(max), maxHp(max) {}
+};
+
+/**
+ * @struct CombatComponent
+ * @brief Stores attack parameters for a unit.
+ *
+ * Damage scales by BugClass: carnivores deal more, omnivores medium, rest low.
+ */
+struct CombatComponent {
+    float attackRange    = 5.f;   ///< Max distance to auto-attack an enemy.
+    float attackDamage   = 10.f;  ///< Base damage per hit.
+    float attackCooldown = 0.f;   ///< Remaining seconds until next attack.
+    float attackRate     = 1.5f;  ///< Seconds between attacks.
+    entt::entity target  = entt::null; ///< Current attack target (server).
+};
+
+/**
+ * @struct MovementOrderComponent
+ * @brief Carries a Commander-issued move order (right-click destination).
+ */
+struct MovementOrderComponent {
+    glm::vec3 destination{0.f}; ///< World position to move towards.
+    bool      active = false;   ///< Whether an order is pending.
+};
+
+/**
+ * @struct BaseHealthComponent
+ * @brief Marks an entity as a team base with health (destroyable).
+ */
+struct BaseHealthComponent {
+    uint32_t teamId = 0;
+    float    hp     = 500.f;
+    float    maxHp  = 500.f;
+    bool     destroyed = false;
+};

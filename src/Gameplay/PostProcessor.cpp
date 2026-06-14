@@ -76,7 +76,17 @@ void PostProcessor::BeginFrame(Renderer* renderer) {
     if (lowH == 0) lowH = 1;
 
     if (!m_GBuffer || m_GBuffer->GetWidth() != lowW || m_GBuffer->GetHeight() != lowH) {
-        m_GBuffer = std::make_unique<Framebuffer>(renderer->GetDevice(), lowW, lowH, m_GBufferFormats, true);
+        renderer->FlushAndWait();
+
+        m_GBuffer = std::make_unique<Framebuffer>(
+            renderer->GetDevice(),
+            lowW,
+            lowH,
+            m_GBufferFormats,
+            true
+        );
+        renderer->RestartImGuiFrame();
+
         spdlog::info("PostProcessor: Resized G-Buffer to {}x{}", lowW, lowH);
     }
     renderer->SetGBuffer(m_GBuffer.get());
@@ -125,7 +135,7 @@ void PostProcessor::EndFrame(Renderer* renderer) {
         ctx.PushFragmentConstants(0, &pc, sizeof(PostPC));
 
         ctx.Draw(3); // Fullscreen triangle
-    }, false); 
+    }, false);
 }
 
 /**
@@ -133,8 +143,22 @@ void PostProcessor::EndFrame(Renderer* renderer) {
  */
 void PostProcessor::OnImGui() {
     ImGui::Begin("Post-Processing Settings");
-    
-    ImGui::SliderInt("Pixel Size", &m_DownscaleFactor, 1, 8);
+
+    // 1. Temporäre statische Variable für das flüssige Ziehen im UI
+    static int visualScale = m_DownscaleFactor;
+
+    // 2. Der Slider modifiziert nur den visuellen Wert (kein FPS-Drop beim Ziehen!)
+    ImGui::SliderInt("Pixel Size", &visualScale, 1, 8);
+
+    // 3. ERST WENN DER USER LOSLÄSST: Den echten Wert übernehmen und das Resize triggern
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        m_DownscaleFactor = visualScale;
+    }
+    // 4. Synchronisation: Wenn der Slider nicht aktiv ist, halten wir ihn synchron mit dem echten Wert
+    else if (!ImGui::IsItemActive()) {
+        visualScale = m_DownscaleFactor;
+    }
+
     ImGui::SliderFloat("Normal Edge Strength", &m_NormalThreshold, 0.0f, 1.0f);
     ImGui::SliderFloat("Depth Edge Strength", &m_DepthThreshold, 0.0f, 1.0f);
     ImGui::SliderFloat("Posterize Steps", &m_PosterizeSteps, 1.0f, 16.0f);

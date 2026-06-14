@@ -43,11 +43,44 @@ public:
     bool BeginFrame();
 
     /**
+     * @brief Submits any open command buffer and waits for the GPU to become idle.
+     *
+     * Call this before destroying GPU resources (textures, framebuffers) that may
+     * still be referenced by a previously-submitted or currently-recording command
+     * buffer.  Safe to call whether or not a frame is currently in progress.
+     *
+     * Wenn mitten in einem Frame aufgerufen (nach BeginFrame(), vor EndFrame()),
+     * schliesst diese Methode auch den aktiven ImGui-Frame via ImGui::EndFrame(),
+     * damit das naechste BeginFrame() -> ImGui::NewFrame() nicht die Assertion
+     * "Forgot to call Render() or EndFrame() at the end of the previous frame?"
+     * ausloest.  Dies passiert z.B. beim G-Buffer-Resize im PostProcessor.
+     */
+    void FlushAndWait();
+
+    /**
+     * @brief Restarts an ImGui frame after FlushAndWait() has closed one mid-frame.
+     *
+     * PostProcessor::BeginFrame() calls FlushAndWait() when the G-Buffer needs to be
+     * (re-)created.  That call closes the active ImGui frame via ImGui::EndFrame().
+     * Any subsequent ImGui::Begin() / ImGui::End() calls in the same Application::Run()
+     * iteration (e.g. from scene UIUpdate()) would then fire the assertion
+     * "g.WithinFrameScope" because no matching ImGui::NewFrame() has been issued yet.
+     *
+     * Call this method immediately after FlushAndWait() whenever you intend to keep
+     * recording ImGui commands in the same frame.  It re-issues ImGui_ImplSDLGPU3_NewFrame,
+     * ImGui_ImplSDL3_NewFrame, and ImGui::NewFrame() and marks m_ImGuiFrameActive = true.
+     *
+     * Note: you do NOT need to call BeginFrame() again – that would also try to acquire a
+     * new command buffer and swapchain texture.  This helper only restores the ImGui state.
+     */
+    void RestartImGuiFrame();
+
+    /**
      * @brief Updates the global uniforms for the current frame.
      * @param uniforms The updated GlobalUniforms structure.
      */
     void UpdateGlobalUniforms(const GlobalUniforms& uniforms);
-    
+
     /**
      * @brief Executes the frame graph, renders UI, and submits the command buffer.
      */
@@ -122,4 +155,14 @@ private:
     std::unique_ptr<GPUBuffer> m_GlobalUBO; /**< GPU buffer for global uniforms. */
     GlobalUniforms m_GlobalUniforms{}; /**< Local copy of global uniforms. */
     Framebuffer* m_CurrentGBuffer = nullptr; /**< Pointer to the current G-Buffer. */
+
+    /**
+     * @brief Verfolgt ob ImGui::NewFrame() ohne passendes ImGui::EndFrame()/Render() aufgerufen wurde.
+     *
+     * FlushAndWait() nutzt dieses Flag um ImGui::EndFrame() aufzurufen, wenn es
+     * einen Frame mitten im Render unterbricht (z.B. beim G-Buffer-Resize),
+     * und verhindert so die ImGui-Assertion
+     * "Forgot to call Render() or EndFrame() at the end of the previous frame?".
+     */
+    bool m_ImGuiFrameActive = false;
 };

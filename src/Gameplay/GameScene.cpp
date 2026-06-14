@@ -32,6 +32,8 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/compatibility.hpp>
 #include <cstring>
+#include <random>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -87,6 +89,35 @@ void GameScene::OnEnter(SceneContext& ctx) {
 
         // HUD-Texturen laden (Pixel-Art-Icons des HUD-Designers)
         HUDTextures::Load(ctx.renderer->GetDevice());
+
+        // -----------------------------------------------------------------
+        // Spawn team bases (destroyable structures)
+        // -----------------------------------------------------------------
+        auto spawnBase = [&](uint32_t team, glm::vec3 pos) {
+            auto e = ctx.serverRegistry.create();
+            ctx.serverRegistry.emplace<TransformComponent>(e, pos);
+            ctx.serverRegistry.emplace<BaseComponent>(e, team);
+            ctx.serverRegistry.emplace<BaseHealthComponent>(e,
+                BaseHealthComponent{team, 500.f, 500.f, false});
+            ctx.serverRegistry.emplace<NetworkedComponent>(e, m_NextNetId);
+            ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
+            m_ServerNetMap[m_NextNetId] = e;
+            AssetJoinedPacket bp;
+            bp.netId = m_NextNetId++;
+            std::strncpy(bp.modelPath, "assets/cube.glb", sizeof(bp.modelPath)-1);
+            bp.x = pos.x; bp.y = pos.y; bp.z = pos.z;
+            ctx.network.BroadcastToAll(bp);
+        };
+        spawnBase(0, glm::vec3{-30.f, 0.f,  0.f}); // Team 0 base
+        spawnBase(1, glm::vec3{ 30.f, 0.f,  0.f}); // Team 1 base
+
+        // -----------------------------------------------------------------
+        // Spawn a few demo units per team so the system runs immediately
+        // -----------------------------------------------------------------
+        for (int i = 0; i < 3; i++) {
+            SpawnUnit(ctx, 0, glm::vec3{-20.f + i * 3.f, 0.f,  5.f});
+            SpawnUnit(ctx, 1, glm::vec3{ 20.f - i * 3.f, 0.f, -5.f});
+        }
 
         /**
          * @brief Spawn a networked asset for testing purposes.
@@ -155,6 +186,10 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_MyNetId       = 0;
     m_IdAssigned    = false;
     m_SnapAccum     = 0.f;
+    m_SelectedUnits.clear();
+    m_GameOver      = false;
+    m_WinnerTeam    = 0xFFFFFFFFu;
+    m_CommanderMode = false;
 
     // Reset fog grid for next session
     m_Fog.Reset();
@@ -475,87 +510,217 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         return;
     }
 
-    if (Input::IsKeyPressed(SDLK_F1)) {
-        m_FreeFly = !m_FreeFly;
-        spdlog::info("Control Mode: {}", m_FreeFly ? "Free Fly" : "Player");
-        Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
-    }
-
-    if (Input::IsKeyPressed(SDLK_F2)) {
-        bool newState = !Input::IsRelativeMouseMode();
-        Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
-        spdlog::info("Mouse Capture: {}", newState ? "On" : "Off");
-    }
-
-    if (Input::IsRelativeMouseMode()) {
-        glm::vec2 delta = Input::GetMouseDelta();
-        m_Camera->Rotate(delta.x, delta.y);
-
-        if (m_FreeFly) {
-            if (Input::IsKeyDown(SDLK_W)) m_Camera->MoveForward(dt);
-            if (Input::IsKeyDown(SDLK_S)) m_Camera->MoveBackward(dt);
-            if (Input::IsKeyDown(SDLK_A)) m_Camera->MoveLeft(dt);
-            if (Input::IsKeyDown(SDLK_D)) m_Camera->MoveRight(dt);
-            if (Input::IsKeyDown(SDLK_SPACE)) m_Camera->MoveUp(dt);
-            if (Input::IsKeyDown(SDLK_LSHIFT)) m_Camera->MoveDown(dt);
+    // ------------------------------------------------------------------
+    // TAB: toggle Exploring (1st-person) ↔ Commander (top-down)
+    // ------------------------------------------------------------------
+    if (Input::IsKeyPressed(SDLK_TAB)) {
+        m_CommanderMode = !m_CommanderMode;
+        if (m_CommanderMode) {
+            // Save FPS camera state
+            m_SavedCamPos   = m_Camera->m_Position;
+            m_SavedCamYaw   = m_Camera->m_Yaw;
+            m_SavedCamPitch = m_Camera->m_Pitch;
+            // Switch to top-down view
+            m_Camera->m_Pitch = -89.f;
+            m_Camera->m_Yaw   = -90.f;
+            m_Camera->m_Position = glm::vec3(m_SavedCamPos.x, m_CmdHeight, m_SavedCamPos.z);
+            m_Camera->UpdateVectors();
+            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, false);
+            spdlog::info("GameScene: switched to Commander mode");
         } else {
-            if (m_IdAssigned) {
-                auto view = ctx.clientRegistry.view<PlayerComponent, TransformComponent, MovementComponent>();
-                for (auto entity : view) {
-                    auto& p = view.get<PlayerComponent>(entity);
-                    if (p.isLocal) {
-                        auto& tf = view.get<TransformComponent>(entity);
-                        auto& mv = view.get<MovementComponent>(entity);
+            // Restore FPS camera
+            m_Camera->m_Position = m_SavedCamPos;
+            m_Camera->m_Yaw      = m_SavedCamYaw;
+            m_Camera->m_Pitch    = m_SavedCamPitch;
+            m_Camera->UpdateVectors();
+            spdlog::info("GameScene: switched to Exploring mode");
+        }
+    }
 
-                        glm::vec3 forward = m_Camera->m_Front;
-                        forward.y = 0.f;
-                        if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
-                        glm::vec3 right = m_Camera->m_Right;
-                        right.y = 0.f;
-                        if (glm::length(right) > 0.0001f) right = glm::normalize(right);
+    if (!m_CommanderMode) {
+        // ------------------------------------------------------------------
+        // Exploring / 1st-Person mode
+        // ------------------------------------------------------------------
+        if (Input::IsKeyPressed(SDLK_F1)) {
+            m_FreeFly = !m_FreeFly;
+            spdlog::info("Control Mode: {}", m_FreeFly ? "Free Fly" : "Player");
+            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
+        }
 
-                        glm::vec3 moveDir{0.f};
-                        if (Input::IsKeyDown(SDLK_W)) moveDir += forward;
-                        if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
-                        if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
-                        if (Input::IsKeyDown(SDLK_D)) moveDir += right;
+        if (Input::IsKeyPressed(SDLK_F2)) {
+            bool newState = !Input::IsRelativeMouseMode();
+            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
+            spdlog::info("Mouse Capture: {}", newState ? "On" : "Off");
+        }
 
-                        if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
-                        if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
+        if (Input::IsRelativeMouseMode()) {
+            glm::vec2 delta = Input::GetMouseDelta();
+            m_Camera->Rotate(delta.x, delta.y);
 
-                        if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
-                        mv.velocity = moveDir * mv.speed;
-                        tf.position += mv.velocity * dt;
+            if (m_FreeFly) {
+                if (Input::IsKeyDown(SDLK_W)) m_Camera->MoveForward(dt);
+                if (Input::IsKeyDown(SDLK_S)) m_Camera->MoveBackward(dt);
+                if (Input::IsKeyDown(SDLK_A)) m_Camera->MoveLeft(dt);
+                if (Input::IsKeyDown(SDLK_D)) m_Camera->MoveRight(dt);
+                if (Input::IsKeyDown(SDLK_SPACE)) m_Camera->MoveUp(dt);
+                if (Input::IsKeyDown(SDLK_LSHIFT)) m_Camera->MoveDown(dt);
+            } else {
+                if (m_IdAssigned) {
+                    auto view = ctx.clientRegistry.view<PlayerComponent, TransformComponent, MovementComponent>();
+                    for (auto entity : view) {
+                        auto& p = view.get<PlayerComponent>(entity);
+                        if (p.isLocal) {
+                            auto& tf = view.get<TransformComponent>(entity);
+                            auto& mv = view.get<MovementComponent>(entity);
 
-                        m_Camera->m_Position = tf.position + glm::vec3(0, 2, 0);
-                        
-                        tf.rotation.y = m_Camera->m_Yaw;
-                        tf.rotation.x = m_Camera->m_Pitch;
-                        break;
+                            glm::vec3 forward = m_Camera->m_Front;
+                            forward.y = 0.f;
+                            if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
+                            glm::vec3 right = m_Camera->m_Right;
+                            right.y = 0.f;
+                            if (glm::length(right) > 0.0001f) right = glm::normalize(right);
+
+                            glm::vec3 moveDir{0.f};
+                            if (Input::IsKeyDown(SDLK_W)) moveDir += forward;
+                            if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
+                            if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
+                            if (Input::IsKeyDown(SDLK_D)) moveDir += right;
+
+                            if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
+                            if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
+
+                            if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
+                            mv.velocity = moveDir * mv.speed;
+                            tf.position += mv.velocity * dt;
+
+                            m_Camera->m_Position = tf.position + glm::vec3(0, 2, 0);
+
+                            tf.rotation.y = m_Camera->m_Yaw;
+                            tf.rotation.x = m_Camera->m_Pitch;
+                            break;
+                        }
                     }
                 }
             }
         }
-    }
-    m_Camera->Update(dt);
+    } else {
+        // ------------------------------------------------------------------
+        // Commander mode – top-down RTS camera + unit selection
+        // ------------------------------------------------------------------
+        int winW, winH;
+        SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
 
+        // WASD pans the commander camera on XZ plane
+        constexpr float CMD_PAN_SPEED = 25.f;
+        glm::vec3 pan{0.f};
+        if (Input::IsKeyDown(SDLK_W)) pan.z -= CMD_PAN_SPEED * dt;
+        if (Input::IsKeyDown(SDLK_S)) pan.z += CMD_PAN_SPEED * dt;
+        if (Input::IsKeyDown(SDLK_A)) pan.x -= CMD_PAN_SPEED * dt;
+        if (Input::IsKeyDown(SDLK_D)) pan.x += CMD_PAN_SPEED * dt;
+        m_Camera->m_Position += pan;
+        // keep camera looking straight down
+        m_Camera->m_Pitch = -89.f;
+        m_Camera->m_Yaw   = -90.f;
+        m_Camera->UpdateVectors();
+
+        // Left-click: select units near cursor (pick by proximity to XZ ray)
+        if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT)) {
+            glm::vec2 mpos = Input::GetMousePosition();
+            glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+            constexpr float SELECT_RADIUS = 5.f;
+
+            // Clear previous selection unless Shift held (not implemented yet → always clear)
+            m_SelectedUnits.clear();
+
+            auto view = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, UnitComponent>();
+            for (auto entity : view) {
+                auto& tf  = view.get<TransformComponent>(entity);
+                auto& nc  = view.get<NetworkedComponent>(entity);
+                auto& uc  = view.get<UnitComponent>(entity);
+                if (uc.teamId != m_MyPlayerId % 2) continue; // only own units
+                glm::vec2 d2 = glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z);
+                if (glm::length(d2) <= SELECT_RADIUS) {
+                    m_SelectedUnits.push_back(nc.netId);
+                    uc.selected = true;
+                } else {
+                    uc.selected = false;
+                }
+            }
+            spdlog::info("Commander: selected {} unit(s)", m_SelectedUnits.size());
+        }
+
+        // Right-click: issue move order to selected units
+        if (Input::IsMouseButtonPressed(SDL_BUTTON_RIGHT) && !m_SelectedUnits.empty()) {
+            glm::vec2 mpos     = Input::GetMousePosition();
+            glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+
+            // Send a commander order packet to the server
+            CommanderOrderPacket pkt;
+            pkt.playerId = m_MyPlayerId;
+            pkt.x = worldPos.x; pkt.y = worldPos.y; pkt.z = worldPos.z;
+            ctx.network.Send(pkt);
+            spdlog::info("Commander: move order to ({:.1f},{:.1f},{:.1f})", worldPos.x, worldPos.y, worldPos.z);
+        }
+    }
+
+    m_Camera->Update(dt);
     m_TotalTime += dt;
     m_FrameCount++;
 }
 
 void GameScene::UIUpdate(SceneContext& ctx, float dt) {
+    // ------------------------------------------------------------------
+    // Game-over overlay
+    // ------------------------------------------------------------------
+    if (m_GameOver) {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(400, 180));
+        ImGui::Begin("Spielende", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+        if (m_WinnerTeam == m_MyPlayerId % 2)
+            ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "SIEG! Team %u gewinnt!", m_WinnerTeam);
+        else if (m_WinnerTeam == 0xFFFFFFFFu)
+            ImGui::Text("Unentschieden!");
+        else
+            ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "NIEDERLAGE! Team %u gewinnt.", m_WinnerTeam);
+        if (ImGui::Button("Zum Hauptmenü")) {
+            ctx.network.Disconnect();
+            ctx.scenes.RequestTransition(new MainMenuScene());
+        }
+        ImGui::End();
+        return;
+    }
+
     ImGui::Begin("Game");
     ImGui::Text("Mode: %s", ctx.network.IsHosting() ? "Host" : "Client");
-    ImGui::Text("Control: %s (F1)", m_FreeFly ? "Free Fly" : "Player");
+    ImGui::Text("Kamera: %s  [TAB wechseln]", m_CommanderMode ? "Commander (Top-Down)" : "Exploring (1st-Person)");
+    if (!m_CommanderMode)
+        ImGui::Text("Control: %s (F1)", m_FreeFly ? "Free Fly" : "Player");
     ImGui::Text("Mouse: %s (F2)", Input::IsRelativeMouseMode() ? "Captured" : "Visible");
     if (m_IdAssigned)
         ImGui::Text("playerId=%u  netId=%u", m_MyPlayerId, m_MyNetId);
     else
         ImGui::Text("Waiting for server assignment...");
 
+    if (m_CommanderMode) {
+        ImGui::Separator();
+        ImGui::Text("Ausgewaehlte Einheiten: %zu", m_SelectedUnits.size());
+        ImGui::TextDisabled("LKlick: Einheit waehlen  RKlick: Bewegungsbefehl");
+    }
+
     if (ctx.network.IsHosting()) {
         if (ImGui::Button("Spawn Physics Cube")) {
             SpawnPhysicsCube(ctx, m_Camera->m_Position + m_Camera->m_Front * 5.0f);
+        }
+        if (ImGui::Button("Spawn Unit (Team 0)")) {
+            glm::vec3 sp = RandomSpawnInTerritory(ctx, 0);
+            SpawnUnit(ctx, 0, sp);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Spawn Unit (Team 1)")) {
+            glm::vec3 sp = RandomSpawnInTerritory(ctx, 1);
+            SpawnUnit(ctx, 1, sp);
         }
     }
 
@@ -565,35 +730,34 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     }
     ImGui::End();
 
-    // Resource stockpile HUD (top-right overlay) – always visible on host.
+    // Resource stockpile HUD
     if (ctx.network.IsHosting()) {
         ResourceHUD::Draw(ctx.serverRegistry, /*teamId=*/0);
     }
 
-    // Map overlay (Fog of War + Territory zones) – toggled by button.
+    // Map overlay
     if (ctx.network.IsHosting()) {
-        // Toggle button lives in the existing "Game" window – reopen it briefly.
         ImGui::Begin("Game");
         if (ImGui::Button(m_ShowMapOverlay ? "Karte schliessen" : "Karte [M]"))
             m_ShowMapOverlay = !m_ShowMapOverlay;
         ImGui::End();
 
-        // Keyboard shortcut M
         if (ImGui::IsKeyPressed(ImGuiKey_M))
             m_ShowMapOverlay = !m_ShowMapOverlay;
 
         if (m_ShowMapOverlay) {
             ImGuiIO& io = ImGui::GetIO();
-            FogOfWarSystem::DrawOverlay(m_Fog,
-                ImVec2(0.f, 0.f),
-                ImVec2(io.DisplaySize.x, io.DisplaySize.y));
-            TerritorySystem::DrawOverlay(
-                ctx.serverRegistry,
-                ImVec2(0.f, 0.f),
-                ImVec2(io.DisplaySize.x, io.DisplaySize.y),
-                glm::vec2{-50.f, -50.f},
-                glm::vec2{ 50.f,  50.f});
+            FogOfWarSystem::DrawOverlay(m_Fog, ImVec2(0.f, 0.f),
+                                        ImVec2(io.DisplaySize.x, io.DisplaySize.y));
+            TerritorySystem::DrawOverlay(ctx.serverRegistry,
+                ImVec2(0.f, 0.f), ImVec2(io.DisplaySize.x, io.DisplaySize.y),
+                glm::vec2{-50.f, -50.f}, glm::vec2{50.f, 50.f});
         }
+    }
+
+    // HP bars above units (Commander mode or always for visibility)
+    if (m_CommanderMode) {
+        DrawUnitHPBars(ctx);
     }
 
     ImGui::Begin("Shadow Debug");
@@ -649,6 +813,27 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
     if (ctx.network.IsHosting()) {
         PollConnectionEvents(ctx);
         PollClientPackets(ctx);
+
+        // Process commander movement orders from clients
+        while (true) {
+            auto result = ctx.network.ReceiveFromClient<CommanderOrderPacket>(PacketType::COMMANDER_ORDER);
+            if (!result) break;
+            auto [pkt, senderPeer] = *result;
+            uint32_t senderTeam = pkt.playerId % 2;
+            glm::vec3 dest{pkt.x, pkt.y, pkt.z};
+            // Apply order to all selected units of sender's team
+            auto uview = ctx.serverRegistry.view<UnitComponent, MovementOrderComponent>();
+            for (auto e : uview) {
+                auto& uc = uview.get<UnitComponent>(e);
+                auto& mo = uview.get<MovementOrderComponent>(e);
+                if (uc.teamId == senderTeam && uc.selected) {
+                    mo.destination = dest;
+                    mo.active      = true;
+                }
+            }
+            spdlog::info("Commander order for team {}: ({:.1f},{:.1f},{:.1f})",
+                         senderTeam, dest.x, dest.y, dest.z);
+        }
     }
 
     if (ctx.network.IsConnected()) {
@@ -657,6 +842,9 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
 
     if (ctx.network.IsHosting()) {
         Systems::MovementSystem(ctx.serverRegistry, dt);
+        UpdateUnitMovement(ctx, dt);
+        UpdateCombat(ctx, dt);
+        CheckWinCondition(ctx);
         m_ResourceManager.Update(ctx.serverRegistry, dt);
         ResourceSystem::Update(ctx.serverRegistry, m_ResourceManager, dt);
         FogOfWarSystem::Update(m_Fog, ctx.serverRegistry);
@@ -852,6 +1040,58 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         ctx.clientRegistry.emplace<ModelComponent>(entity, std::string(pkt->modelPath));
         m_ClientNetMap[pkt->netId] = entity;
     }
+
+    // Unit spawned
+    while (true) {
+        auto pkt = ctx.network.ReceiveFromServer<UnitSpawnedPacket>(PacketType::UNIT_SPAWNED);
+
+        if (!pkt) break;
+        if (m_ClientNetMap.count(pkt->netId)) continue;
+        auto entity = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
+        ctx.clientRegistry.emplace<MovementComponent>(entity);
+        ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
+        ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
+        ctx.clientRegistry.emplace<UnitComponent>(entity,
+            UnitComponent{pkt->teamId, static_cast<BugClass>(pkt->bugClass), false});
+        ctx.clientRegistry.emplace<HealthComponent>(entity,
+            HealthComponent{pkt->maxHp});
+        ctx.clientRegistry.emplace<MovementOrderComponent>(entity);
+        m_ClientNetMap[pkt->netId] = entity;
+    }
+
+    // Unit died
+    while (true) {
+        auto pkt = ctx.network.ReceiveFromServer<UnitDiedPacket>(PacketType::UNIT_DIED);
+        if (!pkt) break;
+        auto it = m_ClientNetMap.find(pkt->netId);
+        if (it == m_ClientNetMap.end()) continue;
+        ctx.clientRegistry.destroy(it->second);
+        m_ClientNetMap.erase(it);
+        // Remove from selection if present
+        m_SelectedUnits.erase(std::remove(m_SelectedUnits.begin(), m_SelectedUnits.end(), pkt->netId),
+                               m_SelectedUnits.end());
+    }
+
+    // HP update
+    while (true) {
+        auto pkt = ctx.network.ReceiveFromServer<UnitHpUpdatePacket>(PacketType::UNIT_HP_UPDATE);
+        if (!pkt) break;
+        auto it = m_ClientNetMap.find(pkt->netId);
+        if (it == m_ClientNetMap.end()) continue;
+        auto* hc = ctx.clientRegistry.try_get<HealthComponent>(it->second);
+        if (hc) hc->hp = pkt->hp;
+    }
+
+    // Game over
+    {
+        auto pkt = ctx.network.ReceiveFromServer<GameOverPacket>(PacketType::GAME_OVER);
+        if (pkt && !m_GameOver) {
+            m_GameOver    = true;
+            m_WinnerTeam  = pkt->winnerTeam;
+            spdlog::info("GameScene: GAME OVER – winner team {}", m_WinnerTeam);
+        }
+    }
 }
 
 void GameScene::SendLocalInput(SceneContext& ctx) {
@@ -955,4 +1195,433 @@ void GameScene::LoadSceneMeshCollision(
     m_MeshCollisionBodies.push_back(handle);
 
     spdlog::info("GameScene::LoadSceneMeshCollision: mesh collision active for '{}'", glbPath);
+}
+
+// ---------------------------------------------------------------------------
+// SpawnUnit
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Spawns a unit on the server, assigns components and broadcasts.
+ *
+ * Damage stats are derived from BugClass:
+ *   Carnivores (Mantis, Dragonflies, Scorpions) → high damage (20)
+ *   Omnivores  (Ants, Roaches, Beetles, CentipedesWorms) → medium (12)
+ *   Rest       → low (7)
+ */
+void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, float hp)
+{
+    if (!ctx.network.IsHosting()) return;
+
+    static std::mt19937 rng{std::random_device{}()};
+    // Pick a random bug class from available ones (skip None)
+    static const BugClass classes[] = {
+        BugClass::Ants, BugClass::Beetles, BugClass::Mantis,
+        BugClass::Dragonflies, BugClass::Roaches, BugClass::Scorpions
+    };
+    BugClass bc = classes[rng() % std::size(classes)];
+
+    // Damage by diet archetype
+    float dmg = 7.f;
+    if (bc == BugClass::Mantis || bc == BugClass::Dragonflies || bc == BugClass::Scorpions)
+        dmg = 20.f;
+    else if (bc == BugClass::Ants || bc == BugClass::Roaches || bc == BugClass::Beetles ||
+             bc == BugClass::CentipedesWorms)
+        dmg = 12.f;
+
+    const uint32_t netId = m_NextNetId++;
+    auto e = ctx.serverRegistry.create();
+    ctx.serverRegistry.emplace<TransformComponent>(e, pos);
+    ctx.serverRegistry.emplace<MovementComponent>(e);
+    ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
+    ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
+    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false});
+    ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
+    ctx.serverRegistry.emplace<CombatComponent>(e,
+        CombatComponent{/*range=*/6.f, /*dmg=*/dmg, /*cd=*/0.f, /*rate=*/1.5f, entt::null});
+    ctx.serverRegistry.emplace<MovementOrderComponent>(e);
+    m_ServerNetMap[netId] = e;
+
+    UnitSpawnedPacket pkt;
+    pkt.netId    = netId;
+    pkt.teamId   = teamId;
+    pkt.bugClass = static_cast<uint8_t>(bc);
+    pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
+    pkt.hp = hp; pkt.maxHp = hp;
+    ctx.network.BroadcastToAll(pkt);
+
+    spdlog::info("GameScene: spawned unit netId={} team={} class={} hp={:.0f}",
+                 netId, teamId, (int)bc, hp);
+}
+
+// ---------------------------------------------------------------------------
+// RandomSpawnInTerritory
+// ---------------------------------------------------------------------------
+
+glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
+{
+    // Gather all territory zone centres and pick one that roughly belongs
+    // to the given team (simple parity: even zones → team 0, odd → team 1).
+    struct ZoneInfo { glm::vec3 center; float hw, hd; };
+    std::vector<ZoneInfo> candidates;
+
+    auto view = ctx.serverRegistry.view<TransformComponent, TerritoryComponent>();
+    uint32_t idx = 0;
+    for (auto e : view) {
+        const auto& tf  = view.get<TransformComponent>(e);
+        const auto& ter = view.get<TerritoryComponent>(e);
+        if (idx % 2 == teamId % 2)
+            candidates.push_back({tf.position, ter.halfW, ter.halfD});
+        idx++;
+    }
+
+    // Fallback: spread by team
+    if (candidates.empty()) {
+        float x = (teamId == 0) ? -20.f : 20.f;
+        return {x, 0.f, 0.f};
+    }
+
+    static std::mt19937 rng{std::random_device{}()};
+    const auto& zone = candidates[rng() % candidates.size()];
+    std::uniform_real_distribution<float> rx(-zone.hw, zone.hw);
+    std::uniform_real_distribution<float> rz(-zone.hd, zone.hd);
+    return {zone.center.x + rx(rng), 0.f, zone.center.z + rz(rng)};
+}
+
+// ---------------------------------------------------------------------------
+// UpdateUnitMovement  (server tick)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Moves units with an active MovementOrderComponent toward their
+ *        destination.  Simple steering: normalise direction, scale by speed,
+ *        stop within 1 unit.
+ */
+void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
+{
+    auto view = ctx.serverRegistry.view<TransformComponent, MovementComponent,
+                                        MovementOrderComponent, UnitComponent>();
+    for (auto e : view) {
+        auto& tf = view.get<TransformComponent>(e);
+        auto& mv = view.get<MovementComponent>(e);
+        auto& mo = view.get<MovementOrderComponent>(e);
+
+        if (!mo.active) { mv.velocity = {0.f, 0.f, 0.f}; continue; }
+
+        glm::vec3 dir = mo.destination - tf.position;
+        dir.y = 0.f; // stay on ground
+        float dist = glm::length(dir);
+        if (dist < 1.f) {
+            mo.active    = false;
+            mv.velocity  = {0.f, 0.f, 0.f};
+        } else {
+            dir = glm::normalize(dir);
+            mv.velocity  = dir * mv.speed;
+            tf.position += mv.velocity * dt;
+            tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.z));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UpdateCombat  (server tick)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Auto-combat system.
+ *
+ * For each unit with a CombatComponent:
+ *  1. If current target is invalid or dead, search for nearest enemy unit
+ *     within attackRange.
+ *  2. If target found and in range, tick cooldown and deal damage when it
+ *     fires.  Also pause movement while attacking.
+ *  3. Dead units (hp <= 0) get HandleUnitDeath called.
+ */
+void GameScene::UpdateCombat(SceneContext& ctx, float dt)
+{
+    // Collect all units with health for target queries
+    struct UnitInfo { entt::entity e; glm::vec3 pos; uint32_t team; float hp; };
+    std::vector<UnitInfo> unitInfos;
+    {
+        auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+        for (auto e : view) {
+            auto& tc = view.get<TransformComponent>(e);
+            auto& uc = view.get<UnitComponent>(e);
+            auto& hc = view.get<HealthComponent>(e);
+            if (!hc.dead)
+                unitInfos.push_back({e, tc.position, uc.teamId, hc.hp});
+        }
+    }
+
+    // Tick combat for every unit that has a CombatComponent
+    auto combatView = ctx.serverRegistry.view<TransformComponent, UnitComponent,
+                                               HealthComponent, CombatComponent,
+                                               MovementOrderComponent>();
+    std::vector<std::pair<entt::entity, uint32_t>> toKill; // entity + netId
+
+    for (auto e : combatView) {
+        auto& tf  = combatView.get<TransformComponent>(e);
+        auto& uc  = combatView.get<UnitComponent>(e);
+        auto& hc  = combatView.get<HealthComponent>(e);
+        auto& cc  = combatView.get<CombatComponent>(e);
+        auto& mo  = combatView.get<MovementOrderComponent>(e);
+
+        if (hc.dead) continue;
+
+        // Tick attack cooldown
+        if (cc.attackCooldown > 0.f) cc.attackCooldown -= dt;
+
+        // Validate current target
+        bool targetValid = (cc.target != entt::null) &&
+                           ctx.serverRegistry.valid(cc.target);
+        if (targetValid) {
+            auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
+            if (!thc || thc->dead) { targetValid = false; cc.target = entt::null; }
+        }
+
+        // Find nearest enemy if no valid target
+        if (!targetValid) {
+            float bestDist = cc.attackRange;
+            for (const auto& info : unitInfos) {
+                if (info.team == uc.teamId) continue;
+                float d = glm::length(info.pos - tf.position);
+                if (d < bestDist) { bestDist = d; cc.target = info.e; targetValid = true; }
+            }
+        }
+
+        if (!targetValid) continue;
+
+        // Check range
+        auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
+        if (!ttf) { cc.target = entt::null; continue; }
+        float dist = glm::length(ttf->position - tf.position);
+
+        if (dist <= cc.attackRange) {
+            // Pause movement while in combat
+            mo.active = false;
+
+            if (cc.attackCooldown <= 0.f) {
+                cc.attackCooldown = cc.attackRate;
+
+                auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
+                if (thc && !thc->dead) {
+                    thc->hp -= cc.attackDamage;
+                    spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
+                                  (uint32_t)e, (uint32_t)cc.target, cc.attackDamage, thc->hp);
+
+                    // Broadcast HP update
+                    auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                    if (tnc) {
+                        UnitHpUpdatePacket hp_pkt;
+                        hp_pkt.netId = tnc->netId;
+                        hp_pkt.hp    = thc->hp;
+                        ctx.network.BroadcastToAll(hp_pkt);
+                    }
+
+                    if (thc->hp <= 0.f) {
+                        thc->dead = true;
+                        auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                        uint32_t dnetId = dnc ? dnc->netId : 0;
+                        toKill.push_back({cc.target, dnetId});
+                        cc.target = entt::null;
+                    }
+                }
+            }
+        }
+    }
+
+    // Also check base health – units attack enemy bases if no other target
+    {
+        auto baseView = ctx.serverRegistry.view<TransformComponent, BaseHealthComponent>();
+        for (auto& info : unitInfos) {
+            auto* cc2 = ctx.serverRegistry.try_get<CombatComponent>(info.e);
+            if (!cc2 || cc2->target != entt::null) continue; // already has target
+
+            float bestDist = cc2->attackRange;
+            entt::entity bestBase = entt::null;
+            for (auto be : baseView) {
+                auto& btf  = baseView.get<TransformComponent>(be);
+                auto& bhc  = baseView.get<BaseHealthComponent>(be);
+                if (bhc.teamId == info.team || bhc.destroyed) continue;
+                float d = glm::length(btf.position - info.pos);
+                if (d < bestDist) { bestDist = d; bestBase = be; }
+            }
+            if (bestBase == entt::null) continue;
+
+            if (cc2->attackCooldown <= 0.f) {
+                cc2->attackCooldown = cc2->attackRate;
+                auto& bhc = baseView.get<BaseHealthComponent>(bestBase);
+                bhc.hp -= cc2->attackDamage;
+                if (bhc.hp <= 0.f) { bhc.hp = 0.f; bhc.destroyed = true; }
+            }
+        }
+    }
+
+    // Process kills
+    for (auto& [deadEnt, deadNetId] : toKill) {
+        HandleUnitDeath(ctx, deadEnt, deadNetId);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HandleUnitDeath
+// ---------------------------------------------------------------------------
+
+void GameScene::HandleUnitDeath(SceneContext& ctx, entt::entity entity, uint32_t netId)
+{
+    if (!ctx.serverRegistry.valid(entity)) return;
+
+    auto* tf = ctx.serverRegistry.try_get<TransformComponent>(entity);
+    if (tf) {
+        // Drop a Fleisch resource at death position
+        m_ResourceManager.SpawnMeatDrop(ctx.serverRegistry, tf->position,
+                                        /*amount=*/1, /*lifetime=*/20.f);
+    }
+
+    // Broadcast death
+    UnitDiedPacket pkt;
+    pkt.netId = netId;
+    ctx.network.BroadcastToAll(pkt);
+
+    // Remove from server maps
+    m_ServerNetMap.erase(netId);
+    ctx.serverRegistry.destroy(entity);
+
+    spdlog::info("GameScene: unit {} died, Fleisch dropped", netId);
+}
+
+// ---------------------------------------------------------------------------
+// CheckWinCondition
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Win condition: a team wins when ALL enemy base entities are destroyed.
+ */
+void GameScene::CheckWinCondition(SceneContext& ctx)
+{
+    if (m_GameOver) return;
+
+    // Count surviving bases per team
+    std::unordered_map<uint32_t, int> surviving;
+    auto view = ctx.serverRegistry.view<BaseHealthComponent>();
+    for (auto e : view) {
+        const auto& bhc = view.get<BaseHealthComponent>(e);
+        if (!bhc.destroyed) surviving[bhc.teamId]++;
+    }
+
+    if (surviving.empty()) return;
+
+    // Find teams whose bases are all gone
+    std::vector<uint32_t> eliminated;
+    for (const auto& [team, cnt] : surviving)
+        if (cnt == 0) eliminated.push_back(team);
+
+    if (eliminated.empty()) return;
+
+    // Determine winner (the non-eliminated team)
+    uint32_t winner = 0xFFFFFFFFu;
+    for (const auto& [team, cnt] : surviving)
+        if (cnt > 0) { winner = team; break; }
+
+    m_GameOver   = true;
+    m_WinnerTeam = winner;
+
+    GameOverPacket gopkt;
+    gopkt.winnerTeam = winner;
+    ctx.network.BroadcastToAll(gopkt);
+    spdlog::info("GameScene: WIN CONDITION – team {} wins", winner);
+}
+
+// ---------------------------------------------------------------------------
+// ScreenToWorldXZ  (Commander mode unprojection)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Unprojects a screen-space position onto the Y=0 XZ plane.
+ *
+ * Uses the camera's stored view+projection matrices and a ray-plane
+ * intersection.  Returns a rough world position usable as a move target.
+ */
+glm::vec3 GameScene::ScreenToWorldXZ(float sx, float sy, int winW, int winH)
+{
+    // NDC
+    float ndcX = (2.f * sx / (float)winW) - 1.f;
+    float ndcY = 1.f - (2.f * sy / (float)winH);
+
+    float aspect = (winW > 0) ? (float)winW / (float)winH : 1.f;
+    glm::mat4 proj = m_Camera->GetProjectionMatrix(aspect);
+    glm::mat4 view = m_Camera->GetViewMatrix();
+    glm::mat4 invVP = glm::inverse(proj * view);
+
+    glm::vec4 nearPt = invVP * glm::vec4(ndcX, ndcY, -1.f, 1.f);
+    glm::vec4 farPt  = invVP * glm::vec4(ndcX, ndcY,  1.f, 1.f);
+    nearPt /= nearPt.w;
+    farPt  /= farPt.w;
+
+    glm::vec3 rayOrig{nearPt};
+    glm::vec3 rayDir = glm::normalize(glm::vec3(farPt) - rayOrig);
+
+    // Intersect with Y=0 plane
+    if (std::abs(rayDir.y) < 1e-6f) return {0.f, 0.f, 0.f};
+    float t = -rayOrig.y / rayDir.y;
+    return rayOrig + t * rayDir;
+}
+
+// ---------------------------------------------------------------------------
+// DrawUnitHPBars  (Commander mode UI overlay)
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Draws HP bars above each unit in Commander mode.
+ *
+ * Projects each unit's 3D position to screen space and draws a coloured
+ * progress bar via ImGui's background draw list.
+ */
+void GameScene::DrawUnitHPBars(SceneContext& ctx)
+{
+    int winW, winH;
+    SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
+    if (winW <= 0 || winH <= 0) return;
+
+    float aspect = (float)winW / (float)winH;
+    glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    constexpr float BAR_W = 40.f, BAR_H = 5.f;
+
+    auto view = ctx.clientRegistry.view<TransformComponent, HealthComponent, UnitComponent, NetworkedComponent>();
+    for (auto e : view) {
+        const auto& tf  = view.get<TransformComponent>(e);
+        const auto& hc  = view.get<HealthComponent>(e);
+        const auto& uc  = view.get<UnitComponent>(e);
+        const auto& nc  = view.get<NetworkedComponent>(e);
+
+        // Project to clip space
+        glm::vec4 clip = vp * glm::vec4(tf.position + glm::vec3(0, 2.5f, 0), 1.f);
+        if (clip.w <= 0.f) continue;
+        clip /= clip.w;
+        if (clip.x < -1.f || clip.x > 1.f || clip.y < -1.f || clip.y > 1.f) continue;
+
+        float sx = (clip.x * 0.5f + 0.5f) * (float)winW;
+        float sy = (1.f - (clip.y * 0.5f + 0.5f)) * (float)winH;
+
+        // Background bar
+        ImVec2 bmin{sx - BAR_W * 0.5f, sy};
+        ImVec2 bmax{sx + BAR_W * 0.5f, sy + BAR_H};
+        dl->AddRectFilled(bmin, bmax, IM_COL32(30, 30, 30, 200));
+
+        // HP fill
+        float frac = (hc.maxHp > 0.f) ? glm::clamp(hc.hp / hc.maxHp, 0.f, 1.f) : 0.f;
+        ImU32 col = (uc.teamId == 0)
+            ? IM_COL32(60, 140, 255, 220)
+            : IM_COL32(255, 60, 60, 220);
+        dl->AddRectFilled(bmin, ImVec2(bmin.x + BAR_W * frac, bmax.y), col);
+
+        // Selection ring
+        bool selected = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId)
+                        != m_SelectedUnits.end();
+        if (selected)
+            dl->AddRect(ImVec2(bmin.x - 1, bmin.y - 1), ImVec2(bmax.x + 1, bmax.y + 1),
+                        IM_COL32(255, 255, 0, 255), 0.f, 0, 1.5f);
+    }
 }

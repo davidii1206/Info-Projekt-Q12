@@ -116,7 +116,7 @@ public:
         auto it = m_Textures.find(name);
         if (it == m_Textures.end()) {
             spdlog::warn("[HUDTextureRegistry] Textur '{}' nicht gefunden.", name);
-            return nullptr;
+            return static_cast<ImTextureID>(0);
         }
         return reinterpret_cast<ImTextureID>(it->second->GetHandle());
     }
@@ -208,20 +208,20 @@ namespace HUDTextures
         // ------------------------------------------------------------------
         // Ressourcen-Icons
         // ------------------------------------------------------------------
-        reg.Add(device, "icon_pilze",    "assets/UI/icon_pilze.png");
-        reg.Add(device, "icon_beeren",   "assets/UI/icon_beeren.png");
-        reg.Add(device, "icon_nektar",   "assets/UI/icon_nektar.png");
-        reg.Add(device, "icon_samen",    "assets/UI/icon_samen.png");
-        reg.Add(device, "icon_insekten", "assets/UI/icon_insekten.png");
-        reg.Add(device, "icon_fleisch",  "assets/UI/icon_fleisch.png");
+        //reg.Add(device, "icon_pilze",    "assets/UI/icon_pilze.png");
+        //reg.Add(device, "icon_beeren",   "assets/UI/icon_beeren.png");
+        //reg.Add(device, "icon_nektar",   "assets/UI/icon_nektar.png");
+        //reg.Add(device, "icon_samen",    "assets/UI/icon_samen.png");
+        //reg.Add(device, "icon_insekten", "assets/UI/icon_insekten.png");
+        //reg.Add(device, "icon_fleisch",  "assets/UI/icon_fleisch.png");
 
         // ------------------------------------------------------------------
         // Karten-/Minimap-Elemente
         // ------------------------------------------------------------------
-        reg.Add(device, "map_bg",        "assets/UI/map_background.png");
-        reg.Add(device, "map_fog",       "assets/UI/map_fog.png");
-        reg.Add(device, "marker_base",   "assets/UI/marker_base.png");
-        reg.Add(device, "marker_player", "assets/UI/marker_player.png");
+        //reg.Add(device, "map_bg",        "assets/UI/map_background.png");
+        //reg.Add(device, "map_fog",       "assets/UI/map_fog.png");
+        //reg.Add(device, "marker_base",   "assets/UI/marker_base.png");
+        //reg.Add(device, "marker_player", "assets/UI/marker_player.png");
 
         // ------------------------------------------------------------------
         // Weitere HUD-Elemente – bei Bedarf ergänzen

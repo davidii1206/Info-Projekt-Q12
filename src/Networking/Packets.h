@@ -21,9 +21,14 @@ enum class PacketType : uint8_t {
     PLAYER_LEFT      = 4, /**< Notifies clients that a player has left. */
     ENTITY_SNAPSHOT  = 5, /**< Contains updated transform and velocity for an entity. */
     ASSET_JOINED     = 6, /**< Notifies clients that a static asset has been spawned. */
+    UNIT_SPAWNED     = 7, /**< Notifies clients that a unit was spawned. */
+    UNIT_DIED        = 8, /**< Notifies clients that a unit died. */
+    UNIT_HP_UPDATE   = 9, /**< Broadcasts updated HP for a unit. */
+    GAME_OVER        = 11,/**< Server broadcasts win/lose condition. */
 
     // Client → Server
-    PLAYER_INPUT = 10,    /**< Sends movement and rotation input from client to server. */
+    PLAYER_INPUT     = 10, /**< Sends movement and rotation input from client to server. */
+    COMMANDER_ORDER  = 12, /**< Client sends move order to server for selected units. */
 };
 
 /**
@@ -100,4 +105,55 @@ struct PlayerInputPacket {
     float      dz   = 0.f;                       /**< Forward/backward movement input. */
     float      yaw  = 0.f;                       /**< Current camera yaw. */
     float      pitch = 0.f;                      /**< Current camera pitch. */
+};
+
+/**
+ * @struct UnitSpawnedPacket
+ * @brief Sent when a new unit entity is spawned in the world.
+ */
+struct UnitSpawnedPacket {
+    PacketType type    = PacketType::UNIT_SPAWNED;
+    uint32_t   netId   = 0;
+    uint32_t   teamId  = 0;
+    uint8_t    bugClass = 0;
+    float      x = 0.f, y = 0.f, z = 0.f;
+    float      hp = 100.f, maxHp = 100.f;
+};
+
+/**
+ * @struct UnitDiedPacket
+ * @brief Sent when a unit entity dies.
+ */
+struct UnitDiedPacket {
+    PacketType type  = PacketType::UNIT_DIED;
+    uint32_t   netId = 0;
+};
+
+/**
+ * @struct UnitHpUpdatePacket
+ * @brief Periodic health sync for a unit.
+ */
+struct UnitHpUpdatePacket {
+    PacketType type  = PacketType::UNIT_HP_UPDATE;
+    uint32_t   netId = 0;
+    float      hp    = 0.f;
+};
+
+/**
+ * @struct GameOverPacket
+ * @brief Broadcast when the game ends.
+ */
+struct GameOverPacket {
+    PacketType type        = PacketType::GAME_OVER;
+    uint32_t   winnerTeam  = 0xFFFFFFFFu; ///< 0xFFFFFFFF = draw/no winner
+};
+
+/**
+ * @struct CommanderOrderPacket
+ * @brief Client → Server: move selected units to a position.
+ */
+struct CommanderOrderPacket {
+    PacketType type     = PacketType::COMMANDER_ORDER;
+    uint32_t   playerId = 0;
+    float      x = 0.f, y = 0.f, z = 0.f; ///< World destination
 };
