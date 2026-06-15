@@ -57,9 +57,16 @@ What "lowkey Thronefall copy" concretely means for the renderer/gen:
 ## 2. Data model (target)
 
 Replace the per-pixel `std::vector<float> m_Heightmap` with a coarse
-**tile grid** sized in gameplay units (≈1–2 world units per tile), aligned to
-the existing `TerritorySystem` (±50 world units) and `FogOfWar` (2.0 cell)
-extents.
+**tile grid** sized in gameplay units, aligned to the existing
+`TerritorySystem`/`FogOfWar`/`ScatterSystem` extents (±150 world units) and
+`FogOfWar`'s 2.0 cell size.
+
+**Phase 1 (done, see `WorldManager::GenerateTileGrid`)** uses:
+- `worldExtent = 150`, `tileSize = 2.0` → 150×150 tile grid
+- `numTiers = 4`, `tierHeight = 2.0`
+- `waterTier = 0` (with a guaranteed-pond fallback if tier 0 is absent)
+- `rampSpacing ≈ 6` tiles along a cliff edge, plus a guaranteed-coverage pass
+  so every adjacent tier pair has at least one ramp
 
 ```cpp
 enum class TileSurface : uint8_t { Plateau, Cliff, Ramp, Water };
@@ -220,8 +227,13 @@ to tiles then. This keeps the tree green during planning.
 
 ## 9. Open questions
 
-- Tunnel/underground layer: real second mesh layer, or movement-rule fake?
-- Ramp ownership vs `TerritorySystem` (neutral chokepoint vs one cell).
-- Chunk size vs tile grid resolution vs ±50 world extents — pick concrete
-  numbers before mesh work.
+- ~~Tunnel/underground layer: real second mesh layer, or movement-rule
+  fake?~~ **Resolved:** movement-rule fake — no separate tunnel mesh layer;
+  "tunnels" are just a gameplay rule allowing certain bugs to ignore cliffs.
+- ~~Ramp ownership vs `TerritorySystem` (neutral chokepoint vs one cell).~~
+  **Resolved:** ramps are neutral chokepoints, not owned by either adjacent
+  territory.
+- ~~Chunk size vs tile grid resolution vs ±50 world extents — pick concrete
+  numbers before mesh work.~~ **Resolved:** ±150 world extent, 2.0 tile size
+  (150×150 grid), 16×16-tile mesh chunks (Phase 2, TODO A).
 - Instanced rendering must land before prop/structure LOD is worthwhile.

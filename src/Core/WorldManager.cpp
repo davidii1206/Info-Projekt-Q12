@@ -4,9 +4,26 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <spdlog/spdlog.h>
 
 #define JC_VORONOI_IMPLEMENTATION
 #include <jc_voronoi.h>
+
+namespace {
+    /// Small deterministic hash used for per-tile ramp placement decisions.
+    uint32_t TileHash(uint32_t seed, int tx, int tz) {
+        uint32_t h = seed;
+        h ^= (uint32_t)tx * 0x9E3779B1u;
+        h ^= (uint32_t)tz * 0x85EBCA77u;
+        h ^= h >> 15;
+        h *= 0x27D4EB2Fu;
+        h ^= h >> 13;
+        return h;
+    }
+
+    constexpr int kDX[4] = { 1, -1, 0, 0 };
+    constexpr int kDZ[4] = { 0, 0, 1, -1 };
+}
 
 WorldManager::WorldManager() {}
 WorldManager::~WorldManager() { Clear(); }
@@ -14,6 +31,29 @@ WorldManager::~WorldManager() { Clear(); }
 void WorldManager::Clear() {
     m_Terrains.clear();
     m_Heightmap.clear();
+    m_Tiles.clear();
+    m_GridSize = 0;
+}
+
+void WorldManager::WorldToTile(float wx, float wz, int& outTx, int& outTz) const {
+    const float ext = m_CurrentConfig.worldExtent;
+    const float ts  = m_CurrentConfig.tileSize;
+    outTx = (int)std::floor((wx + ext) / ts);
+    outTz = (int)std::floor((wz + ext) / ts);
+    outTx = std::clamp(outTx, 0, m_GridSize - 1);
+    outTz = std::clamp(outTz, 0, m_GridSize - 1);
+}
+
+glm::vec2 WorldManager::TileToWorld(int tx, int tz) const {
+    const float ext = m_CurrentConfig.worldExtent;
+    const float ts  = m_CurrentConfig.tileSize;
+    return glm::vec2(-ext + ((float)tx + 0.5f) * ts, -ext + ((float)tz + 0.5f) * ts);
+}
+
+const TerrainTile& WorldManager::GetTile(int tx, int tz) const {
+    tx = std::clamp(tx, 0, m_GridSize - 1);
+    tz = std::clamp(tz, 0, m_GridSize - 1);
+    return m_Tiles[(size_t)tz * m_GridSize + tx];
 }
 
 void WorldManager::Generate(const WorldGenConfig& config) {
@@ -99,6 +139,174 @@ void WorldManager::Generate(const WorldGenConfig& config) {
     // See docs/WORLDGEN_PLAN.md.
     // -----------------------------------------------------------------------
     m_Heightmap.assign((size_t)config.width * config.height, 0.0f);
+
+    // -----------------------------------------------------------------------
+    // Terraced tile grid (see docs/WORLDGEN_PLAN.md §2-3).
+    // -----------------------------------------------------------------------
+    GenerateTileGrid();
+}
+
+void WorldManager::GenerateTileGrid() {
+    const auto& cfg = m_CurrentConfig;
+    m_GridSize = std::max(1, (int)std::round((2.0f * cfg.worldExtent) / cfg.tileSize));
+    m_Tiles.assign((size_t)m_GridSize * m_GridSize, TerrainTile{});
+
+    if (m_Terrains.empty() || !m_Perlin) return;
+
+    const int numTiers = std::max(1, cfg.numTiers);
+
+    // --- Per-territory base tier (low-frequency Perlin at the site) --------
+    // Bounds each tile's tier to within +-1 of its territory's base tier so
+    // neighbouring territories tend to share a tier (no floating islands).
+    std::vector<int> territoryBaseTier(m_Terrains.size());
+    for (size_t i = 0; i < m_Terrains.size(); ++i) {
+        float sx = m_Terrains[i].site.x / (float)cfg.width  * (float)m_GridSize;
+        float sy = m_Terrains[i].site.y / (float)cfg.height * (float)m_GridSize;
+        double n = m_Perlin->octave2D_01(sx * cfg.tierNoiseScale, sy * cfg.tierNoiseScale, 4);
+        territoryBaseTier[i] = std::clamp((int)(n * numTiers), 0, numTiers - 1);
+    }
+
+    // --- Tier + territory assignment per tile -------------------------------
+    for (int tz = 0; tz < m_GridSize; ++tz) {
+        for (int tx = 0; tx < m_GridSize; ++tx) {
+            TerrainTile& tile = m_Tiles[(size_t)tz * m_GridSize + tx];
+
+            // Nearest Voronoi site (pixel space) determines the owning territory.
+            float px = ((float)tx / (float)m_GridSize) * (float)cfg.width;
+            float py = ((float)tz / (float)m_GridSize) * (float)cfg.height;
+            int   best = 0;
+            float bestD = 1e30f;
+            for (size_t i = 0; i < m_Terrains.size(); ++i) {
+                float dx = px - m_Terrains[i].site.x;
+                float dy = py - m_Terrains[i].site.y;
+                float d = dx * dx + dy * dy;
+                if (d < bestD) { bestD = d; best = (int)i; }
+            }
+            tile.territoryId = (uint16_t)best;
+
+            double n = m_Perlin->octave2D_01(tx * cfg.tierNoiseScale, tz * cfg.tierNoiseScale, 4);
+            int rawTier = std::clamp((int)(n * numTiers), 0, numTiers - 1);
+
+            int baseTier = territoryBaseTier[best];
+            int tier = std::clamp(rawTier, baseTier - 1, baseTier + 1);
+            tile.tier = (uint8_t)std::clamp(tier, 0, numTiers - 1);
+        }
+    }
+
+    // --- Water basins ---------------------------------------------------------
+    // Tiers <= waterTier are flooded. Guarantee at least one pond: if the
+    // lowest tier present is above waterTier, flood that tier instead.
+    int minTier = numTiers - 1;
+    for (const auto& t : m_Tiles) minTier = std::min(minTier, (int)t.tier);
+    const int waterCutoff = std::max(cfg.waterTier, minTier);
+    for (auto& t : m_Tiles)
+        if ((int)t.tier <= waterCutoff) t.surface = TileSurface::Water;
+
+    // --- Cliffs -----------------------------------------------------------------
+    // A non-water tile that is strictly higher than a neighbour gets a cliff
+    // face on that side.
+    for (int tz = 0; tz < m_GridSize; ++tz) {
+        for (int tx = 0; tx < m_GridSize; ++tx) {
+            TerrainTile& tile = m_Tiles[(size_t)tz * m_GridSize + tx];
+            if (tile.surface == TileSurface::Water) continue;
+            for (int d = 0; d < 4; ++d) {
+                int nx = tx + kDX[d], nz = tz + kDZ[d];
+                if (nx < 0 || nx >= m_GridSize || nz < 0 || nz >= m_GridSize) continue;
+                const TerrainTile& nb = m_Tiles[(size_t)nz * m_GridSize + nx];
+                if ((int)tile.tier > (int)nb.tier) {
+                    tile.surface = TileSurface::Cliff;
+                    break;
+                }
+            }
+        }
+    }
+
+    // --- Ramps --------------------------------------------------------------------
+    // Convert a roughly-every-`rampSpacing`-tiles cliff tile that descends by
+    // exactly one tier into a Ramp, deterministically per seed+position.
+    // Afterwards guarantee at least one ramp exists between every pair of
+    // vertically-adjacent tiers so every tier is reachable on foot.
+    std::vector<bool> rampPairCovered((size_t)numTiers, false); // index = lower tier of the pair
+    auto tryRamp = [&](int tx, int tz, bool force) -> bool {
+        TerrainTile& tile = m_Tiles[(size_t)tz * m_GridSize + tx];
+        if (tile.surface != TileSurface::Cliff) return false;
+        for (int d = 0; d < 4; ++d) {
+            int nx = tx + kDX[d], nz = tz + kDZ[d];
+            if (nx < 0 || nx >= m_GridSize || nz < 0 || nz >= m_GridSize) continue;
+            const TerrainTile& nb = m_Tiles[(size_t)nz * m_GridSize + nx];
+            if (nb.surface == TileSurface::Water) continue;
+            if ((int)nb.tier == (int)tile.tier - 1) {
+                bool select = force || (TileHash((uint32_t)cfg.seed, tx, tz) % (uint32_t)cfg.rampSpacing == 0);
+                if (select) {
+                    tile.surface = TileSurface::Ramp;
+                    tile.rampDir = (uint8_t)d;
+                    rampPairCovered[nb.tier] = true;
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    for (int tz = 0; tz < m_GridSize; ++tz)
+        for (int tx = 0; tx < m_GridSize; ++tx)
+            tryRamp(tx, tz, false);
+
+    for (int lower = waterCutoff; lower < numTiers - 1; ++lower) {
+        if (rampPairCovered[lower]) continue;
+        for (int tz = 0; tz < m_GridSize && !rampPairCovered[lower]; ++tz)
+            for (int tx = 0; tx < m_GridSize && !rampPairCovered[lower]; ++tx) {
+                TerrainTile& tile = m_Tiles[(size_t)tz * m_GridSize + tx];
+                if (tile.surface != TileSurface::Cliff || (int)tile.tier - 1 != lower) continue;
+                tryRamp(tx, tz, true);
+            }
+    }
+
+    // --- Buildable slots --------------------------------------------------------
+    // Flat plateau tiles whose 4 neighbours are all in-bounds plateau tiles of
+    // the same tier (interior, non-edge).
+    for (int tz = 0; tz < m_GridSize; ++tz) {
+        for (int tx = 0; tx < m_GridSize; ++tx) {
+            TerrainTile& tile = m_Tiles[(size_t)tz * m_GridSize + tx];
+            if (tile.surface != TileSurface::Plateau) continue;
+            bool interior = true;
+            for (int d = 0; d < 4 && interior; ++d) {
+                int nx = tx + kDX[d], nz = tz + kDZ[d];
+                if (nx < 0 || nx >= m_GridSize || nz < 0 || nz >= m_GridSize) { interior = false; break; }
+                const TerrainTile& nb = m_Tiles[(size_t)nz * m_GridSize + nx];
+                if (nb.surface != TileSurface::Plateau || nb.tier != tile.tier) interior = false;
+            }
+            tile.buildable = interior;
+        }
+    }
+
+    // --- Spawn points ------------------------------------------------------------
+    // Nearest buildable tile of each territory to its Voronoi site becomes the
+    // faction's home plateau (overwrites TerrainData::spawnPoint with world coords).
+    for (size_t i = 0; i < m_Terrains.size(); ++i) {
+        float sx = m_Terrains[i].site.x / (float)cfg.width  * (float)m_GridSize;
+        float sy = m_Terrains[i].site.y / (float)cfg.height * (float)m_GridSize;
+        float bestD = 1e30f;
+        glm::vec2 best = TileToWorld((int)sx, (int)sy);
+        bool found = false;
+        for (int tz = 0; tz < m_GridSize; ++tz) {
+            for (int tx = 0; tx < m_GridSize; ++tx) {
+                const TerrainTile& tile = m_Tiles[(size_t)tz * m_GridSize + tx];
+                if (!tile.buildable || tile.territoryId != (uint16_t)i) continue;
+                float dx = (float)tx - sx, dy = (float)tz - sy;
+                float d = dx * dx + dy * dy;
+                if (d < bestD) { bestD = d; best = TileToWorld(tx, tz); found = true; }
+            }
+        }
+        m_Terrains[i].spawnPoint = best;
+        if (!found)
+            spdlog::warn("WorldManager: territory {} has no buildable spawn tile", i);
+    }
+
+    int counts[4] = {0, 0, 0, 0};
+    for (const auto& t : m_Tiles) counts[(int)t.surface]++;
+    spdlog::info("WorldManager: tile grid {}x{} - Plateau={} Cliff={} Ramp={} Water={} (waterCutoff tier={})",
+                  m_GridSize, m_GridSize, counts[0], counts[1], counts[2], counts[3], waterCutoff);
 }
 
 void WorldManager::UpdateDebugTexture(SDL_GPUDevice* device, Texture** outTexture) {
