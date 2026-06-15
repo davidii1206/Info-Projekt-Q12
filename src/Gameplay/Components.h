@@ -68,6 +68,19 @@ struct ModelComponent {
     std::string modelPath; /**< Path to the .glb or .gltf file. */
 };
 
+/**
+ * @struct ScatterPropComponent
+ * @brief Tags a purely decorative, client-side scattered prop (grass, rocks…).
+ *
+ * Scatter props are generated deterministically from the world seed on every
+ * peer (see ScatterSystem), so they are NOT networked and carry no authoritative
+ * state. The tag exists so the scatter pass can be cleared/regenerated without
+ * touching gameplay entities.
+ */
+struct ScatterPropComponent {
+    uint16_t layer = 0; /**< Index of the ScatterLayer that produced this prop. */
+};
+
 // ---------------------------------------------------------------------------
 // Physics Components
 // ---------------------------------------------------------------------------

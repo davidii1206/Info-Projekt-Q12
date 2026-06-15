@@ -15,7 +15,9 @@
 #include "ResourceHUD.h"
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
+#include "ScatterSystem.h"
 #include "HUDTextureRegistry.h"
+#include "../Core/WorldManager.h"
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
@@ -152,6 +154,14 @@ private:
 
     /// Fog of War grid – tracks which map cells have been explored.
     FogGrid m_Fog;
+
+    /// Procedural world data (heightmap + biomes) used to drive decorative
+    /// prop scattering. Generated locally on every peer from the shared seed.
+    WorldManager m_World;
+
+    /// Seed shared by all peers so the scatter field is identical everywhere.
+    /// Keep this in sync with whatever seed drives your actual terrain.
+    uint32_t m_WorldSeed = 12345;
 
     /// Whether the map overlay (Fog + Territory) is currently visible.
     /// Toggled by the "Karte" button in the Game window.

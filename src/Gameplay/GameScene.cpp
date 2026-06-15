@@ -115,6 +115,30 @@ void GameScene::OnEnter(SceneContext& ctx) {
          */
         SpawnPhysicsCube(ctx, glm::vec3{0.f, 10.f, 0.f});
     }
+
+    // ------------------------------------------------------------------
+    // Decorative prop scatter (grass, rocks, twigs, …)
+    //
+    // Runs on EVERY peer, not just the host: scatter props are derived
+    // deterministically from the world seed, so each client generates an
+    // identical field locally and nothing has to be sent over the network.
+    // They live in the client registry alongside other renderable entities.
+    // ------------------------------------------------------------------
+    {
+        WorldGenConfig genCfg;
+        genCfg.seed = m_WorldSeed;
+        m_World.Generate(genCfg);
+
+        ScatterConfig scatterCfg = ScatterConfig::Default(m_WorldSeed);
+        // Align the scatter footprint with the Fog/Territory map extents (±50).
+        scatterCfg.worldMin = {-50.f, -50.f};
+        scatterCfg.worldMax = { 50.f,  50.f};
+        // Flat placeholder ground (test scene is flat). Raise this to your
+        // terrain's vertical scale once props should sit on procedural hills.
+        scatterCfg.heightWorldScale = 0.0f;
+
+        ScatterSystem::Populate(ctx.clientRegistry, m_World, scatterCfg);
+    }
 }
 
 /**
@@ -143,6 +167,9 @@ void GameScene::OnExit(SceneContext& ctx) {
         }
         m_MeshCollisionBodies.clear();
     }
+
+    // Drop decorative scatter props before clearing the rest.
+    ScatterSystem::Clear(ctx.clientRegistry);
 
     ctx.serverRegistry.clear();
     ctx.clientRegistry.clear();
