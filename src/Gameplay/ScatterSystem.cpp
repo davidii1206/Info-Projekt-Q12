@@ -44,7 +44,7 @@ ScatterConfig ScatterConfig::Default(uint32_t seed) {
     // --- Biome-agnostic ground litter -------------------------------------
     // Small grass tufts: dense, flat ground only, clumps into meadows.
     {
-        auto l = layer("grass_tuft", "assets/prim_cone_green.glb", {}, 0.55f, 0.6f, 1.4f, 0.05f, 0.45f, false);
+        auto l = layer("grass_tuft", "assets/prim_cone_green.glb", {}, 0.30f, 0.6f, 1.4f, 0.05f, 0.55f, false);
         l.maxSlope = 0.35f;
         cfg.layers.push_back(l);
     }

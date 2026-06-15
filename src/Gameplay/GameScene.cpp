@@ -136,6 +136,10 @@ void GameScene::OnEnter(SceneContext& ctx) {
         // Flat placeholder ground (test scene is flat). Raise this to your
         // terrain's vertical scale once props should sit on procedural hills.
         scatterCfg.heightWorldScale = 0.0f;
+        // The renderer issues one draw call per scattered entity (no
+        // instancing yet), so keep the candidate grid coarse enough that the
+        // total prop count stays in the low thousands even on the larger map.
+        scatterCfg.spacing = 6.0f;
 
         ScatterSystem::Populate(ctx.clientRegistry, m_World, scatterCfg);
     }
