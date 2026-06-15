@@ -95,6 +95,7 @@ inline void Draw(World& world) {
     ImGui::Begin("World Debug");
 
     ImGui::Text("Scene:       %s", world.GetCurrentSceneName());
+    ImGui::Text("FPS:         %.1f (%.2f ms)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
     ImGui::Text("Accumulator: %.1f ms", world.GetAccumulator() * 1000.f);
 
     ImGui::Separator();
