@@ -24,13 +24,13 @@ ScatterConfig ScatterConfig::Default(uint32_t seed) {
     cfg.seed = seed;
 
     // Helper to keep the layer list readable.
-    auto layer = [](const char* name, std::vector<BugClass> biomes,
+    auto layer = [](const char* name, const char* modelPath, std::vector<BugClass> biomes,
                     float density, float minS, float maxS,
                     float clumpScale, float clumpThresh,
                     bool alignSlope) {
         ScatterLayer l;
         l.name = name;
-        l.modelPath = "assets/cube.glb"; // TODO: replace with real art (see name)
+        l.modelPath = modelPath;
         l.biomes = std::move(biomes);
         l.density = density;
         l.minScale = minS;
@@ -44,20 +44,20 @@ ScatterConfig ScatterConfig::Default(uint32_t seed) {
     // --- Biome-agnostic ground litter -------------------------------------
     // Small grass tufts: dense, flat ground only, clumps into meadows.
     {
-        auto l = layer("grass_tuft", {}, 0.55f, 0.6f, 1.4f, 0.05f, 0.45f, false);
+        auto l = layer("grass_tuft", "assets/prim_cone_green.glb", {}, 0.55f, 0.6f, 1.4f, 0.05f, 0.45f, false);
         l.maxSlope = 0.35f;
         cfg.layers.push_back(l);
     }
     // Scattered pebbles everywhere, including gentle slopes.
     {
-        auto l = layer("pebble", {}, 0.10f, 0.3f, 0.8f, 0.08f, 0.0f, true);
+        auto l = layer("pebble", "assets/prim_slab_grey.glb", {}, 0.10f, 0.3f, 0.8f, 0.08f, 0.0f, true);
         l.maxSlope = 0.8f;
         l.yOffset = -0.05f;
         cfg.layers.push_back(l);
     }
     // Larger rocks: rarer, prefer steeper ground, sit slightly sunk in.
     {
-        auto l = layer("rock", {}, 0.05f, 1.0f, 2.5f, 0.03f, 0.55f, true);
+        auto l = layer("rock", "assets/prim_slab_grey.glb", {}, 0.05f, 1.0f, 2.5f, 0.03f, 0.55f, true);
         l.maxSlope = 1.0f;
         l.yOffset = -0.15f;
         cfg.layers.push_back(l);
@@ -65,46 +65,46 @@ ScatterConfig ScatterConfig::Default(uint32_t seed) {
 
     // --- Ant biome: open trodden plazas, sparse weeds along the cracks ----
     {
-        auto l = layer("weed_clover", {BugClass::Ants}, 0.20f, 0.7f, 1.2f, 0.06f, 0.5f, false);
+        auto l = layer("weed_clover", "assets/prim_cone_green.glb", {BugClass::Ants}, 0.20f, 0.7f, 1.2f, 0.06f, 0.5f, false);
         l.maxSlope = 0.4f;
         cfg.layers.push_back(l);
     }
 
     // --- Termite biome: wood debris, bark chunks --------------------------
     {
-        auto l = layer("wood_debris", {BugClass::Termites}, 0.30f, 0.8f, 1.6f, 0.05f, 0.3f, true);
+        auto l = layer("wood_debris", "assets/prim_cylinder_brown.glb", {BugClass::Termites}, 0.30f, 0.8f, 1.6f, 0.05f, 0.3f, true);
         l.maxSlope = 0.6f;
         cfg.layers.push_back(l);
     }
     {
-        auto l = layer("bark_chunk", {BugClass::Termites}, 0.18f, 0.6f, 1.3f, 0.07f, 0.4f, true);
+        auto l = layer("bark_chunk", "assets/prim_cylinder_dark_brown.glb", {BugClass::Termites}, 0.18f, 0.6f, 1.3f, 0.07f, 0.4f, true);
         cfg.layers.push_back(l);
     }
 
     // --- Spider biome: dark detritus, web strands, mushrooms --------------
     {
-        auto l = layer("dead_leaves", {BugClass::Spiders}, 0.40f, 0.7f, 1.5f, 0.05f, 0.35f, false);
+        auto l = layer("dead_leaves", "assets/prim_slab_brown.glb", {BugClass::Spiders}, 0.40f, 0.7f, 1.5f, 0.05f, 0.35f, false);
         l.maxSlope = 0.5f;
         cfg.layers.push_back(l);
     }
     {
-        auto l = layer("mushroom", {BugClass::Spiders}, 0.12f, 0.6f, 1.8f, 0.09f, 0.6f, false);
+        auto l = layer("mushroom", "assets/prim_sphere_red.glb", {BugClass::Spiders}, 0.12f, 0.6f, 1.8f, 0.09f, 0.6f, false);
         cfg.layers.push_back(l);
     }
     {
-        auto l = layer("web_strand", {BugClass::Spiders}, 0.08f, 0.9f, 1.6f, 0.10f, 0.65f, false);
+        auto l = layer("web_strand", "assets/prim_cylinder_dark_brown.glb", {BugClass::Spiders}, 0.08f, 0.9f, 1.6f, 0.10f, 0.65f, false);
         cfg.layers.push_back(l);
     }
 
     // --- Woodlice biome: moss patches, twigs ------------------------------
     {
-        auto l = layer("moss_patch", {BugClass::Woodlice}, 0.45f, 0.8f, 1.5f, 0.04f, 0.4f, false);
+        auto l = layer("moss_patch", "assets/prim_sphere_green.glb", {BugClass::Woodlice}, 0.45f, 0.8f, 1.5f, 0.04f, 0.4f, false);
         l.maxSlope = 0.45f;
         l.yOffset = -0.05f;
         cfg.layers.push_back(l);
     }
     {
-        auto l = layer("twig", {BugClass::Woodlice}, 0.22f, 0.7f, 1.4f, 0.06f, 0.3f, true);
+        auto l = layer("twig", "assets/prim_cylinder_brown.glb", {BugClass::Woodlice}, 0.22f, 0.7f, 1.4f, 0.06f, 0.3f, true);
         cfg.layers.push_back(l);
     }
 

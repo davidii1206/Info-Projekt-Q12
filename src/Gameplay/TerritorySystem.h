@@ -302,8 +302,8 @@ namespace TerritorySystem
     inline void DrawOverlay(entt::registry& registry,
                             ImVec2          mapOriginPx,
                             ImVec2          mapSizePx,
-                            glm::vec2       worldMin = {-50.f, -50.f},
-                            glm::vec2       worldMax = { 50.f,  50.f})
+                            glm::vec2       worldMin = {-150.f, -150.f},
+                            glm::vec2       worldMax = { 150.f,  150.f})
     {
         constexpr ImGuiWindowFlags kFlags =
             ImGuiWindowFlags_NoDecoration      |

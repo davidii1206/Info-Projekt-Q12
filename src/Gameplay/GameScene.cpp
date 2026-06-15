@@ -78,8 +78,8 @@ void GameScene::OnEnter(SceneContext& ctx) {
                                         /*dropLifetime=*/15.f);
 
         // Fog of War – initialise grid to match the map extents
-        m_Fog.Init(glm::vec3{-50.f, 0.f, -50.f},
-                   glm::vec3{ 50.f, 0.f,  50.f},
+        m_Fog.Init(glm::vec3{-150.f, 0.f, -150.f},
+                   glm::vec3{ 150.f, 0.f,  150.f},
                    /*cellSize=*/2.f);
 
         // Territory zones
@@ -130,9 +130,9 @@ void GameScene::OnEnter(SceneContext& ctx) {
         m_World.Generate(genCfg);
 
         ScatterConfig scatterCfg = ScatterConfig::Default(m_WorldSeed);
-        // Align the scatter footprint with the Fog/Territory map extents (±50).
-        scatterCfg.worldMin = {-50.f, -50.f};
-        scatterCfg.worldMax = { 50.f,  50.f};
+        // Align the scatter footprint with the Fog/Territory map extents (±150).
+        scatterCfg.worldMin = {-150.f, -150.f};
+        scatterCfg.worldMax = { 150.f,  150.f};
         // Flat placeholder ground (test scene is flat). Raise this to your
         // terrain's vertical scale once props should sit on procedural hills.
         scatterCfg.heightWorldScale = 0.0f;
@@ -618,8 +618,8 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                 ctx.serverRegistry,
                 ImVec2(0.f, 0.f),
                 ImVec2(io.DisplaySize.x, io.DisplaySize.y),
-                glm::vec2{-50.f, -50.f},
-                glm::vec2{ 50.f,  50.f});
+                glm::vec2{-150.f, -150.f},
+                glm::vec2{ 150.f,  150.f});
         }
     }
 

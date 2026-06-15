@@ -45,8 +45,8 @@
  */
 struct FogGrid
 {
-    glm::vec3 worldMin{-50.f, 0.f, -50.f}; ///< Bottom-left corner of the grid.
-    glm::vec3 worldMax{ 50.f, 0.f,  50.f}; ///< Top-right corner of the grid.
+    glm::vec3 worldMin{-150.f, 0.f, -150.f}; ///< Bottom-left corner of the grid.
+    glm::vec3 worldMax{ 150.f, 0.f,  150.f}; ///< Top-right corner of the grid.
     float     cellSize = 2.f;               ///< World-units per cell edge.
 
     int cellsX = 0; ///< Number of cells along X.
@@ -61,8 +61,8 @@ struct FogGrid
      * @param max      World-space maximum (X and Z used).
      * @param cell     World-units per cell edge.
      */
-    void Init(glm::vec3 min = {-50.f,0.f,-50.f},
-              glm::vec3 max = { 50.f,0.f, 50.f},
+    void Init(glm::vec3 min = {-150.f,0.f,-150.f},
+              glm::vec3 max = { 150.f,0.f, 150.f},
               float     cell = 2.f)
     {
         worldMin = min;

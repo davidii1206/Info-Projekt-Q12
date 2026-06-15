@@ -21,8 +21,10 @@
  *
  * Placeholders
  * ------------
- * Every layer ships pointing at an existing placeholder mesh
- * (`assets/cube.glb`) so the system is visible and runnable *today*. Replace
+ * Every layer ships pointing at a small generated low-poly primitive
+ * (`assets/prim_*.glb` — sphere/cone/cylinder/slab, flat-colored via
+ * `baseColorFactor`) so the field is visible and runnable *today* and reads
+ * as grass/rocks/wood rather than a field of identical cubes. Replace
  * `ScatterLayer::modelPath` with the real art as it is produced — the asset
  * each layer wants is documented in `ScatterLayer::name`.
  *
@@ -57,8 +59,8 @@ struct ScatterLayer {
     /// Human-readable name of the asset an artist needs to provide.
     std::string name = "prop";
 
-    /// Mesh used for this layer. Defaults to the placeholder cube; swap for art.
-    std::string modelPath = "assets/cube.glb";
+    /// Mesh used for this layer. Defaults to a placeholder primitive; swap for art.
+    std::string modelPath = "assets/prim_sphere_green.glb";
 
     /// Biomes this prop may appear in. Empty = every biome.
     std::vector<BugClass> biomes;
@@ -104,12 +106,12 @@ struct ScatterConfig {
     uint32_t seed = 12345;
 
     /// World-space XZ extents the scatter covers. Match your terrain footprint.
-    /// Defaults align with the Fog/Territory extents used in GameScene (±50).
-    glm::vec2 worldMin = {-50.f, -50.f};
-    glm::vec2 worldMax = { 50.f,  50.f};
+    /// Defaults align with the Fog/Territory extents used in GameScene (±150).
+    glm::vec2 worldMin = {-150.f, -150.f};
+    glm::vec2 worldMax = { 150.f,  150.f};
 
     /// Spacing (world units) between candidate points. Smaller = denser & slower.
-    float spacing = 1.25f;
+    float spacing = 2.0f;
 
     /// How far (fraction of `spacing`) each candidate may jitter off the grid.
     float jitter = 0.9f;
