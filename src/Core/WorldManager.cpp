@@ -30,7 +30,6 @@ WorldManager::~WorldManager() { Clear(); }
 
 void WorldManager::Clear() {
     m_Terrains.clear();
-    m_Heightmap.clear();
     m_Tiles.clear();
     m_GridSize = 0;
 }
@@ -127,18 +126,6 @@ void WorldManager::Generate(const WorldGenConfig& config) {
         td.spawnPoint = td.site;
         m_Terrains.push_back(td);
     }
-
-    // -----------------------------------------------------------------------
-    // TEMPORARY flat heightmap.
-    //
-    // The organic per-pixel heightmap generator (smoothstep slopes, Ant-biome
-    // jagged-plaza sub-sites, per-biome height nudges) was removed during the
-    // worldgen teardown — it contradicts the terraced Thronefall model.
-    // We fill a flat (all-zero) heightmap so ScatterSystem keeps working until
-    // the TerrainTile grid + vertex-displaced mesh replace it.
-    // See docs/WORLDGEN_PLAN.md.
-    // -----------------------------------------------------------------------
-    m_Heightmap.assign((size_t)config.width * config.height, 0.0f);
 
     // -----------------------------------------------------------------------
     // Terraced tile grid (see docs/WORLDGEN_PLAN.md §2-3).

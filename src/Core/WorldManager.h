@@ -70,11 +70,6 @@ public:
     const std::vector<TerrainData>& GetTerrains() const { return m_Terrains; }
     const WorldGenConfig& GetConfig() const { return m_CurrentConfig; }
 
-    // TEMPORARY: flat (all-zero) heightmap kept so ScatterSystem keeps
-    // building during the worldgen teardown. Replaced by a TerrainTile grid
-    // in the implementation phase (see docs/WORLDGEN_PLAN.md §2, §7).
-    const std::vector<float>& GetHeightmap() const { return m_Heightmap; }
-
     // --- Terraced tile grid (see docs/WORLDGEN_PLAN.md §2-3) ---
 
     /// Number of tiles along one edge of the (square) tile grid.
@@ -104,7 +99,6 @@ private:
 
     WorldGenConfig m_CurrentConfig;
     std::vector<TerrainData> m_Terrains;
-    std::vector<float> m_Heightmap; // temporary flat placeholder (see above)
     std::unique_ptr<siv::PerlinNoise> m_Perlin;
 
     int m_GridSize = 0;

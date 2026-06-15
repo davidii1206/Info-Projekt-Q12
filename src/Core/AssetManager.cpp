@@ -338,6 +338,24 @@ SceneData AssetManager::LoadGLTF(const std::string& filePath) {
     return sceneData;
 }
 
+SceneData AssetManager::RegisterProceduralScene(
+    const std::string& key,
+    std::vector<ModelVertex> vertices,
+    std::vector<uint32_t> indices,
+    const std::vector<MeshSection>& sections,
+    const std::vector<Material>& materials)
+{
+    auto model = std::make_shared<Model>(s_Device, vertices, indices, sections, materials);
+    std::vector<MeshInstance> meshInstances = {
+        { 0, (uint32_t)sections.size(), glm::mat4(1.0f) }
+    };
+    SceneData sceneData = { model, {}, meshInstances, std::move(vertices), std::move(indices) };
+    s_Scenes[key] = sceneData;
+    spdlog::info("AssetManager: registered procedural scene '{}' ({} vertices, {} indices, {} sections)",
+                  key, sceneData.cpuVertices.size(), sceneData.cpuIndices.size(), sections.size());
+    return sceneData;
+}
+
 std::shared_ptr<Model> AssetManager::GetFallbackModel() {
     if (s_FallbackModel) return s_FallbackModel;
     std::vector<ModelVertex> vertices = {

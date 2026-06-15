@@ -117,32 +117,10 @@ ScatterConfig ScatterConfig::Default(uint32_t seed) {
 
 namespace {
 
-/// Bilinearly sample the heightmap at floating-point pixel coordinates.
-float SampleHeight(const std::vector<float>& hm, int w, int h, float px, float py) {
-    if (hm.empty() || w <= 0 || h <= 0) return 0.f;
-    px = std::clamp(px, 0.f, (float)(w - 1));
-    py = std::clamp(py, 0.f, (float)(h - 1));
-    int x0 = (int)px, y0 = (int)py;
-    int x1 = std::min(x0 + 1, w - 1);
-    int y1 = std::min(y0 + 1, h - 1);
-    float fx = px - x0, fy = py - y0;
-    float h00 = hm[y0 * w + x0], h10 = hm[y0 * w + x1];
-    float h01 = hm[y1 * w + x0], h11 = hm[y1 * w + x1];
-    float a = glm::mix(h00, h10, fx);
-    float b = glm::mix(h01, h11, fx);
-    return glm::mix(a, b, fy);
-}
-
-/// Find the BugClass of the biome whose Voronoi site is nearest to a pixel.
-BugClass BiomeAt(const std::vector<TerrainData>& terrains, float px, float py) {
-    BugClass best = BugClass::None;
-    float bestD = 1e30f;
-    for (const auto& t : terrains) {
-        float dx = px - t.site.x, dy = py - t.site.y;
-        float d = dx * dx + dy * dy;
-        if (d < bestD) { bestD = d; best = t.bugClass; }
-    }
-    return best;
+/// BugClass of the territory owning a tile, or BugClass::None if out of range.
+BugClass BiomeAt(const std::vector<TerrainData>& terrains, const TerrainTile& tile) {
+    if (tile.territoryId >= terrains.size()) return BugClass::None;
+    return terrains[tile.territoryId].bugClass;
 }
 
 } // namespace
@@ -152,14 +130,11 @@ BugClass BiomeAt(const std::vector<TerrainData>& terrains, float px, float py) {
 // ---------------------------------------------------------------------------
 
 uint32_t ScatterSystem::Populate(entt::registry& registry, const WorldManager& world, const ScatterConfig& cfg) {
-    const auto& hm = world.GetHeightmap();
     const auto& wcfg = world.GetConfig();
     const auto& terrains = world.GetTerrains();
-    const int W = wcfg.width;
-    const int H = wcfg.height;
 
-    if (hm.empty() || cfg.layers.empty()) {
-        spdlog::warn("ScatterSystem: nothing to scatter (empty heightmap or no layers)");
+    if (world.GetGridSize() <= 0 || cfg.layers.empty()) {
+        spdlog::warn("ScatterSystem: nothing to scatter (empty tile grid or no layers)");
         return 0;
     }
 
@@ -173,12 +148,7 @@ uint32_t ScatterSystem::Populate(entt::registry& registry, const WorldManager& w
     // clumping is a smooth field rather than white noise).
     siv::PerlinNoise perlin(static_cast<siv::PerlinNoise::seed_type>(cfg.seed));
 
-    // Maps a world XZ to heightmap pixel space.
-    auto worldToPixel = [&](float wx, float wz) {
-        float u = (wx - cfg.worldMin.x) / worldSize.x;
-        float v = (wz - cfg.worldMin.y) / worldSize.y;
-        return glm::vec2(u * (W - 1), v * (H - 1));
-    };
+    const int numTiers = std::max(1, wcfg.numTiers);
 
     const int cols = (int)std::ceil(worldSize.x / cfg.spacing);
     const int rows = (int)std::ceil(worldSize.y / cfg.spacing);
@@ -198,16 +168,20 @@ uint32_t ScatterSystem::Populate(entt::registry& registry, const WorldManager& w
             float wz = cfg.worldMin.y + (gz + 0.5f) * cfg.spacing + jz;
             if (wx > cfg.worldMax.x || wz > cfg.worldMax.y) continue;
 
-            glm::vec2 px = worldToPixel(wx, wz);
+            // Tile lookup: skip cliffs and water entirely (no scatter there).
+            int tx, tz;
+            world.WorldToTile(wx, wz, tx, tz);
+            const TerrainTile& tile = world.GetTile(tx, tz);
+            if (tile.surface == TileSurface::Cliff || tile.surface == TileSurface::Water) continue;
 
-            // Height + slope from the heightmap (slope via central differences).
-            float hC = SampleHeight(hm, W, H, px.x, px.y);
-            float hX = SampleHeight(hm, W, H, px.x + 1.f, px.y);
-            float hZ = SampleHeight(hm, W, H, px.x, px.y + 1.f);
-            glm::vec3 normal = glm::normalize(glm::vec3(hC - hX, 1.0f, hC - hZ));
-            float slope = 1.0f - normal.y; // 0 = flat, →1 = steep
+            // Height band is normalized [0..1] across the tier range; slope is
+            // binary - 0 on flat Plateau tiles, 1 on Ramp tiles (see
+            // docs/WORLDGEN_PLAN.md §6).
+            float hC = (numTiers > 1) ? (float)tile.tier / (float)(numTiers - 1) : 0.f;
+            float slope = (tile.surface == TileSurface::Ramp) ? 1.0f : 0.0f;
+            glm::vec3 normal(0.f, 1.f, 0.f);
 
-            BugClass biome = BiomeAt(terrains, px.x, px.y);
+            BugClass biome = BiomeAt(terrains, tile);
 
             // Evaluate layers in order; first match wins this candidate.
             for (size_t li = 0; li < cfg.layers.size(); ++li) {
@@ -228,7 +202,7 @@ uint32_t ScatterSystem::Populate(entt::registry& registry, const WorldManager& w
                 if (u01(rng) > L.density) continue;
 
                 // --- Place the prop ---------------------------------------
-                float worldY = hC * cfg.heightWorldScale + L.yOffset;
+                float worldY = world.TierToWorldHeight(tile.tier) * cfg.heightWorldScale + L.yOffset;
                 glm::vec3 pos(wx, worldY, wz);
 
                 glm::vec3 rot(0.f);

@@ -110,9 +110,19 @@ generate identical grids — same constraint the scatter system relies on).
 
 ---
 
-## 4. TODO A — Vertex displacement (terrain mesh)
+## 4. TODO A — Vertex displacement (terrain mesh) — DONE (Phase 2)
 
 Turning the tile grid into the Thronefall mesh.
+
+**Status:** implemented in `src/Graphics/TerrainMeshBuilder.cpp` /
+`WorldManager::GenerateTileGrid`. Per-tile (not yet chunked/greedy-merged):
+plateau tops, sloped ramp wedges, and cliff walls toward lower neighbours, all
+flat-shaded via `ModelVertex.color` per tier/surface. Registered with
+`AssetManager::RegisterProceduralScene` and rendered through the existing
+`GameModelPipeline`; the same vertex/index buffers feed
+`MeshCollisionBuilder::Build` for static physics collision (host only).
+Water is rendered as an opaque flat plane (no separate translucent pipeline
+yet). Chunking + greedy quad merging remain future work (TODO B, LODs).
 
 **Approach: CPU-generated chunked mesh (recommended over GPU displacement).**
 Reasons: tiers are discrete + need hard normals (flat shading) and the mesh

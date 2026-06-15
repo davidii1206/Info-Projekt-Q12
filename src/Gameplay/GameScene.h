@@ -128,23 +128,6 @@ private:
      */
     void SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos);
 
-    /**
-     * @brief Loads the scene GLTF and registers its geometry as static mesh collision.
-     *
-     * Called once from OnEnter() on the server.  Extracts the CPU-side vertex/index
-     * data from AssetManager (cached from the same LoadGLTF call used for rendering)
-     * and passes it to MeshCollisionBuilder + PhysicsServer::AddStaticMesh().
-     *
-     * @param ctx     The scene context (provides access to physics).
-     * @param glbPath Path to the .glb scene file (same as the visual model path).
-     * @param transform Optional world transform to bake into the physics vertices.
-     *                  Defaults to identity (no transform).
-     */
-    void LoadSceneMeshCollision(
-        SceneContext&     ctx,
-        const std::string& glbPath,
-        const glm::mat4&   transform = glm::mat4(1.f));
-
     /// Handles for static mesh collision bodies (scene geometry).
     /// Stored so they can be removed on OnExit().
     std::vector<PhysicsBodyHandle> m_MeshCollisionBodies;

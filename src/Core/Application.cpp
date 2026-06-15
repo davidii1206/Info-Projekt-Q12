@@ -49,8 +49,8 @@ Application::Application() {
     m_Physics.Init();
     // NOTE: The flat AddStaticFloor() below acts as a global safety net for
     // scenes that do not register their own mesh collision (e.g. MainMenuScene).
-    // GameScene::LoadSceneMeshCollision() provides accurate per-mesh collision
-    // for gameplay levels and is called from GameScene::OnEnter().
+    // GameScene::OnEnter() registers accurate collision for the generated
+    // terrain mesh on the host (see TerrainMeshBuilder).
     m_Physics.AddStaticFloor();
     m_Physics.GetSystem().OptimizeBroadPhase();
     spdlog::info("Physics initialized");

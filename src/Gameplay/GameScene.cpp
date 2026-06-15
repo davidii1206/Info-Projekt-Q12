@@ -15,6 +15,7 @@
 #include "../Core/AssetManager.h"
 #include "../Core/MeshCollisionBuilder.h"
 #include "../Graphics/Renderer.h"
+#include "../Graphics/TerrainMeshBuilder.h"
 #include "ResourceTypes.h"
 #include "ResourceHUD.h"
 #include "FogOfWar.h"
@@ -55,17 +56,57 @@ void GameScene::OnEnter(SceneContext& ctx) {
         m_Camera->UpdateVectors();
     }
 
+    // ------------------------------------------------------------------
+    // Procedural terrain (terraced tile grid, see docs/WORLDGEN_PLAN.md).
+    //
+    // Generated identically on every peer from the shared seed. The CPU
+    // mesh is used both for rendering (registered with AssetManager under a
+    // synthetic key so the existing ModelComponent render path picks it up)
+    // and, on the host, for static physics collision.
+    // ------------------------------------------------------------------
+    TerrainMeshBuilder::TerrainMeshData terrainMesh;
+    {
+        WorldGenConfig genCfg;
+        genCfg.seed = m_WorldSeed;
+        m_World.Generate(genCfg);
+
+        terrainMesh = TerrainMeshBuilder::Build(m_World);
+
+        std::vector<MeshSection> sections = {
+            { 0, (uint32_t)terrainMesh.indices.size(), 0 }
+        };
+        std::vector<Material> materials = { Material{"Terrain"} };
+        AssetManager::RegisterProceduralScene("procedural://terrain",
+                                               terrainMesh.vertices,
+                                               terrainMesh.indices,
+                                               sections, materials);
+
+        auto terrainEntity = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(terrainEntity);
+        ctx.clientRegistry.emplace<ModelComponent>(terrainEntity, "procedural://terrain");
+
+        spdlog::info("GameScene: built terrain mesh ({} vertices, {} indices)",
+                      terrainMesh.vertices.size(), terrainMesh.indices.size());
+    }
+
     if (ctx.network.IsHosting()) {
         /**
-         * @brief Load the scene's mesh geometry as static physics collision.
+         * @brief Register the generated terrain mesh as static physics collision.
          *
-         * This replaces the flat AddStaticFloor() placeholder with accurate
-         * per-triangle collision derived from the actual GLTF scene mesh.
-         * The same asset path used for visual rendering is reused here —
-         * AssetManager returns cached CPU-side vertices/indices at no extra
-         * file-IO cost.
+         * Replaces the old flat AddStaticFloor() / test_scene_pixelation.glb
+         * placeholder with collision matching the terraced terrain mesh.
          */
-        LoadSceneMeshCollision(ctx, "assets/test_scene_pixelation.glb");
+        JPH::Shape::ShapeResult terrainShape = MeshCollisionBuilder::Build(
+            terrainMesh.vertices, terrainMesh.indices, glm::mat4(1.f));
+        if (terrainShape.IsValid()) {
+            PhysicsBodyHandle handle = ctx.physics->AddStaticMesh(
+                terrainShape.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity());
+            if (handle.IsValid()) m_MeshCollisionBodies.push_back(handle);
+            else spdlog::error("GameScene: AddStaticMesh failed for terrain mesh");
+        } else {
+            spdlog::error("GameScene: terrain MeshShape creation failed: {}",
+                           terrainShape.GetError().c_str());
+        }
 
         // Initialize resource system
         m_ResourceManager.Init();
@@ -125,17 +166,13 @@ void GameScene::OnEnter(SceneContext& ctx) {
     // They live in the client registry alongside other renderable entities.
     // ------------------------------------------------------------------
     {
-        WorldGenConfig genCfg;
-        genCfg.seed = m_WorldSeed;
-        m_World.Generate(genCfg);
-
         ScatterConfig scatterCfg = ScatterConfig::Default(m_WorldSeed);
         // Align the scatter footprint with the Fog/Territory map extents (±150).
         scatterCfg.worldMin = {-150.f, -150.f};
         scatterCfg.worldMax = { 150.f,  150.f};
-        // Flat placeholder ground (test scene is flat). Raise this to your
-        // terrain's vertical scale once props should sit on procedural hills.
-        scatterCfg.heightWorldScale = 0.0f;
+        // Props sit on the terraced terrain mesh: TierToWorldHeight() already
+        // returns world-space Y, so no extra scaling is needed.
+        scatterCfg.heightWorldScale = 1.0f;
         // The renderer issues one draw call per scattered entity (no
         // instancing yet), so keep the candidate grid coarse enough that the
         // total prop count stays in the low thousands even on the larger map.
@@ -908,82 +945,3 @@ void GameScene::SendLocalInput(SceneContext& ctx) {
     ctx.network.Send(pkt);
 }
 
-// ---------------------------------------------------------------------------
-// Mesh Collision
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Loads scene geometry as static Jolt MeshShape collision bodies.
- *
- * Workflow:
- *  1. Load (or retrieve from cache) the GLTF scene via AssetManager.
- *  2. Extract CPU-side vertices + indices from the cached SceneData.
- *  3. Build a Jolt MeshShape using MeshCollisionBuilder.
- *  4. Register the resulting body with the PhysicsServer.
- *  5. Store the handle in m_MeshCollisionBodies for cleanup on OnExit().
- *
- * The function logs a warning and returns gracefully if the physics server
- * is unavailable, the asset fails to load, or the shape cannot be created.
- *
- * @param ctx       Scene context providing access to the PhysicsServer.
- * @param glbPath   Path to the .glb file whose geometry is used for collision.
- * @param transform Optional world-space transform baked into the shape vertices.
- */
-void GameScene::LoadSceneMeshCollision(
-    SceneContext&      ctx,
-    const std::string& glbPath,
-    const glm::mat4&   transform)
-{
-    if (!ctx.physics) {
-        spdlog::warn("GameScene::LoadSceneMeshCollision: no PhysicsServer available.");
-        return;
-    }
-
-    // 1. Load (or retrieve cached) GLTF scene data including CPU vertices/indices.
-    SceneData sceneData = AssetManager::LoadGLTF(glbPath);
-    if (!sceneData.model) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: failed to load '{}'", glbPath);
-        return;
-    }
-
-    if (sceneData.cpuVertices.empty() || sceneData.cpuIndices.empty()) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: '{}' has no CPU mesh data.", glbPath);
-        return;
-    }
-
-    spdlog::info("GameScene::LoadSceneMeshCollision: building mesh shape for '{}' "
-                 "({} vertices, {} indices)",
-                 glbPath,
-                 sceneData.cpuVertices.size(),
-                 sceneData.cpuIndices.size());
-
-    // 2. Build the Jolt MeshShape from CPU geometry.
-    JPH::Shape::ShapeResult result = MeshCollisionBuilder::Build(
-        sceneData.cpuVertices,
-        sceneData.cpuIndices,
-        transform
-    );
-
-    if (!result.IsValid()) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: MeshShape creation failed for '{}': {}",
-                      glbPath, result.GetError().c_str());
-        return;
-    }
-
-    // 3. Register the static mesh body with the physics server.
-    PhysicsBodyHandle handle = ctx.physics->AddStaticMesh(
-        result.Get(),
-        JPH::RVec3::sZero(),
-        JPH::Quat::sIdentity()
-    );
-
-    if (!handle.IsValid()) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: AddStaticMesh failed for '{}'", glbPath);
-        return;
-    }
-
-    // 4. Store for later cleanup.
-    m_MeshCollisionBodies.push_back(handle);
-
-    spdlog::info("GameScene::LoadSceneMeshCollision: mesh collision active for '{}'", glbPath);
-}
