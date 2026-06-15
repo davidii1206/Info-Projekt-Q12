@@ -17,7 +17,7 @@ FetchContent_Declare(Jolt GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics G
 FetchContent_Declare(EnTT GIT_REPOSITORY https://github.com/skypjack/entt.git GIT_TAG v3.13.0)
 FetchContent_Declare(tinygltf GIT_REPOSITORY https://github.com/syoyo/tinygltf.git GIT_TAG release)
 FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git GIT_TAG master)
-FetchContent_Declare(openal-soft GIT_REPOSITORY https://github.com/kcat/openal-soft.git GIT_TAG master)
+FetchContent_Declare(openal-soft GIT_REPOSITORY https://github.com/kcat/openal-soft.git GIT_TAG 1.24.3)
 FetchContent_Declare(enet GIT_REPOSITORY https://github.com/lsalzman/enet.git GIT_TAG master)
 FetchContent_Declare(perlin_noise GIT_REPOSITORY https://github.com/Reputeless/PerlinNoise.git GIT_TAG master)
 FetchContent_Declare(voronoi GIT_REPOSITORY https://github.com/JCash/voronoi.git GIT_TAG master)

@@ -116,7 +116,7 @@ public:
         auto it = m_Textures.find(name);
         if (it == m_Textures.end()) {
             spdlog::warn("[HUDTextureRegistry] Textur '{}' nicht gefunden.", name);
-            return nullptr;
+            return static_cast<ImTextureID>(0);
         }
         return reinterpret_cast<ImTextureID>(it->second->GetHandle());
     }
