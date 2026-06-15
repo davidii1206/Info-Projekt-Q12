@@ -10,31 +10,23 @@
 struct TerrainData {
     int id;
     BugClass bugClass;
-    int altitude = 0;
     glm::vec2 site;
     glm::vec2 spawnPoint;
     glm::vec3 color;
-    std::vector<glm::vec2> vertices;
-    std::vector<glm::vec2> subSites; // For Ant biome polygons
 };
 
 struct WorldGenConfig {
     int numTerrains = 8;
     int seed = 12345;
-    float noiseScale = 0.05f;
-    int noiseOctaves = 4;
     int relaxationIterations = 2;
-    bool randomSpawnInTerrain = false;
     int width = 1024;
     int height = 1024;
 
-    // Thronefall Style
-    int numAltitudeLevels = 4;
-    float altitudeNoiseScale = 0.01f;
-    float altitudeMaxHeight = 1.0f;
-    float slopeSharpness = 0.1f; // Transition sharpness
-    float slopeWidth = 25.0f;    // Base width of ramps
-    bool showHeightmap = true;
+    // --- Terraced model (see docs/WORLDGEN_PLAN.md) ---
+    // Organic-height fields (noiseScale, slopeSharpness, slopeWidth,
+    // altitudeNoiseScale, altitudeMaxHeight, numAltitudeLevels, ...) were
+    // removed during the worldgen teardown. The terraced tier config
+    // (numTiers / tierHeight) is added in the implementation phase.
 };
 
 class WorldManager {
@@ -43,9 +35,13 @@ public:
     ~WorldManager();
 
     void Generate(const WorldGenConfig& config);
-    
+
     const std::vector<TerrainData>& GetTerrains() const { return m_Terrains; }
     const WorldGenConfig& GetConfig() const { return m_CurrentConfig; }
+
+    // TEMPORARY: flat (all-zero) heightmap kept so ScatterSystem keeps
+    // building during the worldgen teardown. Replaced by a TerrainTile grid
+    // in the implementation phase (see docs/WORLDGEN_PLAN.md §2, §7).
     const std::vector<float>& GetHeightmap() const { return m_Heightmap; }
 
     // Helper for visualization
@@ -53,16 +49,9 @@ public:
 
 private:
     void Clear();
-    void GenerateHeightmap();
-    
-    // Biome-specific height generators
-    float GetAntHeight(float x, float y, const jcv_diagram* diagram);
-    float GetTermiteHeight(float x, float y);
-    float GetSpiderHeight(float x, float y);
-    float GetWoodliceHeight(float x, float y);
 
     WorldGenConfig m_CurrentConfig;
     std::vector<TerrainData> m_Terrains;
-    std::vector<float> m_Heightmap;
+    std::vector<float> m_Heightmap; // temporary flat placeholder (see above)
     std::unique_ptr<siv::PerlinNoise> m_Perlin;
 };

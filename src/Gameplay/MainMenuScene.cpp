@@ -85,20 +85,11 @@ void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
     ImGui::Begin("World Generation (WorldManager)");
     ImGui::SliderInt("Terrains", &m_GenConfig.numTerrains, 2, 16);
     ImGui::SliderInt("Relaxation", &m_GenConfig.relaxationIterations, 0, 10);
-    ImGui::Checkbox("Random Spawn In Territory", &m_GenConfig.randomSpawnInTerrain);
-    
-    ImGui::SeparatorText("Thronefall Style");
-    ImGui::SliderInt("Altitude Levels", &m_GenConfig.numAltitudeLevels, 1, 8);
-    ImGui::DragFloat("Altitude Noise Scale", &m_GenConfig.altitudeNoiseScale, 0.001f, 0.0001f, 0.1f);
-    ImGui::SliderFloat("Altitude Max Height", &m_GenConfig.altitudeMaxHeight, 0.1f, 1.0f);
-    ImGui::SliderFloat("Slope Sharpness", &m_GenConfig.slopeSharpness, 0.01f, 0.49f);
-    ImGui::SliderFloat("Slope Width", &m_GenConfig.slopeWidth, 1.0f, 100.0f);
-    ImGui::Checkbox("Show Heightmap", &m_GenConfig.showHeightmap);
-
-    ImGui::SeparatorText("Noise Parameters");
-    ImGui::DragFloat("Noise Scale", &m_GenConfig.noiseScale, 0.001f, 0.0001f, 1.0f);
-    ImGui::DragInt("Noise Octaves", &m_GenConfig.noiseOctaves, 1, 1, 8);
     ImGui::DragInt("Seed", &m_GenConfig.seed, 1, 0, 999999);
+
+    // NOTE: the organic altitude/slope/noise controls were removed with the
+    // worldgen teardown. Terraced-tier controls (numTiers / tierHeight) will
+    // be re-added once the new generator lands. See docs/WORLDGEN_PLAN.md.
     
     if (ImGui::Button("Generate")) {
         m_WorldManager->Generate(m_GenConfig);
