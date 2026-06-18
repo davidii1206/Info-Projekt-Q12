@@ -60,10 +60,11 @@ layout(set = 2, binding = 3, std430) readonly buffer MaterialBuffer {
     GPUMaterial materials[];
 } matBuffer;
 
-// Fragment push constants: material index + object ID
+// Fragment push constants: material index, object ID, alpha (transparency)
 layout(set = 3, binding = 0) uniform MaterialIndex {
-    uint materialIndex;
-    uint objectID;
+    uint  materialIndex;
+    uint  objectID;
+    float alpha;
 } pc;
 
 // ---------------------------------------------------------------------------
@@ -162,7 +163,8 @@ void main() {
     GPUMaterial mat = matBuffer.materials[pc.materialIndex];
     vec4 texColor   = texture(baseColorTexture, vTexCoords);
     vec4 albedo     = mat.baseColorFactor * vColor * texColor;
-    if (albedo.a < 0.1) discard;
+    albedo.a *= pc.alpha;
+    if (albedo.a < 0.01) discard;
 
     vec3 N = normalize(vNormal);
     vec3 V = normalize(globals.cameraPos.xyz - vPos);

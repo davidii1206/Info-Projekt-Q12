@@ -29,6 +29,14 @@ enum class PacketType : uint8_t {
     // Client → Server
     PLAYER_INPUT     = 10, /**< Sends movement and rotation input from client to server. */
     COMMANDER_ORDER  = 12, /**< Client sends move order to server for selected units. */
+
+    // Server → Client (state sync)
+    TERRITORY_SNAPSHOT = 13, /**< Periodic territory zone ownership + progress. */
+    FOG_SNAPSHOT       = 14, /**< Periodic fog-of-war grid bits. */
+    RESOURCE_SPAWNED   = 15, /**< A resource node was spawned. */
+    RESOURCE_DEPLETED  = 16, /**< A resource node was depleted or destroyed. */
+    BUILDING_SPAWNED   = 17, /**< A building was spawned. */
+    BUILDING_DESTROYED = 18, /**< A building was destroyed. */
 };
 
 /**
@@ -149,11 +157,98 @@ struct GameOverPacket {
 };
 
 /**
+ * @struct TerritorySnapshotPacket
+ * @brief Server → Client: state of all territory zones.
+ *
+ * Sent periodically (e.g. 2 Hz) so clients can render the territory overlay
+ * without needing direct access to the server registry.
+ */
+struct TerritoryZoneData {
+    char     name[32]      = "Zone";
+    float    halfW         = 8.f;
+    float    halfD         = 8.f;
+    float    captureTime   = 10.f;
+    float    captureProgress = 0.f;
+    uint32_t ownerTeam     = 0xFFFF'FFFFu;
+    uint32_t contestedBy   = 0xFFFF'FFFFu;
+    float    centerX = 0.f, centerY = 0.f, centerZ = 0.f;
+};
+
+struct TerritorySnapshotPacket {
+    PacketType type      = PacketType::TERRITORY_SNAPSHOT;
+    uint32_t   zoneCount = 0;
+    TerritoryZoneData zones[8]{};
+};
+
+/**
+ * @struct FogSnapshotPacket
+ * @brief Server → Client: bit-packed revealed-cell grid for the fog of war.
+ *
+ * The grid is serialised as an array of uint64_t words.  Bit i of word w
+ * corresponds to cell index w*64+i (row-major: z*cellsX + x).
+ */
+struct FogSnapshotPacket {
+    PacketType type    = PacketType::FOG_SNAPSHOT;
+    uint16_t   cellsX  = 0;
+    uint16_t   cellsZ  = 0;
+    /// Enough for a 100×100 grid (10 000 bits → 157 uint64s).
+    uint64_t   gridData[160]{};
+};
+
+/**
+ * @struct ResourceSpawnedPacket
+ * @brief Server → Client: a resource node appeared (permanent spawn or meat drop).
+ */
+struct ResourceSpawnedPacket {
+    PacketType type     = PacketType::RESOURCE_SPAWNED;
+    uint32_t   netId    = 0;
+    uint8_t    resourceType = 1; ///< ResourceType enum value.
+    float      x = 0.f, y = 0.f, z = 0.f;
+};
+
+/**
+ * @struct ResourceDepletedPacket
+ * @brief Server → Client: a resource node has been depleted or destroyed.
+ */
+struct ResourceDepletedPacket {
+    PacketType type  = PacketType::RESOURCE_DEPLETED;
+    uint32_t   netId = 0;
+};
+
+/**
  * @struct CommanderOrderPacket
  * @brief Client → Server: move selected units to a position.
+ *
+ * Includes the list of selected unit netIds so the server knows
+ * exactly which units were selected (selection state is not synced).
  */
 struct CommanderOrderPacket {
-    PacketType type     = PacketType::COMMANDER_ORDER;
-    uint32_t   playerId = 0;
+    PacketType type          = PacketType::COMMANDER_ORDER;
+    uint32_t   playerId      = 0;
     float      x = 0.f, y = 0.f, z = 0.f; ///< World destination
+    uint32_t   selectedCount = 0;           ///< How many units are selected (max 32).
+    uint32_t   selectedNetIds[32]{};        ///< NetIds of selected units.
+};
+
+/**
+ * @struct BuildingSpawnedPacket
+ * @brief Server → Client: a building was constructed.
+ */
+struct BuildingSpawnedPacket {
+    PacketType type    = PacketType::BUILDING_SPAWNED;
+    uint32_t   netId   = 0;
+    uint32_t   teamId  = 0;
+    uint8_t    buildingType = 0; ///< BuildingType enum value.
+    uint32_t   tier    = 1;
+    float      x = 0.f, y = 0.f, z = 0.f;
+    float      hp = 500.f, maxHp = 500.f;
+};
+
+/**
+ * @struct BuildingDestroyedPacket
+ * @brief Server → Client: a building was destroyed.
+ */
+struct BuildingDestroyedPacket {
+    PacketType type  = PacketType::BUILDING_DESTROYED;
+    uint32_t   netId = 0;
 };

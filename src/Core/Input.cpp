@@ -11,13 +11,15 @@ std::unordered_map<uint8_t, bool> Input::m_MouseButtons;
 std::unordered_map<uint8_t, bool> Input::m_MouseButtonsLast;
 glm::vec2 Input::m_MousePos;
 glm::vec2 Input::m_MouseDelta = {0, 0};
+float Input::m_MouseWheelDelta = 0.f;
 
 bool Input::m_RelativeMouse = false;
 
 void Input::Update() {
     m_KeysLast = m_Keys;
     m_MouseButtonsLast = m_MouseButtons;
-    m_MouseDelta = {0, 0}; // Reset delta each frame
+    m_MouseDelta = {0, 0};
+    m_MouseWheelDelta = 0.f; // Reset wheel each frame
     
     float x, y;
     SDL_GetMouseState(&x, &y);
@@ -36,6 +38,8 @@ void Input::ProcessEvent(const SDL_Event& event) {
     } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
         m_MouseDelta.x += event.motion.xrel;
         m_MouseDelta.y += event.motion.yrel;
+    } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+        m_MouseWheelDelta += event.wheel.y;
     }
 }
 
@@ -78,4 +82,8 @@ void Input::SetRelativeMouseMode(SDL_Window* window, bool enabled) {
 
 bool Input::IsRelativeMouseMode() {
     return m_RelativeMouse;
+}
+
+float Input::GetMouseWheelDelta() {
+    return m_MouseWheelDelta;
 }

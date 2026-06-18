@@ -69,6 +69,8 @@ namespace
 
     /**
      * @brief Finds the nearest base entity for the given teamId.
+     *
+     * Checks both legacy BaseComponent and new BuildingComponent.
      * @return entt::null if none found.
      */
     entt::entity FindBase(entt::registry& registry, uint32_t teamId)
@@ -76,6 +78,13 @@ namespace
         auto view = registry.view<TransformComponent, BaseComponent>();
         for (auto e : view) {
             if (view.get<BaseComponent>(e).teamId == teamId)
+                return e;
+        }
+        // Also check new BuildingComponent (any type works as a depot)
+        auto bldView = registry.view<TransformComponent, BuildingComponent>();
+        for (auto e : bldView) {
+            auto& bc = bldView.get<BuildingComponent>(e);
+            if (bc.teamId == teamId && !bc.destroyed)
                 return e;
         }
         return entt::null;

@@ -37,11 +37,24 @@ inline void Draw(entt::registry& registry, uint32_t teamId)
 {
     // --- Find the base inventory for this team ---
     const ResourceInventory* inv = nullptr;
-    auto view = registry.view<BaseComponent, ResourceInventory>();
-    for (auto entity : view) {
-        if (view.get<BaseComponent>(entity).teamId == teamId) {
-            inv = &view.get<ResourceInventory>(entity);
-            break;
+    {
+        auto view = registry.view<BaseComponent, ResourceInventory>();
+        for (auto entity : view) {
+            if (view.get<BaseComponent>(entity).teamId == teamId) {
+                inv = &view.get<ResourceInventory>(entity);
+                break;
+            }
+        }
+    }
+    if (!inv) {
+        // Also check new BuildingComponent with ResourceInventory
+        auto bldView = registry.view<BuildingComponent, ResourceInventory>();
+        for (auto entity : bldView) {
+            if (bldView.get<BuildingComponent>(entity).teamId == teamId &&
+                !bldView.get<BuildingComponent>(entity).destroyed) {
+                inv = &bldView.get<ResourceInventory>(entity);
+                break;
+            }
         }
     }
 

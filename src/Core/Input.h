@@ -95,6 +95,12 @@ public:
     /** @brief Returns true if relative mouse mode is active. */
     static bool IsRelativeMouseMode();
 
+    /**
+     * @brief Gets the mouse wheel scroll delta for the current frame.
+     * @return float Scroll amount (positive = scroll up/away, negative = down/toward).
+     */
+    static float GetMouseWheelDelta();
+
 private:
     static std::unordered_map<SDL_Keycode, bool> m_Keys; ///< Current key state map.
     static std::unordered_map<SDL_Keycode, bool> m_KeysLast; ///< Key state map of the previous frame.
@@ -104,5 +110,6 @@ private:
 
     static glm::vec2 m_MousePos; ///< Current mouse position in window space.
     static glm::vec2 m_MouseDelta; ///< Mouse movement delta for the current frame.
+    static float m_MouseWheelDelta; ///< Mouse wheel scroll for the current frame.
     static bool m_RelativeMouse; ///< Flag for relative mouse mode activation.
 };

@@ -172,3 +172,54 @@ struct BaseHealthComponent {
     float    maxHp  = 500.f;
     bool     destroyed = false;
 };
+
+// ---------------------------------------------------------------------------
+// Building Components
+// ---------------------------------------------------------------------------
+
+/**
+ * @enum BuildingType
+ * @brief The role / class of a building.
+ */
+enum class BuildingType : uint8_t {
+    Main           = 0,  ///< Core HQ — losing it loses the game.
+    Outpost        = 1,  ///< Forward position, vision.
+    Offense        = 2,  ///< Produces / boosts offensive units.
+    Defense        = 3,  ///< Defensive structure, high durability.
+    Upgrade        = 4,  ///< Research / tech upgrade building.
+    Infrastructure = 5,  ///< Resource storage / collection boost.
+};
+
+/**
+ * @struct BuildingComponent
+ * @brief Marks an entity as a building with type, tier, and hit points.
+ *
+ * Replaces the older BaseComponent / BaseHealthComponent pattern with a
+ * unified component that carries all building-specific data.
+ */
+struct BuildingComponent {
+    BuildingType type      = BuildingType::Main;
+    uint32_t     teamId    = 0;
+    uint32_t     tier      = 1;
+    float        hp        = 500.f;
+    float        maxHp     = 500.f;
+    bool         destroyed = false;
+};
+
+/**
+ * @struct GhostComponent
+ * @brief Tags a client-only entity as a building-placement ghost (transparent,
+ *        follows cursor, snapped to grid).
+ */
+struct GhostComponent {};
+
+/**
+ * @struct ConstructionComponent
+ * @brief Building under construction — slides up from below ground over time.
+ */
+struct ConstructionComponent {
+    float elapsed  = 0.f;
+    float duration = 2.f;
+    float startY   = 0.f;
+    float targetY  = 0.f;
+};
