@@ -12,13 +12,8 @@ Renderer::Renderer(Window* window)
     : m_Window(window), m_Device(nullptr), m_CurrentCommandBuffer(nullptr), 
       m_CurrentSwapchainTexture(nullptr) 
 {
-    // Attempt to create GPU device with Vulkan backend preference
-    m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, "vulkan");
-    
-    if (!m_Device) {
-        spdlog::warn("Vulkan not available or failed to init, falling back to default GPU driver.");
-        m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, nullptr);
-    }
+    // Let SDL select the best available GPU backend (DX12 on Windows, Metal on macOS, Vulkan on Linux)
+    m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_MSL, false, nullptr);
 
     if (!m_Device) {
         spdlog::critical("Failed to create SDL GPU Device: {}", SDL_GetError());

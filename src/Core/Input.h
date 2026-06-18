@@ -86,6 +86,12 @@ public:
     static glm::vec2 GetMouseDelta();
 
     /**
+     * @brief Gets the vertical scroll delta for the current frame.
+     * @return float scroll delta (positive for up, negative for down).
+     */
+    static float GetScrollDelta();
+
+    /**
      * @brief Toggles relative mouse mode (hides cursor and captures movement).
      * @param window The SDL window to capture.
      * @param enabled If true, mouse is captured.
@@ -104,5 +110,6 @@ private:
 
     static glm::vec2 m_MousePos; ///< Current mouse position in window space.
     static glm::vec2 m_MouseDelta; ///< Mouse movement delta for the current frame.
+    static float m_ScrollDelta; ///< Vertical scroll wheel delta.
     static bool m_RelativeMouse; ///< Flag for relative mouse mode activation.
 };

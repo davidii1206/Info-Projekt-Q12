@@ -9,6 +9,9 @@
 #include <string>
 #include "../Core/PhysicsServer.h"
 #include "../Graphics/Lights.h"   // LightComponent lives here
+#include "CameraMode.h"
+#include "Bug_classes.h"
+#include "Building_classes.h"
 
 /**
  * @struct TransformComponent
@@ -48,6 +51,8 @@ struct MovementComponent {
 struct PlayerComponent {
     uint32_t playerId = 0;   /**< Unique ID for the player. */
     bool     isLocal  = false; /**< Whether this is the local player. */
+    CameraMode cameraMode = CameraMode::Commander; /**< Current camera mode. */
+    BugClass bugClass = BugClass::None; /**< The faction/class of the player. */
 };
 
 /**

@@ -5,6 +5,7 @@
 
 #pragma once
 #include <cstdint>
+#include "../Gameplay/CameraMode.h"
 
 /**
  * @enum PacketType
@@ -25,11 +26,20 @@ enum class PacketType : uint8_t {
     UNIT_DIED        = 8, /**< Notifies clients that a unit died. */
     UNIT_HP_UPDATE   = 9, /**< Broadcasts updated HP for a unit. */
     GAME_OVER        = 11,/**< Server broadcasts win/lose condition. */
+    FOG_UPDATE       = 13,/**< Server broadcasts fog-of-war grid to clients. */
+    BASE_HP_UPDATE   = 14,/**< Broadcasts updated HP for a base. */
+    BUILDING_UPGRADED = 15,/**< Broadcasts a building upgrade completion. */
+    BASE_SPAWNED      = 16,/**< Broadcasts that a base entity was created (companion to ASSET_JOINED). */
+    BUILDING_PLACED   = 17,/**< Server → Client broadcast: a building was placed in the world. */
+    BUILD_PLACE_REQUEST = 18,/**< Client → Server: request to place a building. */
 
     // Client → Server
     PLAYER_INPUT     = 10, /**< Sends movement and rotation input from client to server. */
     COMMANDER_ORDER  = 12, /**< Client sends move order to server for selected units. */
 };
+
+/// Maximum units that can be selected in a single commander order.
+constexpr uint32_t MAX_SELECTED_UNITS = 64;
 
 /**
  * @struct PingPacket
@@ -92,6 +102,8 @@ struct EntitySnapshotPacket {
     float      rx = 0.f, ry = 0.f, rz = 0.f;         /**< Current rotation (Euler angles). */
     float      sx = 1.f, sy = 1.f, sz = 1.f;         /**< Current scale. */
     float      vx = 0.f, vy = 0.f, vz = 0.f;         /**< Current velocity. */
+    float      hp = -1.f;                              /**< Current HP (-1 = not applicable). */
+    float      maxHp = -1.f;                           /**< Max HP (-1 = not applicable). */
 };
 
 /**
@@ -105,6 +117,7 @@ struct PlayerInputPacket {
     float      dz   = 0.f;                       /**< Forward/backward movement input. */
     float      yaw  = 0.f;                       /**< Current camera yaw. */
     float      pitch = 0.f;                      /**< Current camera pitch. */
+    CameraMode cameraMode = CameraMode::Commander; /**< Current camera mode. */
 };
 
 /**
@@ -149,6 +162,66 @@ struct GameOverPacket {
 };
 
 /**
+ * @struct FogUpdatePacket
+ * @brief Server → Client: bit-packed fog-of-war grid.
+ */
+struct FogUpdatePacket {
+    PacketType type     = PacketType::FOG_UPDATE;
+    int        cellsX   = 0;
+    int        cellsZ   = 0;
+    uint8_t    data[512]{}; ///< Bit-packed revealed cells (supports up to 4096 cells).
+};
+
+/**
+ * @struct BuildingUpgradedPacket
+ * @brief Server → Client: a building finished an upgrade.
+ */
+struct BuildingUpgradedPacket {
+    PacketType type         = PacketType::BUILDING_UPGRADED;
+    uint32_t   netId        = 0;
+    uint32_t   newTier      = 1;
+    float      newMaxHp     = 100.f;
+};
+
+/**
+ * @struct BaseSpawnedPacket
+ * @brief Server → Client: companion to ASSET_JOINED for base entities.
+ *        Tells the client to add BaseHealthComponent to an existing entity.
+ */
+struct BaseSpawnedPacket {
+    PacketType type    = PacketType::BASE_SPAWNED;
+    uint32_t   netId   = 0;
+    uint32_t   teamId  = 0;
+    float      hp      = 500.f;
+    float      maxHp   = 500.f;
+};
+
+/**
+ * @struct BuildPlaceRequestPacket
+ * @brief Client → Server: request to place a building.
+ */
+struct BuildPlaceRequestPacket {
+    PacketType type      = PacketType::BUILD_PLACE_REQUEST;
+    uint32_t   playerId  = 0;
+    uint8_t    buildingType = 0; ///< BuildingType enum value.
+    float      x = 0.f, z = 0.f; ///< Ground position (y=0).
+};
+
+/**
+ * @struct BuildingPlacedPacket
+ * @brief Server → Client broadcast: a building was placed.
+ */
+struct BuildingPlacedPacket {
+    PacketType type      = PacketType::BUILDING_PLACED;
+    uint32_t   netId     = 0;
+    uint32_t   teamId    = 0;
+    uint8_t    buildingType = 0;
+    uint8_t    bugClass  = 0;
+    float      x = 0.f, y = 0.f, z = 0.f;
+    float      buildTime = 5.f; ///< Construction duration in seconds.
+};
+
+/**
  * @struct CommanderOrderPacket
  * @brief Client → Server: move selected units to a position.
  */
@@ -156,4 +229,6 @@ struct CommanderOrderPacket {
     PacketType type     = PacketType::COMMANDER_ORDER;
     uint32_t   playerId = 0;
     float      x = 0.f, y = 0.f, z = 0.f; ///< World destination
+    uint32_t   selectedCount = 0;           ///< Number of selected unit netIds.
+    uint32_t   selectedIds[MAX_SELECTED_UNITS]{}; ///< NetIds of selected units.
 };

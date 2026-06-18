@@ -1,0 +1,18 @@
+PROJECT_NAME           = "Bugmin Engine"
+PROJECT_NUMBER         = 1.0
+OUTPUT_DIRECTORY       = "/home/david/Dokumente/coding_projects/bugmin/build-windows/docs"
+INPUT                  = "/home/david/Dokumente/coding_projects/bugmin/src" \
+                         "/home/david/Dokumente/coding_projects/bugmin/docs" \
+                         "/home/david/Dokumente/coding_projects/bugmin/README.md"
+RECURSIVE              = YES
+USE_MDFILE_AS_MAINPAGE = "/home/david/Dokumente/coding_projects/bugmin/README.md"
+GENERATE_LATEX         = NO
+GENERATE_HTML          = YES
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+HAVE_DOT               = NO
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+CPP_CLI_SUPPORT        = NO

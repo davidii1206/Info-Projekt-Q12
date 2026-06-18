@@ -1,0 +1,19 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/sdl3-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/glm-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/glm-build/glm/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/spdlog-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/nlohmann_json-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/jolt-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/entt-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/tinygltf-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/openal-soft-build/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/openal-soft-build/fmt-11.2.0/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/openal-soft-build/utils/alsoft-config/cmake_install.cmake",
+		"/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/enet-build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

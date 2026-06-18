@@ -16,6 +16,7 @@
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
 #include "HUDTextureRegistry.h"
+#include "CameraMode.h"
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
@@ -185,9 +186,7 @@ private:
     /// Toggled by the "Karte" button in the Game window.
     bool m_ShowMapOverlay = false;
 
-    // --- Commander / Camera Mode ---
-    /// true = top-down Commander view; false = 1st-person Exploring view.
-    bool m_CommanderMode = false;
+    // --- Camera Mode ---
     /// Stored 1st-person camera position to restore when leaving Commander.
     glm::vec3 m_SavedCamPos{0.f};
     float     m_SavedCamYaw   = 0.f;
@@ -201,6 +200,14 @@ private:
     /// Whether the game has ended.
     bool     m_GameOver      = false;
     uint32_t m_WinnerTeam    = 0xFFFFFFFFu;
+
+    // --- Building placement ---
+    /// Whether placement mode is active (building type selected in UI).
+    bool     m_PlacementActive = false;
+    /// The building type currently selected for placement.
+    BuildingType m_PlacementType = BuildingType::Attack;
+    /// Snapped world position for the preview ghost.
+    glm::vec3 m_PlacementPos{0.f};
 
     // --- Server state ---
     /// ID for the next networked entity.
@@ -226,6 +233,8 @@ private:
     float m_SnapAccum = 0.f;
     /// Rate at which snapshots are sent (20 Hz).
     static constexpr float SNAPSHOT_RATE = 1.f / 20.f;
+    /// Accumulator for fog broadcast (2 Hz).
+    float m_FogAccum = 0.f;
 
     // --- Rendering ---
     /// Vertex shader for models.
@@ -240,8 +249,20 @@ private:
     float m_TotalTime = 0.0f;
     /// Total number of frames rendered.
     uint32_t m_FrameCount = 0;
-    /// Whether free-fly camera mode is active.
-    bool m_FreeFly = false;
+    /// Current camera control mode.
+    CameraMode m_CameraMode = CameraMode::Commander;
+
+    // --- Ghost preview (transparent cube) ---
+    /// Vertex shader for the ghost cube.
+    std::unique_ptr<Shader> m_GhostVertShader;
+    /// Fragment shader for the ghost cube.
+    std::unique_ptr<Shader> m_GhostFragShader;
+    /// Graphics pipeline for the ghost cube.
+    GraphicsPipeline* m_GhostPipeline = nullptr;
+    /// Vertex buffer for a unit cube.
+    std::unique_ptr<GPUBuffer> m_GhostVertexBuffer;
+    /// Index buffer for a unit cube.
+    std::unique_ptr<GPUBuffer> m_GhostIndexBuffer;
 
     // --- Shadow Map ---
     /// Vertex shader for the depth-only shadow pass.

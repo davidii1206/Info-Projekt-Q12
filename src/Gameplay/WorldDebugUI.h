@@ -43,6 +43,7 @@ inline void DrawRegistry(const char* label, entt::registry& reg) {
             auto* t = reg.try_get<TransformComponent>(entity);
             auto* p = reg.try_get<PlayerComponent>(entity);
             auto* m = reg.try_get<ModelComponent>(entity);
+            auto* b = reg.try_get<BuildingComponent>(entity);
 
             // netId
             ImGui::TableSetColumnIndex(0);
@@ -51,6 +52,7 @@ inline void DrawRegistry(const char* label, entt::registry& reg) {
             // Type
             ImGui::TableSetColumnIndex(1);
             if (p) ImGui::Text("Player (%u)", p->playerId);
+            else if (b) ImGui::Text("Building");
             else if (m) ImGui::Text("Asset");
             else ImGui::Text("Entity");
 
@@ -75,7 +77,14 @@ inline void DrawRegistry(const char* label, entt::registry& reg) {
 
             // Info
             ImGui::TableSetColumnIndex(5);
-            if (m) ImGui::Text("%.20s...", m->modelPath.c_str());
+            if (b) {
+                ImGui::Text("T%u HP%.0f", b->currentTier, b->hp);
+                if (b->isUpgrading) {
+                    ImGui::SameLine();
+                    ImGui::Text("(Up:%.1fs)", b->upgradeTimer);
+                }
+            }
+            else if (m) ImGui::Text("%.20s...", m->modelPath.c_str());
             else ImGui::Text("-");
 
             ImGui::PopID();

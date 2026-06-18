@@ -42,6 +42,7 @@ target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_D
 target_link_libraries(imgui_lib PRIVATE SDL3::SDL3)
 
 add_definitions(-DGLM_FORCE_DEPTH_ZERO_TO_ONE)
+# Force re-run for new source files
 file(GLOB_RECURSE BUGMIN_SOURCES "src/*.cpp" "src/*.hpp" "src/*.h")
 add_executable(Bugmin ${BUGMIN_SOURCES})
 

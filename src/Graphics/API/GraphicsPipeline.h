@@ -51,6 +51,9 @@ struct PipelineConfig {
 
     /** @brief Whether to enable depth testing and writing. */
     bool enableDepthTest = false;
+
+    /** @brief Whether to enable depth writing (requires enableDepthTest). */
+    bool enableDepthWrite = true;
     
     /** @brief The comparison operator for the depth test (Less, Greater, etc.). */
     SDL_GPUCompareOp depthCompareOp = SDL_GPU_COMPAREOP_ALWAYS;

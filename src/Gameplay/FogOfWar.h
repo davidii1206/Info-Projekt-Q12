@@ -160,9 +160,14 @@ namespace FogOfWarSystem
         // Players
         {
             auto view = registry.view<TransformComponent, PlayerComponent>();
-            for (auto e : view)
+            for (auto e : view) {
+                auto& p = view.get<PlayerComponent>(e);
+                if (p.cameraMode == CameraMode::Commander || p.cameraMode == CameraMode::Building || p.cameraMode == CameraMode::FreeFly)
+                    continue;
+
                 fog.Reveal(view.get<TransformComponent>(e).position,
                            PLAYER_SIGHT_RADIUS);
+            }
         }
 
         // Collector units

@@ -105,7 +105,7 @@ GraphicsPipeline::GraphicsPipeline(SDL_GPUDevice* device, const PipelineConfig& 
         createInfo.target_info.depth_stencil_format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
         
         createInfo.depth_stencil_state.enable_depth_test = true;
-        createInfo.depth_stencil_state.enable_depth_write = true;
+        createInfo.depth_stencil_state.enable_depth_write = config.enableDepthWrite;
         createInfo.depth_stencil_state.compare_op = config.depthCompareOp;
     } else {
         createInfo.target_info.has_depth_stencil_target = false; 

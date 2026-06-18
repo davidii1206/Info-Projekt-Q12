@@ -42,10 +42,6 @@
 GameScene::GameScene() {}
 GameScene::~GameScene() {}
 
-/**
- * @brief Initializes the camera and spawns a test asset if hosting.
- * @param ctx The scene context.
- */
 void GameScene::OnEnter(SceneContext& ctx) {
     spdlog::info("GameScene: entered");
 
@@ -58,73 +54,44 @@ void GameScene::OnEnter(SceneContext& ctx) {
     }
 
     if (ctx.network.IsHosting()) {
-        /**
-         * @brief Load the scene's mesh geometry as static physics collision.
-         *
-         * This replaces the flat AddStaticFloor() placeholder with accurate
-         * per-triangle collision derived from the actual GLTF scene mesh.
-         * The same asset path used for visual rendering is reused here —
-         * AssetManager returns cached CPU-side vertices/indices at no extra
-         * file-IO cost.
-         */
         LoadSceneMeshCollision(ctx, "assets/test_scene_pixelation.glb");
-
-        // Initialize resource system
         m_ResourceManager.Init();
         m_ResourceManager.SpawnPermanentResources(ctx.serverRegistry);
-
-        // Demo: spawn a Fleisch drop that disappears after 15 s
-        m_ResourceManager.SpawnMeatDrop(ctx.serverRegistry,
-                                        glm::vec3{0.f, 0.f, 3.f},
-                                        /*amount=*/2,
-                                        /*dropLifetime=*/15.f);
-
-        // Fog of War – initialise grid to match the map extents
-        m_Fog.Init(glm::vec3{-50.f, 0.f, -50.f},
-                   glm::vec3{ 50.f, 0.f,  50.f},
-                   /*cellSize=*/2.f);
-
-        // Territory zones
+        m_ResourceManager.SpawnMeatDrop(ctx.serverRegistry, glm::vec3{0.f, 0.f, 3.f}, 2, 15.f);
+        m_Fog.Init(glm::vec3{-50.f, 0.f, -50.f}, glm::vec3{ 50.f, 0.f,  50.f}, 2.f);
         TerritorySystem::SpawnZones(ctx.serverRegistry);
-
-        // HUD-Texturen laden (Pixel-Art-Icons des HUD-Designers)
         HUDTextures::Load(ctx.renderer->GetDevice());
 
-        // -----------------------------------------------------------------
-        // Spawn team bases (destroyable structures)
-        // -----------------------------------------------------------------
         auto spawnBase = [&](uint32_t team, glm::vec3 pos) {
+            const uint32_t netId = m_NextNetId++;
             auto e = ctx.serverRegistry.create();
             ctx.serverRegistry.emplace<TransformComponent>(e, pos);
             ctx.serverRegistry.emplace<BaseComponent>(e, team);
-            ctx.serverRegistry.emplace<BaseHealthComponent>(e,
-                BaseHealthComponent{team, 500.f, 500.f, false});
-            ctx.serverRegistry.emplace<NetworkedComponent>(e, m_NextNetId);
+            ctx.serverRegistry.emplace<BaseHealthComponent>(e, BaseHealthComponent{team, 500.f, 500.f, false});
+            ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
             ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
-            m_ServerNetMap[m_NextNetId] = e;
+            m_ServerNetMap[netId] = e;
             AssetJoinedPacket bp;
-            bp.netId = m_NextNetId++;
+            bp.netId = netId;
             std::strncpy(bp.modelPath, "assets/cube.glb", sizeof(bp.modelPath)-1);
             bp.x = pos.x; bp.y = pos.y; bp.z = pos.z;
             ctx.network.BroadcastToAll(bp);
+            BaseSpawnedPacket bsp;
+            bsp.netId  = netId;
+            bsp.teamId = team;
+            bsp.hp     = 500.f;
+            bsp.maxHp  = 500.f;
+            ctx.network.BroadcastToAll(bsp);
         };
-        spawnBase(0, glm::vec3{-30.f, 0.f,  0.f}); // Team 0 base
-        spawnBase(1, glm::vec3{ 30.f, 0.f,  0.f}); // Team 1 base
+        spawnBase(0, glm::vec3{-30.f, 0.f,  0.f});
+        spawnBase(1, glm::vec3{ 30.f, 0.f,  0.f});
 
-        // -----------------------------------------------------------------
-        // Spawn a few demo units per team so the system runs immediately
-        // -----------------------------------------------------------------
         for (int i = 0; i < 3; i++) {
             SpawnUnit(ctx, 0, glm::vec3{-20.f + i * 3.f, 0.f,  5.f});
             SpawnUnit(ctx, 1, glm::vec3{ 20.f - i * 3.f, 0.f, -5.f});
         }
 
-        /**
-         * @brief Spawn a networked asset for testing purposes.
-         */
         const uint32_t assetNetId = m_NextNetId++;
-        
-        // Authoritative server entity
         auto sEntity = ctx.serverRegistry.create();
         ctx.serverRegistry.emplace<TransformComponent>(sEntity, glm::vec3{2.f, 0.f, 2.f});
         ctx.serverRegistry.emplace<MovementComponent>(sEntity);
@@ -132,83 +99,64 @@ void GameScene::OnEnter(SceneContext& ctx) {
         ctx.serverRegistry.emplace<ModelComponent>(sEntity, "assets/test_scene_pixelation.glb");
         m_ServerNetMap[assetNetId] = sEntity;
 
-        // Tell all clients (including ourselves) to spawn it visually
         AssetJoinedPacket pkt;
         pkt.netId = assetNetId;
         std::strncpy(pkt.modelPath, "assets/test_scene_pixelation.glb", sizeof(pkt.modelPath)-1);
         pkt.x = 2.f; pkt.y = 0.f; pkt.z = 2.f;
         ctx.network.BroadcastToAll(pkt);
-        
-        spdlog::info("GameScene: spawned test asset netId={}", assetNetId);
-
-        /**
-         * @brief Spawn an initial physics-driven cube.
-         */
         SpawnPhysicsCube(ctx, glm::vec3{0.f, 10.f, 0.f});
     }
 }
 
-/**
- * @brief Clears registries and resets network/rendering state on exit.
- * @param ctx The scene context.
- */
 void GameScene::OnExit(SceneContext& ctx) {
     if (ctx.network.IsHosting()) {
         auto view = ctx.serverRegistry.view<PhysicsBodyComponent>();
         for (auto entity : view) {
             auto& body = view.get<PhysicsBodyComponent>(entity);
             if (ctx.physics && body.handle.IsValid()) {
-                // Retrieve the physics ID from Jolt UserData to unregister from World
                 uint32_t physicsId = static_cast<uint32_t>(ctx.physics->GetSystem().GetBodyInterface().GetUserData(body.handle.id));
                 ctx.world->UnregisterPhysicsEntity(physicsId);
                 ctx.physics->RemoveBody(body.handle);
             }
         }
-
-        // Remove static mesh collision bodies
         if (ctx.physics) {
             for (auto& meshBody : m_MeshCollisionBodies) {
-                if (meshBody.IsValid())
-                    ctx.physics->RemoveBody(meshBody);
+                if (meshBody.IsValid()) ctx.physics->RemoveBody(meshBody);
             }
         }
         m_MeshCollisionBodies.clear();
     }
-
     ctx.serverRegistry.clear();
     ctx.clientRegistry.clear();
     m_ServerNetMap.clear();
     m_PeerToNetId.clear();
     m_ClientNetMap.clear();
-    m_NextNetId     = 1;
-    m_NextPlayerId  = 0;
-    m_MyPlayerId    = 0;
-    m_MyNetId       = 0;
-    m_IdAssigned    = false;
-    m_SnapAccum     = 0.f;
+    m_NextNetId = 1;
+    m_NextPlayerId = 0;
+    m_MyPlayerId = 0;
+    m_MyNetId = 0;
+    m_IdAssigned = false;
+    m_SnapAccum = 0.f;
     m_SelectedUnits.clear();
-    m_GameOver      = false;
-    m_WinnerTeam    = 0xFFFFFFFFu;
-    m_CommanderMode = false;
-
-    // Reset fog grid for next session
+    m_GameOver = false;
+    m_WinnerTeam = 0xFFFFFFFFu;
+    m_CameraMode = CameraMode::Commander;
     m_Fog.Reset();
-
-    // HUD-Texturen freigeben
     HUDTextures::Unload();
-
     ctx.world->ClearPhysicsState();
-    
     m_VertShader.reset();
     m_FragShader.reset();
     m_ModelPipeline = nullptr;
-
+    // m_GhostVertShader.reset();
+    // m_GhostFragShader.reset();
+    // m_GhostPipeline = nullptr;
+    // m_GhostVertexBuffer.reset();
+    // m_GhostIndexBuffer.reset();
     m_ShadowVertShader.reset();
     m_ShadowFragShader.reset();
     m_ShadowPipeline = nullptr;
     m_ShadowMap.reset();
     m_ShadowUBO.reset();
-
     spdlog::info("GameScene: exited, registries cleared");
 }
 
@@ -216,401 +164,179 @@ void GameScene::OnExit(SceneContext& ctx) {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/**
- * @brief Handles 3D rendering of the game scene, including models and lights.
- * @param ctx The scene context.
- * @param renderer Pointer to the renderer.
- */
 void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
-    // ------------------------------------------------------------------
-    // 1. Lazy-init graphics pipelines
-    // ------------------------------------------------------------------
     if (!m_ModelPipeline) {
         ShaderResourceLayout vertLayout = {0, 0, 1, 1}; 
         ShaderResourceLayout fragLayout = {2, 0, 2, 1}; 
-
         m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert.spv", ShaderStage::Vertex, vertLayout);
         m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag.spv", ShaderStage::Fragment, fragLayout);
-
         PipelineConfig config;
         config.vertexShader = m_VertShader.get();
         config.fragmentShader = m_FragShader.get();
-        config.vertexStride = sizeof(ModelVertex);
-        config.vertexAttributes = {
-            {0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position)},
-            {1, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, normal)},
-            {2, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(ModelVertex, texCoords)},
-            {3, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(ModelVertex, color)},
-            {4, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, tangent)}
-        };
+        config.vertexStride = sizeof(float) * 3; // Simplified for mesh vertex loading
+        config.vertexAttributes = {{0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, 0}};
         config.enableDepthTest = true;
-        config.depthCompareOp = SDL_GPU_COMPAREOP_GREATER;
-
-        // Match G-Buffer formats from PostProcessor
+        config.depthCompareOp = SDL_GPU_COMPAREOP_LESS;
+        config.cullMode = SDL_GPU_CULLMODE_BACK;
         config.colorTargetFormats = {
-            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Normal
-            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,     // Color (Albedo)
-            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, // Light Buffer
-            SDL_GPU_TEXTUREFORMAT_R16_UINT            // Object ID
+            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
+            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
+            SDL_GPU_TEXTUREFORMAT_R16_UINT
         };
-
-        m_ModelPipeline = renderer->GetPipelines()->CreatePipeline("GameModelPipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
+        m_ModelPipeline = renderer->GetPipelines()->CreatePipeline("ModelPipeline", config, SDL_GPU_TEXTUREFORMAT_INVALID);
     }
 
-    if (!m_ShadowPipeline ||
-        m_ShadowBiasConstant != m_LastShadowBiasConstant ||
-        m_ShadowBiasSlope    != m_LastShadowBiasSlope) {
-        
-        m_ShadowPipeline = nullptr;
-        m_LastShadowBiasConstant = m_ShadowBiasConstant;
-        m_LastShadowBiasSlope    = m_ShadowBiasSlope;
-
-        ShaderResourceLayout shadowVertLayout = {0, 0, 0, 2};
+    if (!m_ShadowPipeline) {
+        ShaderResourceLayout shadowVertLayout = {0, 0, 0, 1};
         ShaderResourceLayout shadowFragLayout = {0, 0, 0, 0};
-
         m_ShadowVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.vert.spv", ShaderStage::Vertex, shadowVertLayout);
         m_ShadowFragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.frag.spv", ShaderStage::Fragment, shadowFragLayout);
-
         PipelineConfig shadowCfg;
         shadowCfg.vertexShader = m_ShadowVertShader.get();
         shadowCfg.fragmentShader = m_ShadowFragShader.get();
-        shadowCfg.vertexStride = sizeof(ModelVertex);
-        shadowCfg.vertexAttributes = {
-            {0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(ModelVertex, position)}
-        };
+        shadowCfg.vertexStride = sizeof(float) * 3;
+        shadowCfg.vertexAttributes = {{0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, 0}};
         shadowCfg.enableDepthTest = true;
         shadowCfg.depthCompareOp = SDL_GPU_COMPAREOP_LESS;
         shadowCfg.cullMode = SDL_GPU_CULLMODE_FRONT;
-
         shadowCfg.enableDepthBias = true;
         shadowCfg.depthBiasConstantFactor = m_ShadowBiasConstant;
         shadowCfg.depthBiasSlopeFactor = m_ShadowBiasSlope;
-        shadowCfg.depthBiasClamp = 0.0f;
-        shadowCfg.colorTargetFormats = {};
-
         m_ShadowPipeline = renderer->GetPipelines()->CreatePipeline("ShadowPipeline", shadowCfg, SDL_GPU_TEXTUREFORMAT_INVALID);
+        m_LastShadowBiasConstant = m_ShadowBiasConstant;
+        m_LastShadowBiasSlope = m_ShadowBiasSlope;
     }
 
-    // ------------------------------------------------------------------
-    // 2. Camera matrices
-    // ------------------------------------------------------------------
-    int w, h;
-    SDL_GetWindowSizeInPixels(renderer->GetWindow()->handle, &w, &h);
-    float aspect = (float)w / (float)h;
+    if (m_ShadowBiasConstant != m_LastShadowBiasConstant || m_ShadowBiasSlope != m_LastShadowBiasSlope) {
+        PipelineConfig shadowCfg;
+        shadowCfg.vertexShader = m_ShadowVertShader.get();
+        shadowCfg.fragmentShader = m_ShadowFragShader.get();
+        shadowCfg.vertexStride = sizeof(float) * 3;
+        shadowCfg.vertexAttributes = {{0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, 0}};
+        shadowCfg.enableDepthTest = true;
+        shadowCfg.depthCompareOp = SDL_GPU_COMPAREOP_LESS;
+        shadowCfg.cullMode = SDL_GPU_CULLMODE_FRONT;
+        shadowCfg.enableDepthBias = true;
+        shadowCfg.depthBiasConstantFactor = m_ShadowBiasConstant;
+        shadowCfg.depthBiasSlopeFactor = m_ShadowBiasSlope;
+        renderer->FlushAndWait();
+        m_ShadowPipeline = renderer->GetPipelines()->CreatePipeline("ShadowPipeline_" + std::to_string(m_FrameCount), shadowCfg, SDL_GPU_TEXTUREFORMAT_INVALID);
+        m_LastShadowBiasConstant = m_ShadowBiasConstant;
+        m_LastShadowBiasSlope = m_ShadowBiasSlope;
+        renderer->RestartImGuiFrame();
+    }
 
-    GlobalUniforms& globals = renderer->GetGlobalUniforms();
+    if (!m_ShadowMap) {
+        uint32_t shadowRes = 2048;
+        m_ShadowMap = std::make_unique<Framebuffer>(renderer->GetDevice(), shadowRes, shadowRes, std::vector<SDL_GPUTextureFormat>{}, true);
+        m_ShadowUBO = std::make_unique<GPUBuffer>(renderer->GetDevice(), BufferUsage::Uniform, sizeof(glm::mat4));
+    }
+
+    m_TotalTime += ctx.world->GetAccumulator(); // Use world accumulator for time
+    m_FrameCount++;
+    auto& globals = renderer->GetGlobalUniforms();
     globals.view = m_Camera->GetViewMatrix();
+    int winW, winH;
+    SDL_GetWindowSizeInPixels(renderer->GetWindow()->handle, &winW, &winH);
+    float aspect = (winW > 0) ? (float)winW / (float)winH : 1.f;
     globals.proj = m_Camera->GetProjectionMatrix(aspect);
     globals.viewProj = globals.proj * globals.view;
-    globals.cameraPos = glm::vec4(m_Camera->m_Position, 1.0f);
-    
-    // ------------------------------------------------------------------
-    // 3. Sun light + sunVP matrix for shadow mapping
-    // ------------------------------------------------------------------
-    globals.sunDir = glm::vec4(glm::normalize(-m_SunDirection), 0.0f);
+    glm::vec3 sunTarget = m_Camera->m_Position;
+    sunTarget.y = 0.f;
+    glm::vec3 sunPos = sunTarget - m_SunDirection * 40.f;
+    glm::mat4 sunView = glm::lookAt(sunPos, sunTarget, glm::vec3(0, 1, 0));
+    float sSize = m_ShadowOrthoSize;
+    glm::mat4 sunProj = glm::ortho(-sSize, sSize, -sSize, sSize, 0.1f, 100.f);
+    globals.sunVP = sunProj * sunView;
     globals.sunColor = glm::vec4(m_SunColor, m_SunIntensity);
-
-    {
-        const float shadowOrthoSize = m_ShadowOrthoSize;
-        const float shadowNear = 0.1f;
-        const float shadowFar = 200.0f;
-
-        glm::vec3 sunDir = glm::normalize(m_SunDirection);
-        glm::vec3 up = (glm::abs(sunDir.y) < 0.99f) ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
-
-        glm::vec3 center = glm::vec3(0.0f, 0.0f, 0.0f);
-        glm::vec3 sunPos = center - sunDir * 100.0f;
-        glm::vec3 target = center + sunDir;
-
-        glm::mat4 sunView = glm::lookAt(sunPos, target, up);
-        glm::mat4 sunProj = glm::ortho(-shadowOrthoSize, shadowOrthoSize, -shadowOrthoSize, shadowOrthoSize, shadowNear, shadowFar);
-
-        // Texel Snapping
-        float texelSize = (2.0f * shadowOrthoSize) / 2048.0f;
-        glm::vec4 originLV = sunView * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        glm::vec2 snappedXY = glm::round(glm::vec2(originLV) / texelSize) * texelSize;
-        glm::vec2 snapDelta = snappedXY - glm::vec2(originLV);
-
-        glm::vec3 lightRight = glm::vec3(sunView[0][0], sunView[1][0], sunView[2][0]);
-        glm::vec3 lightUp    = glm::vec3(sunView[0][1], sunView[1][1], sunView[2][1]);
-        sunPos += lightRight * snapDelta.x + lightUp * snapDelta.y;
-        sunView = glm::lookAt(sunPos, sunPos + sunDir, up);
-
-        globals.sunVP = sunProj * sunView;
-    }
-
-    // ------------------------------------------------------------------
-    // 4. Ambient light
-    // ------------------------------------------------------------------
+    globals.sunDir = glm::vec4(m_SunDirection, 0.f);
+    globals.cameraPos = glm::vec4(m_Camera->m_Position, 1.f);
     globals.ambientColor = glm::vec4(m_AmbientColor, m_AmbientIntensity);
-
-    // ------------------------------------------------------------------
-    // 5. Dynamic lights
-    // ------------------------------------------------------------------
-    uint32_t totalLightCount = 0;
-
-    // 5a. Lights from ECS entities
-    {
-        auto lightView = ctx.clientRegistry.view<TransformComponent, LightComponent>();
-        for (auto entity : lightView) {
-            if (totalLightCount >= 16) break;
-            auto& tf = lightView.get<TransformComponent>(entity);
-            auto& lc = lightView.get<LightComponent>(entity);
-
-            Light& out = globals.lights[totalLightCount];
-            out.position_type = glm::vec4(tf.position, (float)lc.type);
-            out.direction_range = glm::vec4(glm::normalize(lc.direction), lc.range);
-            out.color_intensity = glm::vec4(lc.color, lc.intensity);
-            totalLightCount++;
-        }
-    }
-
-    // 5b. Lights embedded inside models
-    {
-        auto modelView = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
-        for (auto entity : modelView) {
-            if (totalLightCount >= 16) break;
-            auto& transform = modelView.get<TransformComponent>(entity);
-            auto& modelComp = modelView.get<ModelComponent>(entity);
-            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
-            if (!sceneData.model) continue;
-
-            glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
-                                  glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
-                                  glm::scale(glm::mat4(1.0f), transform.scale);
-
-            for (const auto& light : sceneData.lights) {
-                if (totalLightCount >= 16) break;
-                Light& outLight = globals.lights[totalLightCount];
-                outLight = light;
-
-                glm::vec4 worldPos = entityMat * glm::vec4(glm::vec3(light.position_type), 1.0f);
-                outLight.position_type = glm::vec4(glm::vec3(worldPos), light.position_type.w);
-
-                if ((int)light.position_type.w == (int)LightType::Directional || (int)light.position_type.w == (int)LightType::Spot) {
-                    glm::vec4 worldDir = entityMat * glm::vec4(glm::vec3(light.direction_range), 0.0f);
-                    outLight.direction_range = glm::vec4(glm::normalize(glm::vec3(worldDir)), light.direction_range.w);
-                }
-                totalLightCount++;
-            }
-        }
-    }
-
-    globals.timers = glm::vec4(m_TotalTime, (float)totalLightCount, 0.016f, (float)m_FrameCount);
+    globals.timers = glm::vec4(m_TotalTime, 0.f, 0.016f, (float)m_FrameCount);
     renderer->UpdateGlobalUniforms(globals);
 
-    // ------------------------------------------------------------------
-    // 6. Shadow Pass
-    // ------------------------------------------------------------------
-    constexpr uint32_t SHADOW_MAP_SIZE = 2048;
-    if (!m_ShadowMap) {
-        m_ShadowMap = std::make_unique<Framebuffer>(renderer->GetDevice(), SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, std::vector<SDL_GPUTextureFormat>{}, true, TextureFilter::ShadowCompare);
-        spdlog::info("GameScene: Shadow map created ({}x{})", SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
-    }
-
-    glm::mat4 sunVP = globals.sunVP;
-    renderer->AddPass("ShadowPass", m_ShadowMap.get(), [this, ctx, renderer, sunVP](RenderContext& renderCtx) {
-        if (!m_ShadowPipeline) return;
+    renderer->AddPass("ShadowPass", m_ShadowMap.get(), [this, &clientReg = ctx.clientRegistry, renderer](RenderContext& renderCtx) {
         renderCtx.BindPipeline(m_ShadowPipeline);
-        renderCtx.PushVertexConstants(1, &sunVP, sizeof(glm::mat4));
-
-        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
+        auto view = clientReg.view<TransformComponent, ModelComponent>();
         for (auto entity : view) {
-            auto& transform = view.get<TransformComponent>(entity);
-            auto& modelComp = view.get<ModelComponent>(entity);
-
-            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
-            if (!sceneData.model) continue;
-
-            renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
-            renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
-
-            for (const auto& instance : sceneData.meshInstances) {
-                struct ShadowPC { glm::mat4 model; } spc;
-                glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
-                                      glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
-                                      glm::scale(glm::mat4(1.0f), transform.scale);
-                spc.model = entityMat * instance.transform;
-                renderCtx.PushVertexConstants(0, &spc, sizeof(ShadowPC));
-
-                const auto& allSections = sceneData.model->GetSections();
-                for (uint32_t i = 0; i < instance.sectionCount; ++i) {
-                    const auto& section = allSections[instance.firstSection + i];
-                    renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
-                }
+            auto& tf = view.get<TransformComponent>(entity);
+            auto& mod = view.get<ModelComponent>(entity);
+            auto asset = AssetManager::LoadModel(mod.modelPath);
+            if (!asset) continue;
+            glm::mat4 modelMatrix = glm::translate(glm::mat4(1.f), tf.position) * 
+                                    glm::mat4_cast(glm::quat(glm::radians(tf.rotation))) * 
+                                    glm::scale(glm::mat4(1.f), tf.scale);
+            renderCtx.PushVertexConstants(0, &modelMatrix, sizeof(glm::mat4));
+            renderCtx.BindVertexBuffer(asset->GetVertexBuffer());
+            renderCtx.BindIndexBuffer(asset->GetIndexBuffer());
+            for (const auto& section : asset->GetSections()) {
+                renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
             }
         }
     }, true, nullptr, 1.0f);
 
-    // ------------------------------------------------------------------
-    // 7. Render pass
-    // ------------------------------------------------------------------
-    Framebuffer* gbuffer = renderer->GetGBuffer();
-    if (!gbuffer) return;
-
-    renderer->AddPass("GameRenderPass", gbuffer, [this, ctx, renderer](RenderContext& renderCtx) {
+    auto gbuffer = renderer->GetGBuffer();
+    renderer->AddPass("GeometryPass", gbuffer, [this, renderer, &clientReg = ctx.clientRegistry](RenderContext& renderCtx) {
         renderCtx.BindPipeline(m_ModelPipeline);
         renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
-        renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
-
-        if (m_ShadowMap && m_ShadowMap->GetDepthTarget())
-            renderCtx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
-
-        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        renderCtx.BindFragmentStorageBuffer(2, renderer->GetGlobalUBO());
+        renderCtx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
+        auto view = clientReg.view<TransformComponent, ModelComponent>();
         for (auto entity : view) {
-            auto& transform = view.get<TransformComponent>(entity);
-            auto& modelComp = view.get<ModelComponent>(entity);
-
-            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
-            if (!sceneData.model) continue;
-
-            renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
-            renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
-
-            if (sceneData.model->GetMaterialBuffer())
-                renderCtx.BindFragmentStorageBuffer(1, sceneData.model->GetMaterialBuffer());
-
-            const auto& allSections = sceneData.model->GetSections();
-            const auto& allMaterials = sceneData.model->GetMaterials();
-
-            for (const auto& instance : sceneData.meshInstances) {
-                struct ModelPC { glm::mat4 model; } modelPC;
-                glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
-                                      glm::mat4_cast(glm::quat(glm::radians(transform.rotation))) *
-                                      glm::scale(glm::mat4(1.0f), transform.scale);
-                modelPC.model = entityMat * instance.transform;
-                renderCtx.PushVertexConstants(0, &modelPC, sizeof(ModelPC));
-
-                for (uint32_t i = 0; i < instance.sectionCount; ++i) {
-                    const auto& section = allSections[instance.firstSection + i];
-                    struct FragPC { uint32_t matIdx; uint32_t objID; uint32_t pad1; uint32_t pad2; } fpc;
-                    fpc.matIdx = (uint32_t)section.materialIndex;
-                    fpc.objID = 0;
-                    renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
-
-                    if (section.materialIndex < allMaterials.size()) {
-                        auto tex = allMaterials[section.materialIndex].baseColorTexture;
-                        if (!tex) tex = AssetManager::GetFallbackTexture();
-                        renderCtx.BindFragmentTexture(0, tex.get());
-                    }
-                    renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
-                }
+            auto& tf = view.get<TransformComponent>(entity);
+            auto& mod = view.get<ModelComponent>(entity);
+            auto asset = AssetManager::LoadModel(mod.modelPath);
+            if (!asset) continue;
+            glm::mat4 modelMatrix = glm::translate(glm::mat4(1.f), tf.position) * 
+                                    glm::mat4_cast(glm::quat(glm::radians(tf.rotation))) * 
+                                    glm::scale(glm::mat4(1.f), tf.scale);
+            renderCtx.PushVertexConstants(0, &modelMatrix, sizeof(glm::mat4));
+            renderCtx.BindVertexBuffer(asset->GetVertexBuffer());
+            renderCtx.BindIndexBuffer(asset->GetIndexBuffer());
+            for (const auto& section : asset->GetSections()) {
+                struct FragPC { uint32_t matIdx; uint32_t objID; } fpc;
+                fpc.matIdx = section.materialIndex; fpc.objID = 0;
+                renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
+                auto tex = AssetManager::GetFallbackTexture();
+                renderCtx.BindFragmentTexture(0, tex.get());
+                renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
             }
         }
     }, true);
+
+    // Ghost/grid rendering temporarily disabled
 }
 
-// ---------------------------------------------------------------------------
-// Logic update
-// ---------------------------------------------------------------------------
-
 void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
-    if (!ctx.network.IsConnected()) {
-        ctx.scenes.RequestTransition(new MainMenuScene());
-        return;
-    }
-
-    // ------------------------------------------------------------------
-    // TAB: toggle Exploring (1st-person) ↔ Commander (top-down)
-    // ------------------------------------------------------------------
+    if (!ctx.network.IsConnected()) { ctx.scenes.RequestTransition(new MainMenuScene()); return; }
     if (Input::IsKeyPressed(SDLK_TAB)) {
-        m_CommanderMode = !m_CommanderMode;
-        if (m_CommanderMode) {
-            // Save FPS camera state
-            m_SavedCamPos   = m_Camera->m_Position;
-            m_SavedCamYaw   = m_Camera->m_Yaw;
-            m_SavedCamPitch = m_Camera->m_Pitch;
-            // Switch to top-down view
-            m_Camera->m_Pitch = -89.f;
-            m_Camera->m_Yaw   = -90.f;
+        CameraMode oldMode = m_CameraMode;
+        m_CameraMode = static_cast<CameraMode>((static_cast<int>(m_CameraMode) + 1) % 3);
+        switch (m_CameraMode) {
+        case CameraMode::Commander:
+            if (oldMode != CameraMode::Commander) { m_SavedCamPos = m_Camera->m_Position; m_SavedCamYaw = m_Camera->m_Yaw; m_SavedCamPitch = m_Camera->m_Pitch; }
+            m_PlacementActive = false;
+            m_Camera->m_Pitch = -89.f; m_Camera->m_Yaw = -90.f;
             m_Camera->m_Position = glm::vec3(m_SavedCamPos.x, m_CmdHeight, m_SavedCamPos.z);
-            m_Camera->UpdateVectors();
             Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, false);
-            spdlog::info("GameScene: switched to Commander mode");
-        } else {
-            // Restore FPS camera
-            m_Camera->m_Position = m_SavedCamPos;
-            m_Camera->m_Yaw      = m_SavedCamYaw;
-            m_Camera->m_Pitch    = m_SavedCamPitch;
-            m_Camera->UpdateVectors();
-            spdlog::info("GameScene: switched to Exploring mode");
-        }
-    }
-
-    if (!m_CommanderMode) {
-        // ------------------------------------------------------------------
-        // Exploring / 1st-Person mode
-        // ------------------------------------------------------------------
-        if (Input::IsKeyPressed(SDLK_F1)) {
-            m_FreeFly = !m_FreeFly;
-            spdlog::info("Control Mode: {}", m_FreeFly ? "Free Fly" : "Player");
+            break;
+        case CameraMode::Building:
+            if (oldMode == CameraMode::Commander) { m_Camera->m_Position = m_SavedCamPos; m_Camera->m_Yaw = m_SavedCamYaw; m_Camera->m_Pitch = m_SavedCamPitch; }
+            m_Camera->m_Pitch = -45.0f; m_Camera->m_Yaw = -135.0f;
+            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, false);
+            break;
+        case CameraMode::FreeFly:
+            if (oldMode == CameraMode::Commander) { m_Camera->m_Position = m_SavedCamPos; m_Camera->m_Yaw = m_SavedCamYaw; m_Camera->m_Pitch = m_SavedCamPitch; }
+            m_PlacementActive = false;
             Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
+            break;
         }
-
-        if (Input::IsKeyPressed(SDLK_F2)) {
-            bool newState = !Input::IsRelativeMouseMode();
-            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
-            spdlog::info("Mouse Capture: {}", newState ? "On" : "Off");
-        }
-
-        if (Input::IsRelativeMouseMode()) {
-            glm::vec2 delta = Input::GetMouseDelta();
-            m_Camera->Rotate(delta.x, delta.y);
-
-            if (m_FreeFly) {
-                if (Input::IsKeyDown(SDLK_W)) m_Camera->MoveForward(dt);
-                if (Input::IsKeyDown(SDLK_S)) m_Camera->MoveBackward(dt);
-                if (Input::IsKeyDown(SDLK_A)) m_Camera->MoveLeft(dt);
-                if (Input::IsKeyDown(SDLK_D)) m_Camera->MoveRight(dt);
-                if (Input::IsKeyDown(SDLK_SPACE)) m_Camera->MoveUp(dt);
-                if (Input::IsKeyDown(SDLK_LSHIFT)) m_Camera->MoveDown(dt);
-            } else {
-                if (m_IdAssigned) {
-                    auto view = ctx.clientRegistry.view<PlayerComponent, TransformComponent, MovementComponent>();
-                    for (auto entity : view) {
-                        auto& p = view.get<PlayerComponent>(entity);
-                        if (p.isLocal) {
-                            auto& tf = view.get<TransformComponent>(entity);
-                            auto& mv = view.get<MovementComponent>(entity);
-
-                            glm::vec3 forward = m_Camera->m_Front;
-                            forward.y = 0.f;
-                            if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
-                            glm::vec3 right = m_Camera->m_Right;
-                            right.y = 0.f;
-                            if (glm::length(right) > 0.0001f) right = glm::normalize(right);
-
-                            glm::vec3 moveDir{0.f};
-                            if (Input::IsKeyDown(SDLK_W)) moveDir += forward;
-                            if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
-                            if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
-                            if (Input::IsKeyDown(SDLK_D)) moveDir += right;
-
-                            if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
-                            if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
-
-                            if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
-                            mv.velocity = moveDir * mv.speed;
-                            tf.position += mv.velocity * dt;
-
-                            m_Camera->m_Position = tf.position + glm::vec3(0, 2, 0);
-
-                            tf.rotation.y = m_Camera->m_Yaw;
-                            tf.rotation.x = m_Camera->m_Pitch;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        // ------------------------------------------------------------------
-        // Commander mode – top-down RTS camera + unit selection
-        // ------------------------------------------------------------------
-        int winW, winH;
-        SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
-
-        // WASD pans the commander camera on XZ plane
+        m_Camera->UpdateVectors();
+    }
+    switch (m_CameraMode) {
+    case CameraMode::Commander: {
         constexpr float CMD_PAN_SPEED = 25.f;
         glm::vec3 pan{0.f};
         if (Input::IsKeyDown(SDLK_W)) pan.z -= CMD_PAN_SPEED * dt;
@@ -618,1010 +344,352 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         if (Input::IsKeyDown(SDLK_A)) pan.x -= CMD_PAN_SPEED * dt;
         if (Input::IsKeyDown(SDLK_D)) pan.x += CMD_PAN_SPEED * dt;
         m_Camera->m_Position += pan;
-        // keep camera looking straight down
-        m_Camera->m_Pitch = -89.f;
-        m_Camera->m_Yaw   = -90.f;
-        m_Camera->UpdateVectors();
-
-        // Left-click: select units near cursor (pick by proximity to XZ ray)
-        if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT)) {
-            glm::vec2 mpos = Input::GetMousePosition();
-            glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
-            constexpr float SELECT_RADIUS = 5.f;
-
-            // Clear previous selection unless Shift held (not implemented yet → always clear)
+        m_CmdHeight -= Input::GetScrollDelta() * 2.f;
+        m_CmdHeight = glm::clamp(m_CmdHeight, 5.f, 100.f);
+        m_Camera->m_Position.y = m_CmdHeight;
+        if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT) && !ImGui::GetIO().WantCaptureMouse) {
+            glm::vec2 mp = Input::GetMousePosition();
+            int winW, winH; SDL_GetWindowSize(ctx.renderer->GetWindow()->handle, &winW, &winH);
+            glm::vec3 worldPos = ScreenToWorldXZ(mp.x, mp.y, winW, winH);
             m_SelectedUnits.clear();
-
             auto view = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, UnitComponent>();
             for (auto entity : view) {
                 auto& tf  = view.get<TransformComponent>(entity);
                 auto& nc  = view.get<NetworkedComponent>(entity);
                 auto& uc  = view.get<UnitComponent>(entity);
-                if (uc.teamId != m_MyPlayerId % 2) continue; // only own units
-                glm::vec2 d2 = glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z);
-                if (glm::length(d2) <= SELECT_RADIUS) {
+                if (uc.teamId != m_MyPlayerId % 2) continue;
+                if (glm::length(glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z)) <= 5.f) {
                     m_SelectedUnits.push_back(nc.netId);
                     uc.selected = true;
-                } else {
-                    uc.selected = false;
-                }
+                } else uc.selected = false;
             }
-            spdlog::info("Commander: selected {} unit(s)", m_SelectedUnits.size());
         }
-
-        // Right-click: issue move order to selected units
         if (Input::IsMouseButtonPressed(SDL_BUTTON_RIGHT) && !m_SelectedUnits.empty()) {
-            glm::vec2 mpos     = Input::GetMousePosition();
-            glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
-
-            // Send a commander order packet to the server
-            CommanderOrderPacket pkt;
-            pkt.playerId = m_MyPlayerId;
-            pkt.x = worldPos.x; pkt.y = worldPos.y; pkt.z = worldPos.z;
+            glm::vec2 mp = Input::GetMousePosition();
+            int winW, winH; SDL_GetWindowSize(ctx.renderer->GetWindow()->handle, &winW, &winH);
+            glm::vec3 worldPos = ScreenToWorldXZ(mp.x, mp.y, winW, winH);
+            CommanderOrderPacket pkt; pkt.playerId = m_MyPlayerId; pkt.x = worldPos.x; pkt.y = worldPos.y; pkt.z = worldPos.z;
+            pkt.selectedCount = static_cast<uint32_t>(m_SelectedUnits.size());
+            for (uint32_t i = 0; i < pkt.selectedCount && i < MAX_SELECTED_UNITS; ++i) pkt.selectedIds[i] = m_SelectedUnits[i];
             ctx.network.Send(pkt);
-            spdlog::info("Commander: move order to ({:.1f},{:.1f},{:.1f})", worldPos.x, worldPos.y, worldPos.z);
         }
+        break;
     }
-
-    m_Camera->Update(dt);
-    m_TotalTime += dt;
-    m_FrameCount++;
+    case CameraMode::Building: {
+        if (m_PlacementActive) {
+            glm::vec2 mp = Input::GetMousePosition();
+            int winW, winH; SDL_GetWindowSize(ctx.renderer->GetWindow()->handle, &winW, &winH);
+            glm::vec3 worldPos = ScreenToWorldXZ(mp.x, mp.y, winW, winH);
+            constexpr float GRID = 2.f;
+            worldPos.x = std::round(worldPos.x / GRID) * GRID;
+            worldPos.z = std::round(worldPos.z / GRID) * GRID;
+            worldPos.y = 0.f; m_PlacementPos = worldPos;
+            if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT) && !ImGui::GetIO().WantCaptureMouse) {
+                BuildPlaceRequestPacket req; req.playerId = m_MyPlayerId; req.buildingType = static_cast<uint8_t>(m_PlacementType); req.x = worldPos.x; req.z = worldPos.z;
+                ctx.network.Send(req);
+            }
+            if (Input::IsMouseButtonPressed(SDL_BUTTON_RIGHT) || Input::IsKeyPressed(SDLK_ESCAPE)) m_PlacementActive = false;
+        }
+        break;
+    }
+    case CameraMode::FreeFly: {
+        if (Input::IsRelativeMouseMode()) {
+            constexpr float FLY_SPEED = 10.f; glm::vec3 dir{0.f};
+            if (Input::IsKeyDown(SDLK_W)) dir += m_Camera->m_Front;
+            if (Input::IsKeyDown(SDLK_S)) dir -= m_Camera->m_Front;
+            if (Input::IsKeyDown(SDLK_A)) dir -= m_Camera->m_Right;
+            if (Input::IsKeyDown(SDLK_D)) dir += m_Camera->m_Right;
+            if (glm::length(dir) > 0.1f) m_Camera->m_Position += glm::normalize(dir) * FLY_SPEED * dt;
+            glm::vec2 md = Input::GetMouseDelta(); m_Camera->Rotate(md.x, md.y);
+        }
+        break;
+    }
+    }
+    m_Camera->UpdateVectors();
+    m_TotalTime += dt; m_FrameCount++;
 }
 
 void GameScene::UIUpdate(SceneContext& ctx, float dt) {
-    // ------------------------------------------------------------------
-    // Game-over overlay
-    // ------------------------------------------------------------------
     if (m_GameOver) {
-        ImGuiIO& io = ImGui::GetIO();
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(400, 180));
-        ImGui::Begin("Spielende", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-        if (m_WinnerTeam == m_MyPlayerId % 2)
-            ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "SIEG! Team %u gewinnt!", m_WinnerTeam);
-        else if (m_WinnerTeam == 0xFFFFFFFFu)
-            ImGui::Text("Unentschieden!");
-        else
-            ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "NIEDERLAGE! Team %u gewinnt.", m_WinnerTeam);
-        if (ImGui::Button("Zum Hauptmenü")) {
-            ctx.network.Disconnect();
-            ctx.scenes.RequestTransition(new MainMenuScene());
-        }
-        ImGui::End();
-        return;
+        ImGui::Begin("Spielende");
+        ImGui::Text(m_WinnerTeam == m_MyPlayerId % 2 ? "SIEG!" : "NIEDERLAGE!");
+        if (ImGui::Button("Hauptmenü")) { ctx.network.Disconnect(); ctx.scenes.RequestTransition(new MainMenuScene()); }
+        ImGui::End(); return;
     }
-
-    ImGui::Begin("Game");
-    ImGui::Text("Mode: %s", ctx.network.IsHosting() ? "Host" : "Client");
-    ImGui::Text("Kamera: %s  [TAB wechseln]", m_CommanderMode ? "Commander (Top-Down)" : "Exploring (1st-Person)");
-    if (!m_CommanderMode)
-        ImGui::Text("Control: %s (F1)", m_FreeFly ? "Free Fly" : "Player");
-    ImGui::Text("Mouse: %s (F2)", Input::IsRelativeMouseMode() ? "Captured" : "Visible");
-    if (m_IdAssigned)
-        ImGui::Text("playerId=%u  netId=%u", m_MyPlayerId, m_MyNetId);
-    else
-        ImGui::Text("Waiting for server assignment...");
-
-    if (m_CommanderMode) {
-        ImGui::Separator();
-        ImGui::Text("Ausgewaehlte Einheiten: %zu", m_SelectedUnits.size());
-        ImGui::TextDisabled("LKlick: Einheit waehlen  RKlick: Bewegungsbefehl");
+    ImGui::Begin("Game Debug");
+    ImGui::Text("FPS: %.1f", 1.0f / dt);
+    const char* modeStrs[] = { "Commander", "Building", "FreeFly" };
+    ImGui::Text("Kamera: %s", modeStrs[static_cast<int>(m_CameraMode)]);
+    if (m_CameraMode == CameraMode::Building) {
+        static const char* tNames[] = { "Attack", "Defense", "Resource", "Outpost" };
+        static const BuildingType tVals[] = { BuildingType::Attack, BuildingType::Defense, BuildingType::Resource, BuildingType::Outpost };
+        for (int i = 0; i < 4; ++i) if (ImGui::Selectable(tNames[i], m_PlacementActive && m_PlacementType == tVals[i])) { m_PlacementActive = true; m_PlacementType = tVals[i]; }
     }
-
-    if (ctx.network.IsHosting()) {
-        if (ImGui::Button("Spawn Physics Cube")) {
-            SpawnPhysicsCube(ctx, m_Camera->m_Position + m_Camera->m_Front * 5.0f);
-        }
-        if (ImGui::Button("Spawn Unit (Team 0)")) {
-            glm::vec3 sp = RandomSpawnInTerritory(ctx, 0);
-            SpawnUnit(ctx, 0, sp);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Spawn Unit (Team 1)")) {
-            glm::vec3 sp = RandomSpawnInTerritory(ctx, 1);
-            SpawnUnit(ctx, 1, sp);
-        }
-    }
-
-    if (ImGui::Button("Disconnect")) {
-        ctx.network.Disconnect();
-        ctx.scenes.RequestTransition(new MainMenuScene());
-    }
+    if (ImGui::Button("Disconnect")) { ctx.network.Disconnect(); ctx.scenes.RequestTransition(new MainMenuScene()); }
     ImGui::End();
-
-    // Resource stockpile HUD
-    if (ctx.network.IsHosting()) {
-        ResourceHUD::Draw(ctx.serverRegistry, /*teamId=*/0);
-    }
-
-    // Map overlay
-    if (ctx.network.IsHosting()) {
-        ImGui::Begin("Game");
-        if (ImGui::Button(m_ShowMapOverlay ? "Karte schliessen" : "Karte [M]"))
-            m_ShowMapOverlay = !m_ShowMapOverlay;
-        ImGui::End();
-
-        if (ImGui::IsKeyPressed(ImGuiKey_M))
-            m_ShowMapOverlay = !m_ShowMapOverlay;
-
-        if (m_ShowMapOverlay) {
-            ImGuiIO& io = ImGui::GetIO();
-            FogOfWarSystem::DrawOverlay(m_Fog, ImVec2(0.f, 0.f),
-                                        ImVec2(io.DisplaySize.x, io.DisplaySize.y));
-            TerritorySystem::DrawOverlay(ctx.serverRegistry,
-                ImVec2(0.f, 0.f), ImVec2(io.DisplaySize.x, io.DisplaySize.y),
-                glm::vec2{-50.f, -50.f}, glm::vec2{50.f, 50.f});
-        }
-    }
-
-    // HP bars above units (Commander mode or always for visibility)
-    if (m_CommanderMode) {
-        DrawUnitHPBars(ctx);
-    }
-
-    ImGui::Begin("Shadow Debug");
-    ImGui::SliderFloat("Bias Constant", &m_ShadowBiasConstant, 0.0f, 10.0f);
-    ImGui::SliderFloat("Bias Slope", &m_ShadowBiasSlope, 0.0f, 10.0f);
-    ImGui::SliderFloat("Ortho Size", &m_ShadowOrthoSize, 5.0f, 100.0f);
-    ImGui::End();
+    if (ctx.network.IsHosting()) ResourceHUD::Draw(ctx.serverRegistry, 0);
+    if (m_CameraMode == CameraMode::Commander) DrawUnitHPBars(ctx);
 }
 
-/**
- * @brief Spawns a physics-driven cube in the world (Server only).
- * @param ctx The scene context.
- * @param pos Initial position.
- */
 void GameScene::SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos) {
     if (!ctx.network.IsHosting()) return;
-
-    const uint32_t cubeNetId = m_NextNetId++;
-    auto cubeEntity = ctx.serverRegistry.create();
-    
-    uint32_t physicsId = ctx.world->GetNextPhysicsID();
-    auto handle = ctx.physics->AddDynamicBox(
-        physicsId,
-        JPH::RVec3(pos.x, pos.y, pos.z),
-        JPH::Vec3(1.f, 1.f, 1.f)
-    );
-    
-    // Register the server entity first
-    ctx.world->RegisterPhysicsEntity(physicsId, cubeEntity);
-    
-    ctx.serverRegistry.emplace<TransformComponent>(cubeEntity, pos);
-    ctx.serverRegistry.emplace<MovementComponent>(cubeEntity);
-    ctx.serverRegistry.emplace<PhysicsBodyComponent>(cubeEntity, handle);
-    ctx.serverRegistry.emplace<NetworkedComponent>(cubeEntity, cubeNetId);
-    ctx.serverRegistry.emplace<ModelComponent>(cubeEntity, "assets/cube.glb");
-    m_ServerNetMap[cubeNetId] = cubeEntity;
-
-    AssetJoinedPacket cubePkt;
-    cubePkt.netId = cubeNetId;
-    std::strncpy(cubePkt.modelPath, "assets/cube.glb", sizeof(cubePkt.modelPath)-1);
-    cubePkt.x = pos.x; cubePkt.y = pos.y; cubePkt.z = pos.z;
-    ctx.network.BroadcastToAll(cubePkt);
-
-    spdlog::info("GameScene: spawned physics cube netId={} at ({}, {}, {})", 
-                 cubeNetId, pos.x, pos.y, pos.z);
+    uint32_t netId = m_NextNetId++;
+    auto e = ctx.serverRegistry.create();
+    uint32_t physId = ctx.world->GetNextPhysicsID();
+    auto h = ctx.physics->AddDynamicBox(physId, JPH::RVec3(pos.x, pos.y, pos.z), JPH::Vec3(1,1,1));
+    ctx.world->RegisterPhysicsEntity(physId, e);
+    ctx.serverRegistry.emplace<TransformComponent>(e, pos);
+    ctx.serverRegistry.emplace<PhysicsBodyComponent>(e, h);
+    ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
+    ctx.serverRegistry.emplace<ModelComponent>(e, "assets/cube.glb");
+    m_ServerNetMap[netId] = e;
+    AssetJoinedPacket pkt; pkt.netId = netId; std::strncpy(pkt.modelPath, "assets/cube.glb", sizeof(pkt.modelPath)-1); pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
+    ctx.network.BroadcastToAll(pkt);
 }
 
-// ---------------------------------------------------------------------------
-// Fixed-rate update
-// ---------------------------------------------------------------------------
-
 void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
-    if (ctx.network.IsHosting()) {
-        PollConnectionEvents(ctx);
-        PollClientPackets(ctx);
-
-        // Process commander movement orders from clients
-        while (true) {
-            auto result = ctx.network.ReceiveFromClient<CommanderOrderPacket>(PacketType::COMMANDER_ORDER);
-            if (!result) break;
-            auto [pkt, senderPeer] = *result;
-            uint32_t senderTeam = pkt.playerId % 2;
-            glm::vec3 dest{pkt.x, pkt.y, pkt.z};
-            // Apply order to all selected units of sender's team
-            auto uview = ctx.serverRegistry.view<UnitComponent, MovementOrderComponent>();
-            for (auto e : uview) {
-                auto& uc = uview.get<UnitComponent>(e);
-                auto& mo = uview.get<MovementOrderComponent>(e);
-                if (uc.teamId == senderTeam && uc.selected) {
-                    mo.destination = dest;
-                    mo.active      = true;
-                }
-            }
-            spdlog::info("Commander order for team {}: ({:.1f},{:.1f},{:.1f})",
-                         senderTeam, dest.x, dest.y, dest.z);
-        }
-    }
-
-    if (ctx.network.IsConnected()) {
-        PollServerPackets(ctx);
-    }
-
+    if (ctx.network.IsHosting()) { PollConnectionEvents(ctx); PollClientPackets(ctx); }
+    if (ctx.network.IsConnected()) PollServerPackets(ctx);
     if (ctx.network.IsHosting()) {
         Systems::MovementSystem(ctx.serverRegistry, dt);
-        UpdateUnitMovement(ctx, dt);
-        UpdateCombat(ctx, dt);
-        CheckWinCondition(ctx);
+        UpdateUnitMovement(ctx, dt); UpdateCombat(ctx, dt); CheckWinCondition(ctx);
         m_ResourceManager.Update(ctx.serverRegistry, dt);
         ResourceSystem::Update(ctx.serverRegistry, m_ResourceManager, dt);
         FogOfWarSystem::Update(m_Fog, ctx.serverRegistry);
         TerritorySystem::Update(ctx.serverRegistry, dt);
     }
-
     SendLocalInput(ctx);
-
-    if (ctx.network.IsHosting()) {
-        m_SnapAccum += dt;
-        if (m_SnapAccum >= SNAPSHOT_RATE) {
-            SendSnapshots(ctx);
-            m_SnapAccum -= SNAPSHOT_RATE;
-        }
-    }
+    if (ctx.network.IsHosting()) { m_SnapAccum += dt; if (m_SnapAccum >= SNAPSHOT_RATE) { SendSnapshots(ctx); m_SnapAccum -= SNAPSHOT_RATE; } }
 }
 
-// ---------------------------------------------------------------------------
-// Server-side: connection / disconnection
-// ---------------------------------------------------------------------------
-
 void GameScene::PollConnectionEvents(SceneContext& ctx) {
-    uint32_t peerId;
-    bool     isConnect;
-
-    while (ctx.network.PollPlayerConnection(peerId, isConnect)) {
-        if (isConnect) {
-            const uint32_t newNetId    = m_NextNetId++;
-            const uint32_t newPlayerId = m_NextPlayerId++;
-
-            // Sync existing entities to the new client
-            for (auto& [netId, ent] : m_ServerNetMap) {
+    uint32_t pid; bool conn;
+    while (ctx.network.PollPlayerConnection(pid, conn)) {
+        if (conn) {
+            uint32_t nid = m_NextNetId++; uint32_t rpid = m_NextPlayerId++;
+            for (auto& [id, ent] : m_ServerNetMap) {
                 auto& t = ctx.serverRegistry.get<TransformComponent>(ent);
-                
-                auto* p = ctx.serverRegistry.try_get<PlayerComponent>(ent);
-                if (p) {
-                    PlayerJoinedPacket pkt;
-                    pkt.netId    = netId;
-                    pkt.playerId = p->playerId;
-                    pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
-                    ctx.network.SendToClient(peerId, pkt);
+                if (auto* p = ctx.serverRegistry.try_get<PlayerComponent>(ent)) {
+                    PlayerJoinedPacket pk; pk.netId = id; pk.playerId = p->playerId; pk.x = t.position.x; pk.y = t.position.y; pk.z = t.position.z;
+                    ctx.network.SendToClient(pid, pk);
                 }
-
-                auto* m = ctx.serverRegistry.try_get<ModelComponent>(ent);
-                if (m) {
-                    AssetJoinedPacket pkt;
-                    pkt.netId = netId;
-                    std::strncpy(pkt.modelPath, m->modelPath.c_str(), sizeof(pkt.modelPath)-1);
-                    pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
-                    ctx.network.SendToClient(peerId, pkt);
+                if (auto* m = ctx.serverRegistry.try_get<ModelComponent>(ent)) {
+                    AssetJoinedPacket pk; pk.netId = id; std::strncpy(pk.modelPath, m->modelPath.c_str(), sizeof(pk.modelPath)-1); pk.x = t.position.x; pk.y = t.position.y; pk.z = t.position.z;
+                    ctx.network.SendToClient(pid, pk);
                 }
             }
-
-            // Tell the new client their identity
-            PlayerIdAssignPacket idPkt;
-            idPkt.playerId = newPlayerId;
-            idPkt.netId    = newNetId;
-            ctx.network.SendToClient(peerId, idPkt);
-
-            // Create the server entity
-            auto entity = ctx.serverRegistry.create();
-            ctx.serverRegistry.emplace<TransformComponent>(entity);
-            ctx.serverRegistry.emplace<MovementComponent>(entity);
-            ctx.serverRegistry.emplace<PlayerComponent>(entity, newPlayerId, false);
-            ctx.serverRegistry.emplace<NetworkedComponent>(entity, newNetId);
-            m_ServerNetMap[newNetId] = entity;
-            m_PeerToNetId[peerId]    = newNetId;
-
-            // Broadcast the new player to all clients
-            PlayerJoinedPacket broadcastPkt;
-            broadcastPkt.netId    = newNetId;
-            broadcastPkt.playerId = newPlayerId;
-            ctx.network.BroadcastToAll(broadcastPkt);
-
-            spdlog::info("GameScene: player joined  peerId={} playerId={} netId={}",
-                         peerId, newPlayerId, newNetId);
+            PlayerIdAssignPacket idpk; idpk.playerId = rpid; idpk.netId = nid; ctx.network.SendToClient(pid, idpk);
+            auto e = ctx.serverRegistry.create(); ctx.serverRegistry.emplace<TransformComponent>(e); ctx.serverRegistry.emplace<MovementComponent>(e);
+            ctx.serverRegistry.emplace<PlayerComponent>(e, rpid, false); ctx.serverRegistry.emplace<NetworkedComponent>(e, nid);
+            m_ServerNetMap[nid] = e; m_PeerToNetId[pid] = nid;
+            PlayerJoinedPacket bpk; bpk.netId = nid; bpk.playerId = rpid; ctx.network.BroadcastToAll(bpk);
         } else {
-            auto it = m_PeerToNetId.find(peerId);
+            auto it = m_PeerToNetId.find(pid);
             if (it != m_PeerToNetId.end()) {
-                const uint32_t netId = it->second;
-                ctx.serverRegistry.destroy(m_ServerNetMap[netId]);
-                m_ServerNetMap.erase(netId);
-                m_PeerToNetId.erase(peerId);
-                PlayerLeftPacket pkt;
-                pkt.netId = netId;
-                ctx.network.BroadcastToAll(pkt);
-                spdlog::info("GameScene: player left  peerId={} netId={}", peerId, netId);
+                uint32_t nid = it->second; ctx.serverRegistry.destroy(m_ServerNetMap[nid]); m_ServerNetMap.erase(nid); m_PeerToNetId.erase(pid);
+                PlayerLeftPacket pk; pk.netId = nid; ctx.network.BroadcastToAll(pk);
             }
         }
     }
 }
 
 void GameScene::PollClientPackets(SceneContext& ctx) {
-    while (true) {
-        auto result = ctx.network.ReceiveFromClient<PlayerInputPacket>(PacketType::PLAYER_INPUT);
-        if (!result) break;
-        auto [packet, senderPeerId] = *result;
-        auto peerIt = m_PeerToNetId.find(senderPeerId);
-        if (peerIt == m_PeerToNetId.end()) continue;
-        auto entIt = m_ServerNetMap.find(peerIt->second);
-        if (entIt == m_ServerNetMap.end()) continue;
-        auto* movement = ctx.serverRegistry.try_get<MovementComponent>(entIt->second);
-        if (movement) movement->inputDir = {packet.dx, packet.dy, packet.dz};
-        auto* transform = ctx.serverRegistry.try_get<TransformComponent>(entIt->second);
-        if (transform) {
-            transform->rotation.y = packet.yaw;
-            transform->rotation.x = packet.pitch;
-        }
+    while (auto res = ctx.network.ReceiveFromClient<PlayerInputPacket>(PacketType::PLAYER_INPUT)) {
+        auto [pk, spid] = *res; auto pit = m_PeerToNetId.find(spid); if (pit == m_PeerToNetId.end()) continue;
+        auto eit = m_ServerNetMap.find(pit->second); if (eit == m_ServerNetMap.end()) continue;
+        if (auto* mv = ctx.serverRegistry.try_get<MovementComponent>(eit->second)) mv->inputDir = {pk.dx, pk.dy, pk.dz};
+        if (auto* tf = ctx.serverRegistry.try_get<TransformComponent>(eit->second)) { tf->rotation.y = pk.yaw; tf->rotation.x = pk.pitch; }
+    }
+    while (auto res = ctx.network.ReceiveFromClient<CommanderOrderPacket>(PacketType::COMMANDER_ORDER)) {
+        auto [pk, spid] = *res; uint32_t team = pk.playerId % 2; glm::vec3 dest{pk.x, pk.y, pk.z};
+        auto view = ctx.serverRegistry.view<UnitComponent, MovementOrderComponent>();
+        for (auto e : view) { auto& uc = view.get<UnitComponent>(e); auto& mo = view.get<MovementOrderComponent>(e); if (uc.teamId == team && uc.selected) { mo.destination = dest; mo.active = true; } }
+    }
+    while (auto res = ctx.network.ReceiveFromClient<BuildPlaceRequestPacket>(PacketType::BUILD_PLACE_REQUEST)) {
+        auto [pk, spid] = *res; glm::vec3 pos{pk.x, 0.f, pk.z};
+        constexpr float SNAP = 2.f; float sx = std::round(pos.x/SNAP)*SNAP, sz = std::round(pos.z/SNAP)*SNAP; bool blk = false;
+        auto bview = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+        for (auto ex : bview) { auto& et = bview.get<TransformComponent>(ex); if (std::abs(std::round(et.position.x/SNAP)*SNAP - sx) < 0.1f && std::abs(std::round(et.position.z/SNAP)*SNAP - sz) < 0.1f) { blk = true; break; } }
+        if (blk) continue;
+        uint32_t nid = m_NextNetId++; auto e = ctx.serverRegistry.create();
+        ctx.serverRegistry.emplace<TransformComponent>(e, pos); ctx.serverRegistry.emplace<NetworkedComponent>(e, nid); ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
+        m_ServerNetMap[nid] = e; BuildingComponent bc; bc.type = static_cast<BuildingType>(pk.buildingType); bc.teamId = pk.playerId % 2; ctx.serverRegistry.emplace<BuildingComponent>(e, bc);
+        AssetJoinedPacket aj; aj.netId = nid; std::strncpy(aj.modelPath, "assets/cube.glb", sizeof(aj.modelPath)-1); aj.x = pos.x; aj.y = pos.y; aj.z = pos.z; ctx.network.BroadcastToAll(aj);
     }
 }
 
 void GameScene::SendSnapshots(SceneContext& ctx) {
     auto view = ctx.serverRegistry.view<NetworkedComponent, TransformComponent>();
-    for (auto entity : view) {
-        auto& net = view.get<NetworkedComponent>(entity);
-        auto& t   = view.get<TransformComponent>(entity);
-        EntitySnapshotPacket pkt;
-        pkt.netId = net.netId;
-        pkt.x = t.position.x; pkt.y = t.position.y; pkt.z = t.position.z;
-        pkt.rx = t.rotation.x; pkt.ry = t.rotation.y; pkt.rz = t.rotation.z;
-        pkt.sx = t.scale.x;    pkt.sy = t.scale.y;    pkt.sz = t.scale.z;
-        auto* m = ctx.serverRegistry.try_get<MovementComponent>(entity);
-        if (m) {
-            pkt.vx = m->velocity.x; pkt.vy = m->velocity.y; pkt.vz = m->velocity.z;
-        } else {
-            pkt.vx = pkt.vy = pkt.vz = 0.f;
-        }
-        ctx.network.BroadcastToAll(pkt);
+    for (auto e : view) {
+        auto& n = view.get<NetworkedComponent>(e); auto& t = view.get<TransformComponent>(e);
+        EntitySnapshotPacket pk; pk.netId = n.netId; pk.x = t.position.x; pk.y = t.position.y; pk.z = t.position.z;
+        pk.rx = t.rotation.x; pk.ry = t.rotation.y; pk.rz = t.rotation.z; pk.sx = t.scale.x; pk.sy = t.scale.y; pk.sz = t.scale.z;
+        if (auto* m = ctx.serverRegistry.try_get<MovementComponent>(e)) { pk.vx = m->velocity.x; pk.vy = m->velocity.y; pk.vz = m->velocity.z; } else pk.vx = pk.vy = pk.vz = 0.f;
+        ctx.network.BroadcastToAll(pk);
     }
 }
 
 void GameScene::PollServerPackets(SceneContext& ctx) {
-    if (!m_IdAssigned) {
-        auto idPkt = ctx.network.ReceiveFromServer<PlayerIdAssignPacket>(PacketType::PLAYER_ID_ASSIGN);
-        if (idPkt) {
-            m_MyPlayerId = idPkt->playerId;
-            m_MyNetId    = idPkt->netId;
-            m_IdAssigned = true;
-            spdlog::info("GameScene: assigned playerId={} netId={}", m_MyPlayerId, m_MyNetId);
+    if (!m_IdAssigned) if (auto pk = ctx.network.ReceiveFromServer<PlayerIdAssignPacket>(PacketType::PLAYER_ID_ASSIGN)) { m_MyPlayerId = pk->playerId; m_MyNetId = pk->netId; m_IdAssigned = true; }
+    while (auto pk = ctx.network.ReceiveFromServer<PlayerJoinedPacket>(PacketType::PLAYER_JOINED)) {
+        if (m_ClientNetMap.count(pk->netId)) continue; auto e = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(e, glm::vec3{pk->x, pk->y, pk->z}); ctx.clientRegistry.emplace<MovementComponent>(e);
+        ctx.clientRegistry.emplace<PlayerComponent>(e, pk->playerId, pk->playerId == m_MyPlayerId); ctx.clientRegistry.emplace<NetworkedComponent>(e, pk->netId); m_ClientNetMap[pk->netId] = e;
+    }
+    while (auto pk = ctx.network.ReceiveFromServer<PlayerLeftPacket>(PacketType::PLAYER_LEFT)) { auto it = m_ClientNetMap.find(pk->netId); if (it != m_ClientNetMap.end()) { ctx.clientRegistry.destroy(it->second); m_ClientNetMap.erase(it); } }
+    while (auto pk = ctx.network.ReceiveFromServer<EntitySnapshotPacket>(PacketType::ENTITY_SNAPSHOT)) {
+        auto it = m_ClientNetMap.find(pk->netId); if (it == m_ClientNetMap.end() || ctx.network.IsHosting()) continue;
+        if (auto* t = ctx.clientRegistry.try_get<TransformComponent>(it->second)) {
+            bool local = false; if (auto* p = ctx.clientRegistry.try_get<PlayerComponent>(it->second)) local = p->isLocal;
+            t->position = {pk->x, pk->y, pk->z}; if (!local) t->rotation = {pk->rx, pk->ry, pk->rz}; t->scale = {pk->sx, pk->sy, pk->sz};
         }
+        if (auto* m = ctx.clientRegistry.try_get<MovementComponent>(it->second)) m->velocity = {pk->vx, pk->vy, pk->vz};
     }
-
-    while (true) {
-        auto pkt = ctx.network.ReceiveFromServer<PlayerJoinedPacket>(PacketType::PLAYER_JOINED);
-        if (!pkt) break;
-        if (m_ClientNetMap.count(pkt->netId)) continue;
-        auto entity = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
-        ctx.clientRegistry.emplace<MovementComponent>(entity);
-        ctx.clientRegistry.emplace<PlayerComponent>(entity, pkt->playerId, pkt->playerId == m_MyPlayerId);
-        ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
-        m_ClientNetMap[pkt->netId] = entity;
+    while (auto pk = ctx.network.ReceiveFromServer<AssetJoinedPacket>(PacketType::ASSET_JOINED)) {
+        if (m_ClientNetMap.count(pk->netId)) continue; auto e = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(e, glm::vec3{pk->x, pk->y, pk->z}); ctx.clientRegistry.emplace<NetworkedComponent>(e, pk->netId); ctx.clientRegistry.emplace<ModelComponent>(e, std::string(pk->modelPath)); m_ClientNetMap[pk->netId] = e;
     }
-
-    while (true) {
-        auto pkt = ctx.network.ReceiveFromServer<PlayerLeftPacket>(PacketType::PLAYER_LEFT);
-        if (!pkt) break;
-        auto it = m_ClientNetMap.find(pkt->netId);
-        if (it != m_ClientNetMap.end()) {
-            ctx.clientRegistry.destroy(it->second);
-            m_ClientNetMap.erase(it);
-        }
+    while (auto pk = ctx.network.ReceiveFromServer<UnitSpawnedPacket>(PacketType::UNIT_SPAWNED)) {
+        if (m_ClientNetMap.count(pk->netId)) continue; auto e = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(e, glm::vec3{pk->x, pk->y, pk->z}); ctx.clientRegistry.emplace<MovementComponent>(e); ctx.clientRegistry.emplace<NetworkedComponent>(e, pk->netId); ctx.clientRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
+        ctx.clientRegistry.emplace<UnitComponent>(e, UnitComponent{pk->teamId, static_cast<BugClass>(pk->bugClass), false}); ctx.clientRegistry.emplace<HealthComponent>(e, HealthComponent{pk->maxHp}); ctx.clientRegistry.emplace<MovementOrderComponent>(e); m_ClientNetMap[pk->netId] = e;
     }
-
-    while (true) {
-        auto pkt = ctx.network.ReceiveFromServer<EntitySnapshotPacket>(PacketType::ENTITY_SNAPSHOT);
-        if (!pkt) break;
-        auto it = m_ClientNetMap.find(pkt->netId);
-        if (it == m_ClientNetMap.end()) continue;
-        if (ctx.network.IsHosting()) continue;
-
-        auto* t = ctx.clientRegistry.try_get<TransformComponent>(it->second);
-        auto* m = ctx.clientRegistry.try_get<MovementComponent>(it->second);
-        if (t) {
-            bool isLocalPlayer = false;
-            if (auto* p = ctx.clientRegistry.try_get<PlayerComponent>(it->second)) {
-                if (p->isLocal) isLocalPlayer = true;
-            }
-            t->position = glm::vec3{pkt->x, pkt->y, pkt->z};
-            if (!isLocalPlayer) t->rotation = glm::vec3{pkt->rx, pkt->ry, pkt->rz};
-            t->scale = glm::vec3{pkt->sx, pkt->sy, pkt->sz};
-        }
-        if (m) m->velocity = {pkt->vx, pkt->vy, pkt->vz};
+    while (auto pk = ctx.network.ReceiveFromServer<UnitDiedPacket>(PacketType::UNIT_DIED)) {
+        auto it = m_ClientNetMap.find(pk->netId); if (it == m_ClientNetMap.end()) continue; ctx.clientRegistry.destroy(it->second); m_ClientNetMap.erase(it);
+        m_SelectedUnits.erase(std::remove(m_SelectedUnits.begin(), m_SelectedUnits.end(), pk->netId), m_SelectedUnits.end());
     }
-
-    while (true) {
-        auto pkt = ctx.network.ReceiveFromServer<AssetJoinedPacket>(PacketType::ASSET_JOINED);
-        if (!pkt) break;
-        if (m_ClientNetMap.count(pkt->netId)) continue;
-        auto entity = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
-        ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
-        ctx.clientRegistry.emplace<ModelComponent>(entity, std::string(pkt->modelPath));
-        m_ClientNetMap[pkt->netId] = entity;
+    while (auto pk = ctx.network.ReceiveFromServer<UnitHpUpdatePacket>(PacketType::UNIT_HP_UPDATE)) {
+        auto it = m_ClientNetMap.find(pk->netId); if (it == m_ClientNetMap.end()) continue; if (auto* hc = ctx.clientRegistry.try_get<HealthComponent>(it->second)) hc->hp = pk->hp;
     }
-
-    // Unit spawned
-    while (true) {
-        auto pkt = ctx.network.ReceiveFromServer<UnitSpawnedPacket>(PacketType::UNIT_SPAWNED);
-
-        if (!pkt) break;
-        if (m_ClientNetMap.count(pkt->netId)) continue;
-        auto entity = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
-        ctx.clientRegistry.emplace<MovementComponent>(entity);
-        ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
-        ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
-        ctx.clientRegistry.emplace<UnitComponent>(entity,
-            UnitComponent{pkt->teamId, static_cast<BugClass>(pkt->bugClass), false});
-        ctx.clientRegistry.emplace<HealthComponent>(entity,
-            HealthComponent{pkt->maxHp});
-        ctx.clientRegistry.emplace<MovementOrderComponent>(entity);
-        m_ClientNetMap[pkt->netId] = entity;
-    }
-
-    // Unit died
-    while (true) {
-        auto pkt = ctx.network.ReceiveFromServer<UnitDiedPacket>(PacketType::UNIT_DIED);
-        if (!pkt) break;
-        auto it = m_ClientNetMap.find(pkt->netId);
-        if (it == m_ClientNetMap.end()) continue;
-        ctx.clientRegistry.destroy(it->second);
-        m_ClientNetMap.erase(it);
-        // Remove from selection if present
-        m_SelectedUnits.erase(std::remove(m_SelectedUnits.begin(), m_SelectedUnits.end(), pkt->netId),
-                               m_SelectedUnits.end());
-    }
-
-    // HP update
-    while (true) {
-        auto pkt = ctx.network.ReceiveFromServer<UnitHpUpdatePacket>(PacketType::UNIT_HP_UPDATE);
-        if (!pkt) break;
-        auto it = m_ClientNetMap.find(pkt->netId);
-        if (it == m_ClientNetMap.end()) continue;
-        auto* hc = ctx.clientRegistry.try_get<HealthComponent>(it->second);
-        if (hc) hc->hp = pkt->hp;
-    }
-
-    // Game over
-    {
-        auto pkt = ctx.network.ReceiveFromServer<GameOverPacket>(PacketType::GAME_OVER);
-        if (pkt && !m_GameOver) {
-            m_GameOver    = true;
-            m_WinnerTeam  = pkt->winnerTeam;
-            spdlog::info("GameScene: GAME OVER – winner team {}", m_WinnerTeam);
-        }
-    }
+    if (auto pk = ctx.network.ReceiveFromServer<GameOverPacket>(PacketType::GAME_OVER)) { m_GameOver = true; m_WinnerTeam = pk->winnerTeam; }
 }
 
 void GameScene::SendLocalInput(SceneContext& ctx) {
     if (!ctx.network.IsConnected() || !Input::IsRelativeMouseMode()) return;
-    glm::vec3 forward = m_Camera->m_Front;
-    forward.y = 0.f;
-    if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
-    glm::vec3 right = m_Camera->m_Right;
-    right.y = 0.f;
-    if (glm::length(right) > 0.0001f) right = glm::normalize(right);
-    glm::vec3 moveDir{0.f};
-    if (Input::IsKeyDown(SDLK_W)) moveDir += forward;
-    if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
-    if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
-    if (Input::IsKeyDown(SDLK_D)) moveDir += right;
-    if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
-    if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
-    if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
-
-    PlayerInputPacket pkt;
-    pkt.dx = moveDir.x; pkt.dy = moveDir.y; pkt.dz = moveDir.z;
-    pkt.yaw = m_Camera->m_Yaw; pkt.pitch = m_Camera->m_Pitch;
-    ctx.network.Send(pkt);
+    glm::vec3 fwd = m_Camera->m_Front; fwd.y = 0.f; if (glm::length(fwd) > 0.0001f) fwd = glm::normalize(fwd);
+    glm::vec3 rgt = m_Camera->m_Right; rgt.y = 0.f; if (glm::length(rgt) > 0.0001f) rgt = glm::normalize(rgt);
+    glm::vec3 dir{0.f}; if (Input::IsKeyDown(SDLK_W)) dir += fwd; if (Input::IsKeyDown(SDLK_S)) dir -= fwd; if (Input::IsKeyDown(SDLK_A)) dir -= rgt; if (Input::IsKeyDown(SDLK_D)) dir += rgt;
+    if (Input::IsKeyDown(SDLK_SPACE)) dir.y += 1.f; if (Input::IsKeyDown(SDLK_LSHIFT)) dir.y -= 1.f;
+    if (glm::length(dir) > 0.f) dir = glm::normalize(dir);
+    PlayerInputPacket pk; pk.dx = dir.x; pk.dy = dir.y; pk.dz = dir.z; pk.yaw = m_Camera->m_Yaw; pk.pitch = m_Camera->m_Pitch; ctx.network.Send(pk);
 }
 
-// ---------------------------------------------------------------------------
-// Mesh Collision
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Loads scene geometry as static Jolt MeshShape collision bodies.
- *
- * Workflow:
- *  1. Load (or retrieve from cache) the GLTF scene via AssetManager.
- *  2. Extract CPU-side vertices + indices from the cached SceneData.
- *  3. Build a Jolt MeshShape using MeshCollisionBuilder.
- *  4. Register the resulting body with the PhysicsServer.
- *  5. Store the handle in m_MeshCollisionBodies for cleanup on OnExit().
- *
- * The function logs a warning and returns gracefully if the physics server
- * is unavailable, the asset fails to load, or the shape cannot be created.
- *
- * @param ctx       Scene context providing access to the PhysicsServer.
- * @param glbPath   Path to the .glb file whose geometry is used for collision.
- * @param transform Optional world-space transform baked into the shape vertices.
- */
-void GameScene::LoadSceneMeshCollision(
-    SceneContext&      ctx,
-    const std::string& glbPath,
-    const glm::mat4&   transform)
-{
-    if (!ctx.physics) {
-        spdlog::warn("GameScene::LoadSceneMeshCollision: no PhysicsServer available.");
-        return;
-    }
-
-    // 1. Load (or retrieve cached) GLTF scene data including CPU vertices/indices.
-    SceneData sceneData = AssetManager::LoadGLTF(glbPath);
-    if (!sceneData.model) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: failed to load '{}'", glbPath);
-        return;
-    }
-
-    if (sceneData.cpuVertices.empty() || sceneData.cpuIndices.empty()) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: '{}' has no CPU mesh data.", glbPath);
-        return;
-    }
-
-    spdlog::info("GameScene::LoadSceneMeshCollision: building mesh shape for '{}' "
-                 "({} vertices, {} indices)",
-                 glbPath,
-                 sceneData.cpuVertices.size(),
-                 sceneData.cpuIndices.size());
-
-    // 2. Build the Jolt MeshShape from CPU geometry.
-    JPH::Shape::ShapeResult result = MeshCollisionBuilder::Build(
-        sceneData.cpuVertices,
-        sceneData.cpuIndices,
-        transform
-    );
-
-    if (!result.IsValid()) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: MeshShape creation failed for '{}': {}",
-                      glbPath, result.GetError().c_str());
-        return;
-    }
-
-    // 3. Register the static mesh body with the physics server.
-    PhysicsBodyHandle handle = ctx.physics->AddStaticMesh(
-        result.Get(),
-        JPH::RVec3::sZero(),
-        JPH::Quat::sIdentity()
-    );
-
-    if (!handle.IsValid()) {
-        spdlog::error("GameScene::LoadSceneMeshCollision: AddStaticMesh failed for '{}'", glbPath);
-        return;
-    }
-
-    // 4. Store for later cleanup.
-    m_MeshCollisionBodies.push_back(handle);
-
-    spdlog::info("GameScene::LoadSceneMeshCollision: mesh collision active for '{}'", glbPath);
+void GameScene::LoadSceneMeshCollision(SceneContext& ctx, const std::string& glbPath, const glm::mat4& transform) {
+    if (!ctx.physics) return; SceneData sd = AssetManager::LoadGLTF(glbPath); if (!sd.model) return;
+    if (sd.cpuVertices.empty() || sd.cpuIndices.empty()) return;
+    JPH::Shape::ShapeResult res = MeshCollisionBuilder::Build(sd.cpuVertices, sd.cpuIndices, transform);
+    if (!res.IsValid()) return;
+    PhysicsBodyHandle h = ctx.physics->AddStaticMesh(res.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity());
+    if (h.IsValid()) m_MeshCollisionBodies.push_back(h);
 }
 
-// ---------------------------------------------------------------------------
-// SpawnUnit
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Spawns a unit on the server, assigns components and broadcasts.
- *
- * Damage stats are derived from BugClass:
- *   Carnivores (Mantis, Dragonflies, Scorpions) → high damage (20)
- *   Omnivores  (Ants, Roaches, Beetles, CentipedesWorms) → medium (12)
- *   Rest       → low (7)
- */
-void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, float hp)
-{
+void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, float hp) {
     if (!ctx.network.IsHosting()) return;
-
     static std::mt19937 rng{std::random_device{}()};
-    // Pick a random bug class from available ones (skip None)
-    static const BugClass classes[] = {
-        BugClass::Ants, BugClass::Beetles, BugClass::Mantis,
-        BugClass::Dragonflies, BugClass::Roaches, BugClass::Scorpions
-    };
-    BugClass bc = classes[rng() % std::size(classes)];
-
-    // Damage by diet archetype
-    float dmg = 7.f;
-    if (bc == BugClass::Mantis || bc == BugClass::Dragonflies || bc == BugClass::Scorpions)
-        dmg = 20.f;
-    else if (bc == BugClass::Ants || bc == BugClass::Roaches || bc == BugClass::Beetles ||
-             bc == BugClass::CentipedesWorms)
-        dmg = 12.f;
-
-    const uint32_t netId = m_NextNetId++;
-    auto e = ctx.serverRegistry.create();
-    ctx.serverRegistry.emplace<TransformComponent>(e, pos);
-    ctx.serverRegistry.emplace<MovementComponent>(e);
-    ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
-    ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
-    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false});
-    ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
-    ctx.serverRegistry.emplace<CombatComponent>(e,
-        CombatComponent{/*range=*/6.f, /*dmg=*/dmg, /*cd=*/0.f, /*rate=*/1.5f, entt::null});
-    ctx.serverRegistry.emplace<MovementOrderComponent>(e);
-    m_ServerNetMap[netId] = e;
-
-    UnitSpawnedPacket pkt;
-    pkt.netId    = netId;
-    pkt.teamId   = teamId;
-    pkt.bugClass = static_cast<uint8_t>(bc);
-    pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
-    pkt.hp = hp; pkt.maxHp = hp;
-    ctx.network.BroadcastToAll(pkt);
-
-    spdlog::info("GameScene: spawned unit netId={} team={} class={} hp={:.0f}",
-                 netId, teamId, (int)bc, hp);
+    static const BugClass clss[] = { BugClass::Ants, BugClass::Beetles, BugClass::Mantis, BugClass::Dragonflies, BugClass::Roaches, BugClass::Scorpions };
+    BugClass bc = clss[rng() % std::size(clss)];
+    float dmg = 7.f; if (bc == BugClass::Mantis || bc == BugClass::Dragonflies || bc == BugClass::Scorpions) dmg = 20.f; else if (bc == BugClass::Ants || bc == BugClass::Roaches || bc == BugClass::Beetles || bc == BugClass::CentipedesWorms) dmg = 12.f;
+    uint32_t nid = m_NextNetId++; auto e = ctx.serverRegistry.create();
+    ctx.serverRegistry.emplace<TransformComponent>(e, pos); ctx.serverRegistry.emplace<MovementComponent>(e); ctx.serverRegistry.emplace<NetworkedComponent>(e, nid); ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
+    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false}); ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
+    ctx.serverRegistry.emplace<CombatComponent>(e, CombatComponent{6.f, dmg, 0.f, 1.5f, entt::null}); ctx.serverRegistry.emplace<MovementOrderComponent>(e); m_ServerNetMap[nid] = e;
+    UnitSpawnedPacket pk; pk.netId = nid; pk.teamId = teamId; pk.bugClass = static_cast<uint8_t>(bc); pk.x = pos.x; pk.y = pos.y; pk.z = pos.z; pk.hp = hp; pk.maxHp = hp; ctx.network.BroadcastToAll(pk);
 }
 
-// ---------------------------------------------------------------------------
-// RandomSpawnInTerritory
-// ---------------------------------------------------------------------------
+glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId) {
+    struct ZI { glm::vec3 c; float hw, hd; }; std::vector<ZI> cand;
+    auto view = ctx.serverRegistry.view<TransformComponent, TerritoryComponent>(); uint32_t idx = 0;
+    for (auto e : view) { const auto& tf = view.get<TransformComponent>(e); const auto& tr = view.get<TerritoryComponent>(e); if (idx % 2 == teamId % 2) cand.push_back({tf.position, tr.halfW, tr.halfD}); idx++; }
+    if (cand.empty()) return {(teamId == 0) ? -20.f : 20.f, 0.f, 0.f};
+    static std::mt19937 rng{std::random_device{}()}; const auto& z = cand[rng() % cand.size()];
+    std::uniform_real_distribution<float> rx(-z.hw, z.hw), rz(-z.hd, z.hd); return {z.c.x + rx(rng), 0.f, z.c.z + rz(rng)};
+}
 
-glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
-{
-    // Gather all territory zone centres and pick one that roughly belongs
-    // to the given team (simple parity: even zones → team 0, odd → team 1).
-    struct ZoneInfo { glm::vec3 center; float hw, hd; };
-    std::vector<ZoneInfo> candidates;
-
-    auto view = ctx.serverRegistry.view<TransformComponent, TerritoryComponent>();
-    uint32_t idx = 0;
+void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt) {
+    auto view = ctx.serverRegistry.view<TransformComponent, MovementComponent, MovementOrderComponent>();
     for (auto e : view) {
-        const auto& tf  = view.get<TransformComponent>(e);
-        const auto& ter = view.get<TerritoryComponent>(e);
-        if (idx % 2 == teamId % 2)
-            candidates.push_back({tf.position, ter.halfW, ter.halfD});
-        idx++;
+        auto& tf = view.get<TransformComponent>(e); auto& mv = view.get<MovementComponent>(e); auto& mo = view.get<MovementOrderComponent>(e);
+        if (!mo.active) { mv.velocity = {0,0,0}; continue; }
+        glm::vec3 dir = mo.destination - tf.position; dir.y = 0.f; float dist = glm::length(dir);
+        if (dist < 1.f) { mo.active = false; mv.velocity = {0,0,0}; } else { dir = glm::normalize(dir); mv.velocity = dir * mv.speed; tf.position += mv.velocity * dt; tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.z)); }
     }
-
-    // Fallback: spread by team
-    if (candidates.empty()) {
-        float x = (teamId == 0) ? -20.f : 20.f;
-        return {x, 0.f, 0.f};
-    }
-
-    static std::mt19937 rng{std::random_device{}()};
-    const auto& zone = candidates[rng() % candidates.size()];
-    std::uniform_real_distribution<float> rx(-zone.hw, zone.hw);
-    std::uniform_real_distribution<float> rz(-zone.hd, zone.hd);
-    return {zone.center.x + rx(rng), 0.f, zone.center.z + rz(rng)};
 }
 
-// ---------------------------------------------------------------------------
-// UpdateUnitMovement  (server tick)
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Moves units with an active MovementOrderComponent toward their
- *        destination.  Simple steering: normalise direction, scale by speed,
- *        stop within 1 unit.
- */
-void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
-{
-    auto view = ctx.serverRegistry.view<TransformComponent, MovementComponent,
-                                        MovementOrderComponent, UnitComponent>();
+void GameScene::UpdateCombat(SceneContext& ctx, float dt) {
+    struct UI { entt::entity e; glm::vec3 p; uint32_t t; float h; }; std::vector<UI> uis;
+    { auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>(); for (auto e : view) { auto& tc = view.get<TransformComponent>(e); auto& uc = view.get<UnitComponent>(e); auto& hc = view.get<HealthComponent>(e); if (!hc.dead) uis.push_back({e, tc.position, uc.teamId, hc.hp}); } }
+    auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent, CombatComponent, MovementOrderComponent>();
+    std::vector<std::pair<entt::entity, uint32_t>> tk;
     for (auto e : view) {
-        auto& tf = view.get<TransformComponent>(e);
-        auto& mv = view.get<MovementComponent>(e);
-        auto& mo = view.get<MovementOrderComponent>(e);
-
-        if (!mo.active) { mv.velocity = {0.f, 0.f, 0.f}; continue; }
-
-        glm::vec3 dir = mo.destination - tf.position;
-        dir.y = 0.f; // stay on ground
-        float dist = glm::length(dir);
-        if (dist < 1.f) {
-            mo.active    = false;
-            mv.velocity  = {0.f, 0.f, 0.f};
-        } else {
-            dir = glm::normalize(dir);
-            mv.velocity  = dir * mv.speed;
-            tf.position += mv.velocity * dt;
-            tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.z));
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// UpdateCombat  (server tick)
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Auto-combat system.
- *
- * For each unit with a CombatComponent:
- *  1. If current target is invalid or dead, search for nearest enemy unit
- *     within attackRange.
- *  2. If target found and in range, tick cooldown and deal damage when it
- *     fires.  Also pause movement while attacking.
- *  3. Dead units (hp <= 0) get HandleUnitDeath called.
- */
-void GameScene::UpdateCombat(SceneContext& ctx, float dt)
-{
-    // Collect all units with health for target queries
-    struct UnitInfo { entt::entity e; glm::vec3 pos; uint32_t team; float hp; };
-    std::vector<UnitInfo> unitInfos;
-    {
-        auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
-        for (auto e : view) {
-            auto& tc = view.get<TransformComponent>(e);
-            auto& uc = view.get<UnitComponent>(e);
-            auto& hc = view.get<HealthComponent>(e);
-            if (!hc.dead)
-                unitInfos.push_back({e, tc.position, uc.teamId, hc.hp});
-        }
-    }
-
-    // Tick combat for every unit that has a CombatComponent
-    auto combatView = ctx.serverRegistry.view<TransformComponent, UnitComponent,
-                                               HealthComponent, CombatComponent,
-                                               MovementOrderComponent>();
-    std::vector<std::pair<entt::entity, uint32_t>> toKill; // entity + netId
-
-    for (auto e : combatView) {
-        auto& tf  = combatView.get<TransformComponent>(e);
-        auto& uc  = combatView.get<UnitComponent>(e);
-        auto& hc  = combatView.get<HealthComponent>(e);
-        auto& cc  = combatView.get<CombatComponent>(e);
-        auto& mo  = combatView.get<MovementOrderComponent>(e);
-
-        if (hc.dead) continue;
-
-        // Tick attack cooldown
-        if (cc.attackCooldown > 0.f) cc.attackCooldown -= dt;
-
-        // Validate current target
-        bool targetValid = (cc.target != entt::null) &&
-                           ctx.serverRegistry.valid(cc.target);
-        if (targetValid) {
-            auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
-            if (!thc || thc->dead) { targetValid = false; cc.target = entt::null; }
-        }
-
-        // Find nearest enemy if no valid target
-        if (!targetValid) {
-            float bestDist = cc.attackRange;
-            for (const auto& info : unitInfos) {
-                if (info.team == uc.teamId) continue;
-                float d = glm::length(info.pos - tf.position);
-                if (d < bestDist) { bestDist = d; cc.target = info.e; targetValid = true; }
-            }
-        }
-
-        if (!targetValid) continue;
-
-        // Check range
-        auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
-        if (!ttf) { cc.target = entt::null; continue; }
-        float dist = glm::length(ttf->position - tf.position);
-
-        if (dist <= cc.attackRange) {
-            // Pause movement while in combat
-            mo.active = false;
-
-            if (cc.attackCooldown <= 0.f) {
-                cc.attackCooldown = cc.attackRate;
-
-                auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
-                if (thc && !thc->dead) {
-                    thc->hp -= cc.attackDamage;
-                    spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
-                                  (uint32_t)e, (uint32_t)cc.target, cc.attackDamage, thc->hp);
-
-                    // Broadcast HP update
-                    auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
-                    if (tnc) {
-                        UnitHpUpdatePacket hp_pkt;
-                        hp_pkt.netId = tnc->netId;
-                        hp_pkt.hp    = thc->hp;
-                        ctx.network.BroadcastToAll(hp_pkt);
-                    }
-
-                    if (thc->hp <= 0.f) {
-                        thc->dead = true;
-                        auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
-                        uint32_t dnetId = dnc ? dnc->netId : 0;
-                        toKill.push_back({cc.target, dnetId});
-                        cc.target = entt::null;
+        auto& tf = view.get<TransformComponent>(e); auto& uc = view.get<UnitComponent>(e); auto& hc = view.get<HealthComponent>(e); auto& cc = view.get<CombatComponent>(e); auto& mo = view.get<MovementOrderComponent>(e);
+        if (hc.dead) continue; if (cc.attackCooldown > 0.f) cc.attackCooldown -= dt;
+        bool valid = (cc.target != entt::null) && ctx.serverRegistry.valid(cc.target);
+        if (valid) { if (auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target)) { if (thc->dead) { valid = false; cc.target = entt::null; } } else { valid = false; cc.target = entt::null; } }
+        if (!valid) { float bd = cc.attackRange; for (const auto& i : uis) { if (i.t == uc.teamId) continue; float d = glm::length(i.p - tf.position); if (d < bd) { bd = d; cc.target = i.e; valid = true; } } }
+        if (!valid) continue;
+        if (auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target)) {
+            float dist = glm::length(ttf->position - tf.position);
+            if (dist <= cc.attackRange) {
+                mo.active = false;
+                if (cc.attackCooldown <= 0.f) {
+                    cc.attackCooldown = cc.attackRate;
+                    if (auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target)) {
+                        thc->hp -= cc.attackDamage;
+                        if (auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target)) { UnitHpUpdatePacket hpk; hpk.netId = tnc->netId; hpk.hp = thc->hp; ctx.network.BroadcastToAll(hpk); }
+                        if (thc->hp <= 0.f) { thc->dead = true; if (auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target)) tk.push_back({cc.target, dnc->netId}); cc.target = entt::null; }
                     }
                 }
             }
+        } else cc.target = entt::null;
+    }
+    auto bview = ctx.serverRegistry.view<TransformComponent, BaseHealthComponent>();
+    for (auto& i : uis) {
+        if (auto* cc2 = ctx.serverRegistry.try_get<CombatComponent>(i.e)) {
+            if (cc2->target != entt::null) continue;
+            float bd = cc2->attackRange; entt::entity bb = entt::null;
+            for (auto be : bview) { auto& bt = bview.get<TransformComponent>(be); auto& bh = bview.get<BaseHealthComponent>(be); if (bh.teamId != i.t && !bh.destroyed) { float d = glm::length(bt.position - i.p); if (d < bd) { bd = d; bb = be; } } }
+            if (bb != entt::null && cc2->attackCooldown <= 0.f) { cc2->attackCooldown = cc2->attackRate; auto& bh = bview.get<BaseHealthComponent>(bb); bh.hp -= cc2->attackDamage; if (bh.hp <= 0.f) { bh.hp = 0.f; bh.destroyed = true; } }
         }
     }
-
-    // Also check base health – units attack enemy bases if no other target
-    {
-        auto baseView = ctx.serverRegistry.view<TransformComponent, BaseHealthComponent>();
-        for (auto& info : unitInfos) {
-            auto* cc2 = ctx.serverRegistry.try_get<CombatComponent>(info.e);
-            if (!cc2 || cc2->target != entt::null) continue; // already has target
-
-            float bestDist = cc2->attackRange;
-            entt::entity bestBase = entt::null;
-            for (auto be : baseView) {
-                auto& btf  = baseView.get<TransformComponent>(be);
-                auto& bhc  = baseView.get<BaseHealthComponent>(be);
-                if (bhc.teamId == info.team || bhc.destroyed) continue;
-                float d = glm::length(btf.position - info.pos);
-                if (d < bestDist) { bestDist = d; bestBase = be; }
-            }
-            if (bestBase == entt::null) continue;
-
-            if (cc2->attackCooldown <= 0.f) {
-                cc2->attackCooldown = cc2->attackRate;
-                auto& bhc = baseView.get<BaseHealthComponent>(bestBase);
-                bhc.hp -= cc2->attackDamage;
-                if (bhc.hp <= 0.f) { bhc.hp = 0.f; bhc.destroyed = true; }
-            }
-        }
-    }
-
-    // Process kills
-    for (auto& [deadEnt, deadNetId] : toKill) {
-        HandleUnitDeath(ctx, deadEnt, deadNetId);
-    }
+    for (auto& [de, dn] : tk) HandleUnitDeath(ctx, de, dn);
 }
 
-// ---------------------------------------------------------------------------
-// HandleUnitDeath
-// ---------------------------------------------------------------------------
-
-void GameScene::HandleUnitDeath(SceneContext& ctx, entt::entity entity, uint32_t netId)
-{
-    if (!ctx.serverRegistry.valid(entity)) return;
-
-    auto* tf = ctx.serverRegistry.try_get<TransformComponent>(entity);
-    if (tf) {
-        // Drop a Fleisch resource at death position
-        m_ResourceManager.SpawnMeatDrop(ctx.serverRegistry, tf->position,
-                                        /*amount=*/1, /*lifetime=*/20.f);
-    }
-
-    // Broadcast death
-    UnitDiedPacket pkt;
-    pkt.netId = netId;
-    ctx.network.BroadcastToAll(pkt);
-
-    // Remove from server maps
-    m_ServerNetMap.erase(netId);
-    ctx.serverRegistry.destroy(entity);
-
-    spdlog::info("GameScene: unit {} died, Fleisch dropped", netId);
+void GameScene::HandleUnitDeath(SceneContext& ctx, entt::entity e, uint32_t nid) {
+    if (!ctx.serverRegistry.valid(e)) return;
+    if (auto* tf = ctx.serverRegistry.try_get<TransformComponent>(e)) m_ResourceManager.SpawnMeatDrop(ctx.serverRegistry, tf->position, 1, 20.f);
+    UnitDiedPacket pk; pk.netId = nid; ctx.network.BroadcastToAll(pk); m_ServerNetMap.erase(nid); ctx.serverRegistry.destroy(e);
 }
 
-// ---------------------------------------------------------------------------
-// CheckWinCondition
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Win condition: a team wins when ALL enemy base entities are destroyed.
- */
-void GameScene::CheckWinCondition(SceneContext& ctx)
-{
-    if (m_GameOver) return;
-
-    // Count surviving bases per team
-    std::unordered_map<uint32_t, int> surviving;
-    auto view = ctx.serverRegistry.view<BaseHealthComponent>();
-    for (auto e : view) {
-        const auto& bhc = view.get<BaseHealthComponent>(e);
-        if (!bhc.destroyed) surviving[bhc.teamId]++;
-    }
-
-    if (surviving.empty()) return;
-
-    // Find teams whose bases are all gone
-    std::vector<uint32_t> eliminated;
-    for (const auto& [team, cnt] : surviving)
-        if (cnt == 0) eliminated.push_back(team);
-
-    if (eliminated.empty()) return;
-
-    // Determine winner (the non-eliminated team)
-    uint32_t winner = 0xFFFFFFFFu;
-    for (const auto& [team, cnt] : surviving)
-        if (cnt > 0) { winner = team; break; }
-
-    m_GameOver   = true;
-    m_WinnerTeam = winner;
-
-    GameOverPacket gopkt;
-    gopkt.winnerTeam = winner;
-    ctx.network.BroadcastToAll(gopkt);
-    spdlog::info("GameScene: WIN CONDITION – team {} wins", winner);
+void GameScene::CheckWinCondition(SceneContext& ctx) {
+    if (m_GameOver) return; std::unordered_map<uint32_t, int> surv; auto view = ctx.serverRegistry.view<BaseHealthComponent>();
+    for (auto e : view) { auto& bh = view.get<BaseHealthComponent>(e); if (!bh.destroyed) surv[bh.teamId]++; }
+    if (surv.empty()) return; std::vector<uint32_t> elim; for (int t = 0; t < 2; t++) if (surv[t] == 0) elim.push_back(t);
+    if (elim.empty()) return; uint32_t win = 0xFFFFFFFFu; for (auto& [t, c] : surv) if (c > 0) { win = t; break; }
+    m_GameOver = true; m_WinnerTeam = win; GameOverPacket pk; pk.winnerTeam = win; ctx.network.BroadcastToAll(pk);
 }
 
-// ---------------------------------------------------------------------------
-// ScreenToWorldXZ  (Commander mode unprojection)
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Unprojects a screen-space position onto the Y=0 XZ plane.
- *
- * Uses the camera's stored view+projection matrices and a ray-plane
- * intersection.  Returns a rough world position usable as a move target.
- */
-glm::vec3 GameScene::ScreenToWorldXZ(float sx, float sy, int winW, int winH)
-{
-    // NDC
-    float ndcX = (2.f * sx / (float)winW) - 1.f;
-    float ndcY = 1.f - (2.f * sy / (float)winH);
-
-    float aspect = (winW > 0) ? (float)winW / (float)winH : 1.f;
-    glm::mat4 proj = m_Camera->GetProjectionMatrix(aspect);
-    glm::mat4 view = m_Camera->GetViewMatrix();
-    glm::mat4 invVP = glm::inverse(proj * view);
-
-    glm::vec4 nearPt = invVP * glm::vec4(ndcX, ndcY, -1.f, 1.f);
-    glm::vec4 farPt  = invVP * glm::vec4(ndcX, ndcY,  1.f, 1.f);
-    nearPt /= nearPt.w;
-    farPt  /= farPt.w;
-
-    glm::vec3 rayOrig{nearPt};
-    glm::vec3 rayDir = glm::normalize(glm::vec3(farPt) - rayOrig);
-
-    // Intersect with Y=0 plane
-    if (std::abs(rayDir.y) < 1e-6f) return {0.f, 0.f, 0.f};
-    float t = -rayOrig.y / rayDir.y;
-    return rayOrig + t * rayDir;
+glm::vec3 GameScene::ScreenToWorldXZ(float sx, float sy, int winW, int winH) {
+    float nx = (2.f * sx / (float)winW) - 1.f, ny = 1.f - (2.f * sy / (float)winH);
+    float asp = (winW > 0) ? (float)winW / (float)winH : 1.f;
+    glm::mat4 inv = glm::inverse(m_Camera->GetProjectionMatrix(asp) * m_Camera->GetViewMatrix());
+    glm::vec4 n = inv * glm::vec4(nx, ny, -1.f, 1.f), f = inv * glm::vec4(nx, ny, 1.f, 1.f);
+    n /= n.w; f /= f.w; glm::vec3 ro{n}, rd = glm::normalize(glm::vec3(f) - ro);
+    if (std::abs(rd.y) < 1e-6f) return {0,0,0}; float t = -ro.y / rd.y; return ro + t * rd;
 }
 
-// ---------------------------------------------------------------------------
-// DrawUnitHPBars  (Commander mode UI overlay)
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Draws HP bars above each unit in Commander mode.
- *
- * Projects each unit's 3D position to screen space and draws a coloured
- * progress bar via ImGui's background draw list.
- */
-void GameScene::DrawUnitHPBars(SceneContext& ctx)
-{
-    int winW, winH;
-    SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
-    if (winW <= 0 || winH <= 0) return;
-
-    float aspect = (float)winW / (float)winH;
-    glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
-
+void GameScene::DrawUnitHPBars(SceneContext& ctx) {
+    int w, h; SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &w, &h); if (w <= 0 || h <= 0) return;
+    glm::mat4 vp = m_Camera->GetProjectionMatrix((float)w/(float)h) * m_Camera->GetViewMatrix();
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    constexpr float BAR_W = 40.f, BAR_H = 5.f;
-
     auto view = ctx.clientRegistry.view<TransformComponent, HealthComponent, UnitComponent, NetworkedComponent>();
     for (auto e : view) {
-        const auto& tf  = view.get<TransformComponent>(e);
-        const auto& hc  = view.get<HealthComponent>(e);
-        const auto& uc  = view.get<UnitComponent>(e);
-        const auto& nc  = view.get<NetworkedComponent>(e);
-
-        // Project to clip space
-        glm::vec4 clip = vp * glm::vec4(tf.position + glm::vec3(0, 2.5f, 0), 1.f);
-        if (clip.w <= 0.f) continue;
-        clip /= clip.w;
-        if (clip.x < -1.f || clip.x > 1.f || clip.y < -1.f || clip.y > 1.f) continue;
-
-        float sx = (clip.x * 0.5f + 0.5f) * (float)winW;
-        float sy = (1.f - (clip.y * 0.5f + 0.5f)) * (float)winH;
-
-        // Background bar
-        ImVec2 bmin{sx - BAR_W * 0.5f, sy};
-        ImVec2 bmax{sx + BAR_W * 0.5f, sy + BAR_H};
-        dl->AddRectFilled(bmin, bmax, IM_COL32(30, 30, 30, 200));
-
-        // HP fill
-        float frac = (hc.maxHp > 0.f) ? glm::clamp(hc.hp / hc.maxHp, 0.f, 1.f) : 0.f;
-        ImU32 col = (uc.teamId == 0)
-            ? IM_COL32(60, 140, 255, 220)
-            : IM_COL32(255, 60, 60, 220);
-        dl->AddRectFilled(bmin, ImVec2(bmin.x + BAR_W * frac, bmax.y), col);
-
-        // Selection ring
-        bool selected = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId)
-                        != m_SelectedUnits.end();
-        if (selected)
-            dl->AddRect(ImVec2(bmin.x - 1, bmin.y - 1), ImVec2(bmax.x + 1, bmax.y + 1),
-                        IM_COL32(255, 255, 0, 255), 0.f, 0, 1.5f);
+        auto& tf = view.get<TransformComponent>(e); auto& hc = view.get<HealthComponent>(e); auto& uc = view.get<UnitComponent>(e); auto& nc = view.get<NetworkedComponent>(e);
+        glm::vec4 clp = vp * glm::vec4(tf.position + glm::vec3(0, 2.5f, 0), 1.f); if (clp.w <= 0.f) continue; clp /= clp.w;
+        if (clp.x < -1.f || clp.x > 1.f || clp.y < -1.f || clp.y > 1.f) continue;
+        float sx = (clp.x * 0.5f + 0.5f) * (float)w, sy = (1.f - (clp.y * 0.5f + 0.5f)) * (float)h;
+        dl->AddRectFilled({sx-20, sy}, {sx+20, sy+5}, IM_COL32(30,30,30,200));
+        float frc = (hc.maxHp > 0.f) ? glm::clamp(hc.hp/hc.maxHp, 0.f, 1.f) : 0.f;
+        dl->AddRectFilled({sx-20, sy}, {sx-20+40*frc, sy+5}, (uc.teamId == 0) ? IM_COL32(60,140,255,220) : IM_COL32(255,60,60,220));
+        if (std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId) != m_SelectedUnits.end()) dl->AddRect({sx-21, sy-1}, {sx+21, sy+6}, IM_COL32(255,255,0,255), 0, 0, 1.5f);
     }
 }

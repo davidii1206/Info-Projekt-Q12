@@ -74,6 +74,12 @@ void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
     ImGui::Begin("Main Menu");
     ImGui::Text("Bugmin Engine - Main Menu");
     ImGui::Text("F1 to toggle Free-Fly Camera");
+    if (ImGui::Button("Host Game")) {
+        if (ctx.network.StartHost()) {
+            spdlog::info("Hosting game on port 25565");
+        }
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Quit")) {
         SDL_Event quitEvent;
         quitEvent.type = SDL_EVENT_QUIT;

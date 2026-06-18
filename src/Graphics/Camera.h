@@ -1,17 +1,23 @@
 /**
  * @file Camera.h
- * @brief FPS-style camera for scene navigation.
+ * @brief FPS-style camera for scene navigation and game view.
  */
 #pragma once
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 /**
+ * @enum CameraType
+ * @brief Defines the projection mode of the camera.
+ */
+enum class CameraType {
+    Perspective,
+    Orthographic
+};
+
+/**
  * @class Camera
- * @brief An FPS-style camera for testing purposes.
- * 
- * This class manages the camera's position, orientation, and projection
- * parameters, providing methods for movement and matrix generation.
+ * @brief A versatile camera supporting perspective and orthographic projections.
  */
 class Camera {
 public:
@@ -35,7 +41,7 @@ public:
      */
     void Rotate(float xOffset, float yOffset) {
         m_Yaw += xOffset * m_Sensitivity;
-        m_Pitch -= yOffset * m_Sensitivity; // SDL yrel is positive downwards, so moving up is negative yrel. Pitch should increase to look up.
+        m_Pitch -= yOffset * m_Sensitivity; 
         if (m_Pitch > 89.0f) m_Pitch = 89.0f;
         if (m_Pitch < -89.0f) m_Pitch = -89.0f;
         UpdateVectors();
@@ -101,15 +107,24 @@ public:
     /**
      * @brief Gets the projection matrix.
      * @param aspect The aspect ratio of the viewport.
-     * @return glm::mat4 representing the perspective projection.
+     * @return glm::mat4 representing the projection.
      */
     glm::mat4 GetProjectionMatrix(float aspect) const {
         if (aspect <= 0.0f) aspect = 1.0f;
         float near = glm::max(m_Near, 0.01f);
         float far = glm::max(m_Far, near + 1.0f);
         
-        glm::mat4 proj = glm::perspective(glm::radians(m_FOV), aspect, near, far);
+        glm::mat4 proj;
+        if (m_Type == CameraType::Perspective) {
+            proj = glm::perspective(glm::radians(m_FOV), aspect, near, far);
+        } else {
+            float halfWidth = m_OrthoSize * aspect * 0.5f;
+            float halfHeight = m_OrthoSize * 0.5f;
+            proj = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, near, far);
+        }
         
+        // SDL GPU uses [0, 1] depth range.
+        // This adjustment works for both perspective and ortho if they are standard GL matrices.
         proj[2][2] = near / (far - near);
         proj[3][2] = (far * near) / (far - near);
         
@@ -124,10 +139,12 @@ public:
 
     float m_Yaw;          /**< Horizontal rotation angle in degrees. */
     float m_Pitch;        /**< Vertical rotation angle in degrees. */
-    float m_FOV = 90.0f;  /**< Field of view in degrees. */
+    float m_FOV = 90.0f;  /**< Field of view in degrees (for perspective). */
+    float m_OrthoSize = 20.0f; /**< Vertical size for orthographic projection. */
     float m_Near = 0.5f;  /**< Near clipping plane distance. */
     float m_Far = 20000.0f; /**< Far clipping plane distance. */
 
     float m_MovementSpeed = 25.0f; /**< Movement speed units per second. */
     float m_Sensitivity = 0.1f;    /**< Mouse sensitivity factor. */
+    CameraType m_Type = CameraType::Perspective; /**< Current projection type. */
 };
