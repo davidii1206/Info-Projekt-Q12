@@ -16,7 +16,7 @@
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
 #include "HUDTextureRegistry.h"
-#include "CameraMode.h"
+#include "../Networking/Packets.h"
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
@@ -151,6 +151,14 @@ private:
     /** @brief Spawns a unit entity on the server and broadcasts to clients. */
     void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, float hp = 100.f);
 
+    /** @brief Spawns a building on the server and broadcasts to clients. */
+    entt::entity SpawnBuilding(SceneContext& ctx, BuildingType type, uint32_t teamId,
+                               glm::vec3 pos, uint32_t tier = 1,
+                               const std::string& model = "assets/cube.glb");
+
+    /** @brief Handle destruction of a building: broadcast, remove. */
+    void HandleBuildingDeath(SceneContext& ctx, entt::entity entity, uint32_t netId);
+
     /** @brief Server: pick a random territory spawn point for a team. */
     glm::vec3 RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId);
 
@@ -166,11 +174,34 @@ private:
     /** @brief Handle death of a unit: drop resource, broadcast, remove. */
     void HandleUnitDeath(SceneContext& ctx, entt::entity entity, uint32_t netId);
 
+    /** @brief Server: broadcast territory zone state to all clients. */
+    void SendTerritorySnapshot(SceneContext& ctx);
+
+    /** @brief Server: broadcast fog-of-war grid to all clients. */
+    void SendFogSnapshot(SceneContext& ctx);
+
+    /** @brief Server: assign netIds to resource nodes and broadcast spawns. */
+    void SyncResourceSpawns(SceneContext& ctx);
+
+    /** @brief Client: process a received TerritorySnapshotPacket. */
+    void HandleTerritorySnapshot(const TerritorySnapshotPacket& pkt);
+
+    /** @brief Client: process a received FogSnapshotPacket. */
+    void HandleFogSnapshot(const FogSnapshotPacket& pkt);
+
+    /** @brief Client: draw territory overlay from synced packet data (no server registry needed). */
+    void DrawClientTerritoryOverlay(ImVec2 mapOriginPx, ImVec2 mapSizePx);
+
     /** @brief Commander: unproject screen pos to XZ plane in world space. */
     glm::vec3 ScreenToWorldXZ(float sx, float sy, int winW, int winH);
 
     /** @brief Draw HP bars above units via ImGui overlay. */
     void DrawUnitHPBars(SceneContext& ctx);
+
+    /** @brief Enter building placement mode for the given type. */
+    void EnterPlacementMode(SceneContext& ctx, BuildingType type);
+    /** @brief Cancel placement mode and destroy the ghost entity. */
+    void CancelPlacement(SceneContext& ctx);
 
     /// Handles for static mesh collision bodies (scene geometry).
     /// Stored so they can be removed on OnExit().
@@ -186,13 +217,26 @@ private:
     /// Toggled by the "Karte" button in the Game window.
     bool m_ShowMapOverlay = false;
 
-    // --- Camera Mode ---
-    /// Stored 1st-person camera position to restore when leaving Commander.
-    glm::vec3 m_SavedCamPos{0.f};
-    float     m_SavedCamYaw   = 0.f;
-    float     m_SavedCamPitch = 0.f;
-    /// Commander camera height above ground.
-    float m_CmdHeight = 40.f;
+    // --- Camera Modes ---
+    enum class CameraMode { Exploring, Commander, Building };
+    CameraMode m_CameraMode = CameraMode::Exploring;
+    /// Saved 1st-person camera state (restored when leaving Commander/Building).
+    glm::vec3 m_SavedExplorePos{0.f};
+    float     m_SavedExploreYaw   = 0.f;
+    float     m_SavedExplorePitch = 0.f;
+    /// Saved Commander camera XZ position (restored when switching back from Building).
+    glm::vec3 m_SavedCommanderPos{0.f};
+    /// Default height above ground for Commander and Building modes.
+    float m_TopDownHeight = 40.f;
+    /// Orthographic zoom level for Building mode (half-height of frustum).
+    float m_BuildOrthoSize = 30.f;
+
+    /// Client-side entity for building placement ghost (transparent preview).
+    entt::entity m_GhostEntity = entt::null;
+    /// Currently selected building type for placement (-1 = none).
+    int m_SelectedBuildingType = -1;
+    /// Whether the player is in placement hover mode.
+    bool m_PlacementActive = false;
 
     // --- Unit system ---
     /// Network IDs of units currently selected by this client's Commander.
@@ -200,14 +244,6 @@ private:
     /// Whether the game has ended.
     bool     m_GameOver      = false;
     uint32_t m_WinnerTeam    = 0xFFFFFFFFu;
-
-    // --- Building placement ---
-    /// Whether placement mode is active (building type selected in UI).
-    bool     m_PlacementActive = false;
-    /// The building type currently selected for placement.
-    BuildingType m_PlacementType = BuildingType::Attack;
-    /// Snapped world position for the preview ghost.
-    glm::vec3 m_PlacementPos{0.f};
 
     // --- Server state ---
     /// ID for the next networked entity.
@@ -233,8 +269,35 @@ private:
     float m_SnapAccum = 0.f;
     /// Rate at which snapshots are sent (20 Hz).
     static constexpr float SNAPSHOT_RATE = 1.f / 20.f;
-    /// Accumulator for fog broadcast (2 Hz).
-    float m_FogAccum = 0.f;
+
+    /// Accumulator for territory snapshot broadcasting (2 Hz).
+    float m_TerritorySnapAccum = 0.f;
+    static constexpr float TERRITORY_SNAP_RATE = 1.f / 2.f;
+
+    /// Accumulator for fog snapshot broadcasting (2 Hz).
+    float m_FogSnapAccum = 0.f;
+    static constexpr float FOG_SNAP_RATE = 1.f / 2.f;
+
+    // --- Client-side synced state ---
+    /// Client-side fog grid copy (updated from server snapshot).
+    FogGrid m_ClientFog;
+    bool    m_HasFogData = false;
+
+    /// Client-side territory zone cache (updated from server snapshot).
+    struct ClientTerritoryZone {
+        char     name[32]{};
+        float    halfW = 8.f, halfD = 8.f;
+        float    captureProgress = 0.f, captureTime = 10.f;
+        uint32_t ownerTeam = 0xFFFF'FFFFu;
+        uint32_t contestedBy = 0xFFFF'FFFFu;
+        glm::vec3 center{0.f};
+    };
+    std::vector<ClientTerritoryZone> m_ClientTerritories;
+    bool m_HasTerritoryData = false;
+
+    // --- Resource networking ---
+    /// Tracks resource entities on server for netId assignment and broadcast.
+    std::unordered_map<uint32_t, entt::entity> m_ResourceNetMap;
 
     // --- Rendering ---
     /// Vertex shader for models.
@@ -243,26 +306,16 @@ private:
     std::unique_ptr<Shader> m_FragShader;
     /// Graphics pipeline for model rendering.
     GraphicsPipeline* m_ModelPipeline = nullptr;
+    /// Transparent pipeline for building-placement ghost.
+    GraphicsPipeline* m_GhostPipeline = nullptr;
     /// Main game camera.
     std::unique_ptr<Camera> m_Camera;
     /// Total time elapsed in the scene.
     float m_TotalTime = 0.0f;
     /// Total number of frames rendered.
     uint32_t m_FrameCount = 0;
-    /// Current camera control mode.
-    CameraMode m_CameraMode = CameraMode::Commander;
-
-    // --- Ghost preview (transparent cube) ---
-    /// Vertex shader for the ghost cube.
-    std::unique_ptr<Shader> m_GhostVertShader;
-    /// Fragment shader for the ghost cube.
-    std::unique_ptr<Shader> m_GhostFragShader;
-    /// Graphics pipeline for the ghost cube.
-    GraphicsPipeline* m_GhostPipeline = nullptr;
-    /// Vertex buffer for a unit cube.
-    std::unique_ptr<GPUBuffer> m_GhostVertexBuffer;
-    /// Index buffer for a unit cube.
-    std::unique_ptr<GPUBuffer> m_GhostIndexBuffer;
+    /// Whether free-fly camera mode is active.
+    bool m_FreeFly = false;
 
     // --- Shadow Map ---
     /// Vertex shader for the depth-only shadow pass.

@@ -177,3 +177,25 @@ struct BaseHealthComponent {
     float    maxHp  = 500.f;
     bool     destroyed = false;
 };
+
+// ---------------------------------------------------------------------------
+// Ghost / Construction Components
+// ---------------------------------------------------------------------------
+
+/**
+ * @struct GhostComponent
+ * @brief Tags a client-only entity as a building-placement ghost (transparent,
+ *        follows cursor, snapped to grid).
+ */
+struct GhostComponent {};
+
+/**
+ * @struct ConstructionComponent
+ * @brief Building under construction — slides up from below ground over time.
+ */
+struct ConstructionComponent {
+    float elapsed  = 0.f;
+    float duration = 2.f;
+    float startY   = 0.f;
+    float targetY  = 0.f;
+};

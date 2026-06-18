@@ -19,7 +19,10 @@ enum class BuildingType : uint8_t {
     Defense,
     Resource,
     Outpost,
-    Main
+    Main,
+    Offense,
+    Upgrade,
+    Infrastructure,
 };
 
 /**
@@ -39,27 +42,28 @@ struct BuildingComponent {
     BuildingType type;
     BugClass ownerClass;
     uint32_t teamId = 0;
-    
-    float hp = 100.0f;
+    uint32_t tier  = 1;
+
+    float hp    = 100.0f;
     float maxHp = 100.0f;
-    
+
+    bool destroyed = false;
+
     uint32_t currentTier = 1;
     uint32_t maxTier = 3;
-    
-    bool isUpgrading = false;
-    float upgradeTimer = 0.0f;
+
+    bool isUpgrading      = false;
+    float upgradeTimer    = 0.0f;
     float currentUpgradeTime = 0.0f;
-    bool upgradedThisTick = false; ///< Set by BuildingSystem::Update when a tier completes; cleared after broadcast.
+    bool upgradedThisTick = false;
 
     BuildingComponent() = default;
-    BuildingComponent(BuildingType t, BugClass bc, uint32_t tid = 0, float initialHp = 100.0f)
-        : type(t), ownerClass(bc), teamId(tid), hp(initialHp), maxHp(initialHp) {}
-    
+    BuildingComponent(BuildingType t, uint32_t tid, uint32_t tier_, float initialHp, float maxInitialHp, bool destroyed_)
+        : type(t), ownerClass(BugClass::Termites), teamId(tid), tier(tier_),
+          hp(initialHp), maxHp(maxInitialHp), destroyed(destroyed_) {}
+
     /**
      * @brief Gets the upgrade requirements for the next tier.
-     * 
-     * Note: In a real game, this would likely read from a configuration file
-     * or a data registry that maps (BugClass, BuildingType, nextTier) -> Cost.
      * 
      * @return UpgradeRequirement for next tier.
      */
