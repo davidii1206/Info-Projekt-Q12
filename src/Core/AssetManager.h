@@ -26,24 +26,26 @@ struct MeshInstance {
 /**
  * @struct SceneData
  * @brief Container for models, lights, and mesh instances loaded from a GLTF file.
+ *
+ * cpuVertices / cpuIndices retain the raw CPU-side geometry so that callers can
+ * build physics mesh shapes without re-parsing the file.  They are populated by
+ * LoadGLTF() and cached alongside the GPU model.  Pass them to
+ * MeshCollisionBuilder::Build() to create a Jolt MeshShape for static collision.
  */
 struct SceneData {
     std::shared_ptr<Model> model; ///< Shared pointer to the loaded Model.
     std::vector<Light> lights;    ///< List of lights found in the scene.
     std::vector<MeshInstance> meshInstances; ///< List of mesh instances in the scene.
+
+    /// CPU-seitige Vertex-Positionen - für die Konstruktion der physikalischen Mesh-Shapes beibehalten.
+    std::vector<ModelVertex> cpuVertices;
+    /// CPU-seitige Triangle-Indices - für die Konstruktion der physikalischen Mesh-Shapes beibehalten.
+    std::vector<uint32_t>    cpuIndices;
 };
 
 /**
  * @class AssetManager
  * @brief Singleton-style manager for loading and caching engine assets.
- * 
- * Performance:
- * - Caches textures and models to avoid redundant I/O and GPU uploads.
- * - Simple API for fast access during runtime.
- * 
- * Ease of Use:
- * - Centralized management of GPU resources.
- * - Automatic cleanup of assets during shutdown.
  */
 class AssetManager {
 public:
@@ -89,7 +91,25 @@ public:
      * @param filePath Path to the .gltf or .glb file.
      * @return SceneData containing the model and all lights found in the file.
      */
-    static SceneData LoadGLTF(const std::string& filePath);
+    static const SceneData& LoadGLTF(const std::string& filePath);
+
+    /**
+     * @brief Builds a Model from CPU-generated geometry and caches it under a
+     *        synthetic key so it can be referenced by ModelComponent like any
+     *        GLTF-loaded asset (e.g. a procedurally generated terrain mesh).
+     * @param key Synthetic cache key (e.g. "procedural://terrain").
+     * @param vertices CPU-side vertex buffer.
+     * @param indices CPU-side index buffer (triangle list).
+     * @param sections Mesh sections (material groups).
+     * @param materials Materials referenced by the sections.
+     * @return The cached SceneData, ready for ModelComponent lookup.
+     */
+    static const SceneData& RegisterProceduralScene(
+        const std::string& key,
+        std::vector<ModelVertex> vertices,
+        std::vector<uint32_t> indices,
+        const std::vector<MeshSection>& sections,
+        const std::vector<Material>& materials);
 
     /** @brief Returns a simple procedural unit cube. */
     static std::shared_ptr<Model> GetFallbackModel();

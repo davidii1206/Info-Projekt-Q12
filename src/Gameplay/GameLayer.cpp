@@ -9,6 +9,7 @@ GameLayer::GameLayer(PhysicsServer* physics, NetworkManager* network, Renderer* 
 {
     m_World = std::make_unique<World>(m_Physics);
     m_PostProcessor = std::make_unique<PostProcessor>(renderer);
+    m_World->SetPostProcessor(m_PostProcessor.get());
 }
 
 void GameLayer::OnAttach() {

@@ -267,7 +267,7 @@ std::shared_ptr<Model> AssetManager::LoadModel(const std::string& filePath) {
 }
 
 
-SceneData AssetManager::LoadGLTF(const std::string& filePath) {
+const SceneData& AssetManager::LoadGLTF(const std::string& filePath) {
     auto it = s_Scenes.find(filePath);
     if (it != s_Scenes.end()) return it->second;
 
@@ -279,7 +279,7 @@ SceneData AssetManager::LoadGLTF(const std::string& filePath) {
     if (ext == ".gltf") ret = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, filePath);
     else if (ext == ".glb") ret = loader.LoadBinaryFromFile(&gltfModel, &err, &warn, filePath);
 
-    if (!ret) { spdlog::error("Failed to load GLTF: {}", filePath); return { nullptr, {}, {} }; }
+    if (!ret) { spdlog::error("Failed to load GLTF: {}", filePath); static const SceneData kEmpty; return kEmpty; }
 
     spdlog::info("GLTF Loaded: {}. Used Extensions:", filePath);
     for (const auto& extName : gltfModel.extensionsUsed) {
@@ -332,10 +332,28 @@ SceneData AssetManager::LoadGLTF(const std::string& filePath) {
     for (int nodeIndex : scene.nodes) ProcessNode(ctx, nodeIndex, glm::mat4(1.0f));
 
     auto model = std::make_shared<Model>(s_Device, vertices, indices, sections, materials);
-    SceneData sceneData = { model, lights, meshInstances };
-    s_Scenes[filePath] = sceneData;
-    spdlog::info("Scene loaded successfully: {} ({} vertices, {} indices, {} lights, {} meshes)", filePath, (uint32_t)vertices.size(), (uint32_t)indices.size(), (uint32_t)lights.size(), (uint32_t)meshInstances.size());
-    return sceneData;
+    SceneData sceneData = { model, lights, meshInstances, std::move(vertices), std::move(indices) };
+    auto [ins, _] = s_Scenes.emplace(filePath, std::move(sceneData));
+    spdlog::info("Scene loaded successfully: {} ({} vertices, {} indices, {} lights, {} meshes)", filePath, (uint32_t)ins->second.cpuVertices.size(), (uint32_t)ins->second.cpuIndices.size(), (uint32_t)ins->second.lights.size(), (uint32_t)ins->second.meshInstances.size());
+    return ins->second;
+}
+
+const SceneData& AssetManager::RegisterProceduralScene(
+    const std::string& key,
+    std::vector<ModelVertex> vertices,
+    std::vector<uint32_t> indices,
+    const std::vector<MeshSection>& sections,
+    const std::vector<Material>& materials)
+{
+    auto model = std::make_shared<Model>(s_Device, vertices, indices, sections, materials);
+    std::vector<MeshInstance> meshInstances = {
+        { 0, (uint32_t)sections.size(), glm::mat4(1.0f) }
+    };
+    SceneData sceneData = { model, {}, meshInstances, std::move(vertices), std::move(indices) };
+    auto [ins, _] = s_Scenes.emplace(key, std::move(sceneData));
+    spdlog::info("AssetManager: registered procedural scene '{}' ({} vertices, {} indices, {} sections)",
+                  key, ins->second.cpuVertices.size(), ins->second.cpuIndices.size(), sections.size());
+    return ins->second;
 }
 
 std::shared_ptr<Model> AssetManager::GetFallbackModel() {

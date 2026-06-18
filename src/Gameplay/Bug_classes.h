@@ -26,5 +26,6 @@ enum class BugClass {
     Bugs,               ///< Wanzen (Chemiewaffen-Kartell)
     Roaches,            ///< Schaben (Die Unsterblichen)
     Beetles,            ///< Großkäfer (Schwere Gladiatoren)
-    Scorpions           ///< Skorpione (Wüsten-Nomaden)
+    Scorpions,          ///< Skorpione (Wüsten-Nomaden)
+    BossArena           ///< Neutral boss territory — no player faction
 };

@@ -9,12 +9,31 @@
 #include "../Graphics/GlobalUniforms.h"
 #include "../Graphics/API/Framebuffer.h"
 #include "../Graphics/API/GPUBuffer.h"
+#include "../Core/PhysicsServer.h"
+#include "ResourceManager.h"
+#include "ResourceSystem.h"
+#include "ResourceHUD.h"
+#include "FogOfWar.h"
+#include "TerritorySystem.h"
+#include "ScatterSystem.h"
+#include "HUDTextureRegistry.h"
+#include "../Core/WorldManager.h"
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 #include <memory>
 
 class Shader;
 class GraphicsPipeline;
+
+/// One instanced draw batch: all scatter entities sharing the same model path
+/// and the same GLTF mesh node are collapsed into a single DrawIndexed call.
+struct ScatterBatch {
+    std::string             modelPath;
+    uint32_t                meshInstanceIdx; ///< Index into SceneData::meshInstances
+    uint32_t                instanceCount;
+    std::unique_ptr<GPUBuffer> instanceBuffer; ///< N × mat4, entityMat * meshNodeTransform
+};
 
 /**
  * @class GameScene
@@ -118,6 +137,32 @@ private:
      */
     void SpawnPhysicsCube(SceneContext& ctx, glm::vec3 pos);
 
+    /// Builds per-model instance transform SSBOs for all scatter entities.
+    /// Called once in OnEnter() after scatter population; results are reused every frame.
+    void BuildScatterBatches(SceneContext& ctx);
+
+    /// Handles for static mesh collision bodies (scene geometry).
+    /// Stored so they can be removed on OnExit().
+    std::vector<PhysicsBodyHandle> m_MeshCollisionBodies;
+
+    /// Server-side resource manager: owns spawn points, depletion, respawn.
+    ResourceManager m_ResourceManager;
+
+    /// Fog of War grid – tracks which map cells have been explored.
+    FogGrid m_Fog;
+
+    /// Procedural world data (heightmap + biomes) used to drive decorative
+    /// prop scattering. Generated locally on every peer from the shared seed.
+    WorldManager m_World;
+
+    /// Seed shared by all peers so the scatter field is identical everywhere.
+    /// Keep this in sync with whatever seed drives your actual terrain.
+    uint32_t m_WorldSeed = 12345;
+
+    /// Whether the map overlay (Fog + Territory) is currently visible.
+    /// Toggled by the "Karte" button in the Game window.
+    bool m_ShowMapOverlay = false;
+
     // --- Server state ---
     /// ID for the next networked entity.
     uint32_t m_NextNetId    = 1;
@@ -189,4 +234,10 @@ private:
     // Cached values to detect when the shadow pipeline needs to be rebuilt
     float m_LastShadowBiasConstant = -1.0f;
     float m_LastShadowBiasSlope    = -1.0f;
+
+    // --- GPU Instancing ---
+    /// Pre-built batches (one per unique model path × GLTF mesh node). Built once in OnEnter().
+    std::vector<ScatterBatch>  m_ScatterBatches;
+    /// Single identity mat4 SSBO bound for non-scatter draw calls so slot 1 is always valid.
+    std::unique_ptr<GPUBuffer> m_IdentityInstanceBuffer;
 };

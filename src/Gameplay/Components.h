@@ -68,6 +68,32 @@ struct ModelComponent {
     std::string modelPath; /**< Path to the .glb or .gltf file. */
 };
 
+/**
+ * @struct ScatterPropComponent
+ * @brief Tags a purely decorative, client-side scattered prop (grass, rocks…).
+ *
+ * Scatter props are generated deterministically from the world seed on every
+ * peer (see ScatterSystem), so they are NOT networked and carry no authoritative
+ * state. The tag exists so the scatter pass can be cleared/regenerated without
+ * touching gameplay entities.
+ */
+struct ScatterPropComponent {
+    uint16_t layer = 0; /**< Index of the ScatterLayer that produced this prop. */
+};
+
+/**
+ * @struct StructureComponent
+ * @brief Tags a world structure (faction base or neutral resource node).
+ *
+ * Structures are placed deterministically by StructurePlacementSystem on every
+ * peer, so they are not networked. isFactionBase=true marks the home plateau
+ * marker for a territory; isFactionBase=false marks a neutral resource node.
+ */
+struct StructureComponent {
+    uint16_t territoryId  = 0xFFFF; /**< Owning territory, or 0xFFFF for neutral. */
+    bool     isFactionBase = false;
+};
+
 // ---------------------------------------------------------------------------
 // Physics Components
 // ---------------------------------------------------------------------------
@@ -103,3 +129,9 @@ struct EntityIDComponent {
 //   registry.emplace<LightComponent>(e,
 //       LightType::Point, glm::vec3{1,0.8f,0.4f}, 4.0f, 15.0f);
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Resource / Collector components — see ResourceTypes.h for full definitions.
+// Included here so all ECS users get them transitively via Components.h.
+// ---------------------------------------------------------------------------
+#include "ResourceTypes.h"
