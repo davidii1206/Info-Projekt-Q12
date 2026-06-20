@@ -22,6 +22,10 @@ FetchContent_Declare(enet GIT_REPOSITORY https://github.com/lsalzman/enet.git GI
 FetchContent_Declare(perlin_noise GIT_REPOSITORY https://github.com/Reputeless/PerlinNoise.git GIT_TAG master)
 FetchContent_Declare(voronoi GIT_REPOSITORY https://github.com/JCash/voronoi.git GIT_TAG master)
 
+set(LIBTYPE STATIC CACHE STRING "Build OpenAL as static library to avoid DLL dependency")
+set(ALSOFT_BACKEND_PIPEWIRE OFF CACHE BOOL "Disable PipeWire (not available on Windows)")
+set(FETCHCONTENT_QUIET OFF)
+
 FetchContent_MakeAvailable(
         SDL3 imgui glm spdlog nlohmann_json
         Jolt EnTT tinygltf stb openal-soft enet
@@ -66,6 +70,10 @@ target_include_directories(Bugmin PRIVATE
         ${perlin_noise_SOURCE_DIR}
         ${voronoi_SOURCE_DIR}/src
 )
+
+if(WIN32)
+    target_compile_definitions(Bugmin PRIVATE AL_LIBTYPE_STATIC)
+endif()
 
 # Shader Compilation
 find_program(GLSLANG_VALIDATOR glslangValidator)
@@ -145,16 +153,5 @@ else()
 endif()
 
 if(WIN32)
-    target_link_options(Bugmin PRIVATE -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
-    
-    add_custom_command(TARGET Bugmin POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:SDL3::SDL3>
-        $<TARGET_FILE_DIR:Bugmin>
-    )
-    add_custom_command(TARGET Bugmin POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_FILE:OpenAL>
-        $<TARGET_FILE_DIR:Bugmin>
-    )
+    target_link_options(Bugmin PRIVATE -static)
 endif()
