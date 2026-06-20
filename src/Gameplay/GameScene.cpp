@@ -17,6 +17,7 @@
 #include "../Graphics/Renderer.h"
 #include "ResourceTypes.h"
 #include "ResourceHUD.h"
+#include "BuildingSystem.h"
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
 #include "HUDTextureRegistry.h"
@@ -48,6 +49,7 @@ GameScene::~GameScene() {}
  */
 void GameScene::OnEnter(SceneContext& ctx) {
     spdlog::info("GameScene: entered");
+    UpgradeSystem::Reset();
 
     if (!m_Camera) {
         m_Camera = std::make_unique<Camera>();
@@ -99,7 +101,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
         SpawnBuilding(ctx, BuildingType::Main, 0, glm::vec3{-30.f, 0.f,  0.f});
         SpawnBuilding(ctx, BuildingType::Main, 1, glm::vec3{ 30.f, 0.f,  0.f});
         // Additional demo buildings
-        SpawnBuilding(ctx, BuildingType::Offense, 0, glm::vec3{-20.f, 0.f,  12.f});
+        SpawnBuilding(ctx, BuildingType::Attack, 0, glm::vec3{-20.f, 0.f,  12.f});
         SpawnBuilding(ctx, BuildingType::Defense, 1, glm::vec3{ 20.f, 0.f, -12.f});
 
         // -----------------------------------------------------------------
@@ -762,10 +764,18 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                         if (bc.destroyed) continue;
                         if (glm::distance(btf.position, worldPos) < 1.5f) { blocked = true; break; }
                     }
-                    if (!blocked && m_SelectedBuildingType >= 0) {
+                    if (!blocked) {
                         // Team 0 for host, TODO: proper team assignment
-                        SpawnBuilding(ctx, static_cast<BuildingType>(m_SelectedBuildingType),
-                                      0, worldPos);
+                        uint32_t placeTeam = 0;
+                        if (m_SelectedBuildingType >= 0) {
+                            SpawnBuilding(ctx, static_cast<BuildingType>(m_SelectedBuildingType),
+                                          placeTeam, worldPos);
+                        } else if (m_PlacementActive) {
+                            // Special building
+                            auto info = GetSpecialBuildingInfo(m_SelectedSpecialBuilding);
+                            SpawnBuilding(ctx, BuildingType::Special, placeTeam, worldPos,
+                                          1, "assets/cube.glb", m_SelectedSpecialBuilding);
+                        }
                     }
                 }
 
@@ -893,26 +903,133 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     if (m_CameraMode == CameraMode::Building) {
         ImGui::Separator();
         ImGui::Text("Ortho-Zoom: %.1f (Mausrad)", m_BuildOrthoSize);
-        ImGui::TextDisabled("WASD: Bewegen | Mausrad: Zoomen");
+        ImGui::TextDisabled("WASD: Bewegen | Mausrad: Zoomen | G: Grundrisse | S: Spezial");
 
-        const char* typeNames[] = {"Outpost", "Offense", "Defense", "Upgrade", "Infrastructure"};
-        BuildingType typeVals[] = {BuildingType::Outpost, BuildingType::Offense,
-                                   BuildingType::Defense, BuildingType::Upgrade,
-                                   BuildingType::Infrastructure};
+        // Determine player's tribe for special buildings
+        BugClass playerTribe = BugClass::Termites;
+        {
+            auto pView = ctx.clientRegistry.view<PlayerComponent>();
+            for (auto pe : pView) {
+                auto& pc = pView.get<PlayerComponent>(pe);
+                if (pc.isLocal) {
+                    if (pc.bugClass != BugClass::None)
+                        playerTribe = pc.bugClass;
+                    break;
+                }
+            }
+        }
+
+        // --- Generic buildings row ---
+        struct BldBtn {
+            const char* name;
+            BuildingType type;
+        };
+        const BldBtn genericBlds[] = {
+            {"Basis",      BuildingType::Main},
+            {"Speicher",   BuildingType::Storage},
+            {"Brutkammer", BuildingType::Barracks},
+            {"Upgrade",    BuildingType::Upgrade},
+            {"Konversion", BuildingType::Conversion},
+            {"Verteid.",   BuildingType::Defense},
+            {"Angriff",    BuildingType::Attack},
+            {"Vorposten",  BuildingType::Outpost},
+        };
+
         ImGui::Text("Gebaeude platzieren:");
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 8; i++) {
             bool active = (m_PlacementActive &&
-                           m_SelectedBuildingType == static_cast<int>(typeVals[i]));
+                           m_SelectedBuildingType == static_cast<int>(genericBlds[i].type));
             if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
-            if (ImGui::Button(typeNames[i])) {
+            if (ImGui::Button(genericBlds[i].name)) {
                 if (active) CancelPlacement(ctx);
-                else        EnterPlacementMode(ctx, typeVals[i]);
+                else        EnterPlacementMode(ctx, genericBlds[i].type);
             }
             if (active) ImGui::PopStyleColor();
-            if (i < 4) ImGui::SameLine();
+            if ((i + 1) % 4 != 0) ImGui::SameLine();
         }
+
+        // --- Special buildings (tribe-specific) ---
+        ImGui::Separator();
+        ImGui::Text("Spezialgebaeude (%s):", BugClassName(playerTribe));
+        auto specials = GetSpecialBuildingsForTribe(playerTribe);
+        for (size_t i = 0; i < specials.size(); i++) {
+            auto info = GetSpecialBuildingInfo(specials[i]);
+            // Use a negative offset to distinguish special buildings from generic ones
+            int specialIdx = -(static_cast<int>(specials[i]) + 1);
+            bool active = (m_PlacementActive && m_SelectedBuildingType == specialIdx);
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.6f, 1.f));
+            if (ImGui::Button(info.name)) {
+                if (active) CancelPlacement(ctx);
+                else {
+                    CancelPlacement(ctx);
+                    m_SelectedBuildingType = specialIdx;
+                    m_PlacementActive = true;
+                    m_SelectedSpecialBuilding = specials[i];
+                    // Create ghost
+                    m_GhostEntity = ctx.clientRegistry.create();
+                    ctx.clientRegistry.emplace<TransformComponent>(m_GhostEntity, glm::vec3{0.f, 0.f, 0.f});
+                    ctx.clientRegistry.emplace<ModelComponent>(m_GhostEntity, std::string("assets/cube.glb"));
+                    ctx.clientRegistry.emplace<GhostComponent>(m_GhostEntity);
+                    spdlog::info("GameScene: entered placement for special building {}", info.name);
+                }
+            }
+            if (active) ImGui::PopStyleColor();
+            if (i == 0) ImGui::SameLine();
+            if (active && info.description) {
+                ImGui::TextDisabled("%s", info.description);
+            }
+        }
+
         if (m_PlacementActive) {
             ImGui::TextDisabled("LKlick: platzieren  RKlick/ESC: abbrechen");
+        }
+
+        // --- Upgrade section ---
+        if (ctx.network.IsHosting()) {
+            uint32_t myTeam = m_MyPlayerId % 2;
+            auto& ust = UpgradeSystem::GetState(myTeam);
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.3f, 1.f, 0.3f, 1.f), "Upgrades (Basis Level %d)", ust.baseLevel);
+
+            // Available base upgrades
+            auto availBase = UpgradeSystem::AvailableBaseUpgrades(ctx.serverRegistry, myTeam);
+            for (auto pid : availBase) {
+                auto* def = FindUpgradeDef(pid);
+                if (!def) continue;
+                std::string label = def->name;
+                label += "##base";
+                if (ImGui::Button(label.c_str())) {
+                    ApplyUpgrade(ctx, myTeam, pid);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", def->description);
+            }
+            if (availBase.empty() && ust.baseLevel < 3) {
+                ImGui::TextDisabled("  (Voraussetzungen nicht erfuellt)");
+            } else if (ust.baseLevel >= 3) {
+                ImGui::TextDisabled("  (Maximales Level erreicht)");
+            }
+
+            // Building upgrade buttons (current selection)
+            if (m_SelectedBuildingType >= 0) {
+                auto bType = static_cast<BuildingType>(m_SelectedBuildingType);
+                auto availBld = UpgradeSystem::AvailableBuildingUpgrades(ctx.serverRegistry, myTeam, bType);
+                if (!availBld.empty()) {
+                    ImGui::Text("Gebaeude-Upgrades (%s):",
+                                BuildingTypeName(bType));
+                    for (auto pid : availBld) {
+                        auto* def = FindUpgradeDef(pid);
+                        if (!def) continue;
+                        std::string label = def->name;
+                        label += "##bld";
+                        if (ImGui::Button(label.c_str())) {
+                            ApplyUpgrade(ctx, myTeam, pid);
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("%s", def->description);
+                    }
+                }
+            }
         }
     }
 
@@ -1067,6 +1184,7 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         CheckWinCondition(ctx);
         m_ResourceManager.Update(ctx.serverRegistry, dt);
         ResourceSystem::Update(ctx.serverRegistry, m_ResourceManager, dt);
+        BuildingSystem::Update(ctx.serverRegistry, dt);
         FogOfWarSystem::Update(m_Fog, ctx.serverRegistry);
         TerritorySystem::Update(ctx.serverRegistry, dt);
 
@@ -1135,6 +1253,7 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
                         bp.netId        = netId;
                         bp.teamId       = bc->teamId;
                         bp.buildingType = static_cast<uint8_t>(bc->type);
+                        bp.specialType  = static_cast<uint8_t>(bc->specialType);
                         bp.tier         = bc->tier;
                         bp.x = t.position.x; bp.y = t.position.y; bp.z = t.position.z;
                         bp.hp = bc->hp; bp.maxHp = bc->maxHp;
@@ -1159,6 +1278,18 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
                 rpkt.resourceType = static_cast<uint8_t>(res.type);
                 rpkt.x = tf.position.x; rpkt.y = tf.position.y; rpkt.z = tf.position.z;
                 ctx.network.SendToClient(peerId, rpkt);
+            }
+
+            // Sync completed upgrades for this player's team to the new client
+            {
+                uint32_t teamId = newPlayerId % 2;
+                auto& state = UpgradeSystem::GetState(teamId);
+                for (auto pid : state.completedPaths) {
+                    UpgradeCompletedPacket upkt;
+                    upkt.pathId = pid;
+                    upkt.teamId = teamId;
+                    ctx.network.SendToClient(peerId, upkt);
+                }
             }
 
             // Send initial territory + fog snapshots to the new client
@@ -1407,12 +1538,15 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         // Start slightly below ground for construction slide-up animation
         float targetY = pkt->y;
         float startY  = targetY - 0.5f;
+        auto bType = static_cast<BuildingType>(pkt->buildingType);
+        auto sType = static_cast<SpecialBuildingType>(pkt->specialType);
         ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, startY, pkt->z});
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
         ctx.clientRegistry.emplace<BuildingComponent>(entity,
-            BuildingComponent{static_cast<BuildingType>(pkt->buildingType),
-                              pkt->teamId, pkt->tier, pkt->hp, pkt->maxHp, false});
+            BuildingComponent{bType, pkt->teamId, pkt->tier, sType, pkt->hp, pkt->maxHp, false});
+        if (bType == BuildingType::Special)
+            ctx.clientRegistry.emplace<SpecialBuildingComponent>(entity, sType);
         ctx.clientRegistry.emplace<ConstructionComponent>(entity,
             ConstructionComponent{0.f, 1.0f, startY, targetY});
         // Add a HealthComponent so existing HP-update packet handling works
@@ -1429,6 +1563,15 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (it == m_ClientNetMap.end()) continue;
         ctx.clientRegistry.destroy(it->second);
         m_ClientNetMap.erase(it);
+    }
+
+    // Upgrade completed
+    while (true) {
+        auto pkt = ctx.network.ReceiveFromServer<UpgradeCompletedPacket>(PacketType::UPGRADE_COMPLETED);
+        if (!pkt) break;
+        // Just log it client-side for now; effects are handled server-authoritative
+        spdlog::info("GameScene: team {} completed upgrade path {} (client)",
+                     pkt->teamId, pkt->pathId);
     }
 }
 
@@ -1598,19 +1741,41 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, flo
 
 entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
                                        uint32_t teamId, glm::vec3 pos,
-                                       uint32_t tier, const std::string& model)
+                                       uint32_t tier, const std::string& model,
+                                       SpecialBuildingType specialType)
 {
     if (!ctx.network.IsHosting()) return entt::null;
 
-    // Base HP by type
+    // Determine the owner's bug class from the first player of this team
+    BugClass ownerClass = BugClass::Termites;
+    {
+        auto pView = ctx.serverRegistry.view<PlayerComponent>();
+        for (auto pe : pView) {
+            auto& pc = pView.get<PlayerComponent>(pe);
+            if (pc.playerId % 2 == teamId % 2 && pc.bugClass != BugClass::None) {
+                ownerClass = pc.bugClass;
+                break;
+            }
+        }
+    }
+    auto data = GetTribeBuildingData(ownerClass);
+
+    // Base HP by type – scaled by tribe bonuses
     float hp = 500.f;
     switch (type) {
-        case BuildingType::Main:           hp = 500.f; break;
-        case BuildingType::Outpost:        hp = 200.f; break;
-        case BuildingType::Offense:        hp = 300.f; break;
-        case BuildingType::Defense:        hp = 800.f; break;
-        case BuildingType::Upgrade:        hp = 250.f; break;
-        case BuildingType::Infrastructure: hp = 400.f; break;
+        case BuildingType::Main:       hp = 500.f; break;
+        case BuildingType::Storage:    hp = 350.f; break;
+        case BuildingType::Barracks:   hp = 300.f; break;
+        case BuildingType::Upgrade:    hp = 250.f; break;
+        case BuildingType::Conversion: hp = 200.f; break;
+        case BuildingType::Defense:    hp = 800.f * data.defenseHpMul; break;
+        case BuildingType::Attack:     hp = 300.f; break;
+        case BuildingType::Outpost:    hp = 200.f; break;
+        case BuildingType::Special: {
+            auto sinfo = GetSpecialBuildingInfo(specialType);
+            hp = sinfo.baseHp;
+            break;
+        }
     }
 
     const uint32_t netId = m_NextNetId++;
@@ -1619,23 +1784,47 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
     ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
     ctx.serverRegistry.emplace<ModelComponent>(e, model);
     ctx.serverRegistry.emplace<BuildingComponent>(e,
-        BuildingComponent{type, teamId, tier, hp, hp, false});
-    // Main and Infrastructure buildings get resource storage
-    if (type == BuildingType::Main || type == BuildingType::Infrastructure)
-        ctx.serverRegistry.emplace<ResourceInventory>(e);
+        BuildingComponent{type, teamId, tier, specialType, hp, hp, false});
+    // Apply the owner's bug class
+    auto& bc = ctx.serverRegistry.get<BuildingComponent>(e);
+    bc.ownerClass = ownerClass;
+
+    // Attach type-specific components
+    switch (type) {
+        case BuildingType::Main:
+        case BuildingType::Storage:
+            ctx.serverRegistry.emplace<ResourceInventory>(e);
+            if (type == BuildingType::Storage)
+                ctx.serverRegistry.emplace<StorageComponent>(e);
+            break;
+        case BuildingType::Barracks:
+            ctx.serverRegistry.emplace<BarracksComponent>(e);
+            break;
+        case BuildingType::Conversion: {
+            // Diet-aware default conversion recipe
+            auto conv = BuildingSystem::GetDefaultConversion(ownerClass);
+            ctx.serverRegistry.emplace<ConversionComponent>(e, conv);
+            break;
+        }
+        case BuildingType::Special:
+            ctx.serverRegistry.emplace<SpecialBuildingComponent>(e, specialType);
+            break;
+        default:
+            break;
+    }
     m_ServerNetMap[netId] = e;
 
     BuildingSpawnedPacket pkt;
     pkt.netId        = netId;
     pkt.teamId       = teamId;
     pkt.buildingType = static_cast<uint8_t>(type);
+    pkt.specialType  = static_cast<uint8_t>(specialType);
     pkt.tier         = tier;
     pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
     pkt.hp = hp; pkt.maxHp = hp;
     ctx.network.BroadcastToAll(pkt);
 
-    // Also create the client-side entity directly when hosting,
-    // because BroadcastToAll may not loop back to the host's client.
+    // Also create the client-side entity directly when hosting
     {
         float startY = pos.y - 0.5f;
         auto ce = ctx.clientRegistry.create();
@@ -1643,7 +1832,9 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
         ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
         ctx.clientRegistry.emplace<ModelComponent>(ce, model);
         ctx.clientRegistry.emplace<BuildingComponent>(ce,
-            BuildingComponent{type, teamId, tier, hp, hp, false});
+            BuildingComponent{type, teamId, tier, specialType, hp, hp, false});
+        if (type == BuildingType::Special)
+            ctx.clientRegistry.emplace<SpecialBuildingComponent>(ce, specialType);
         ctx.clientRegistry.emplace<ConstructionComponent>(ce,
             ConstructionComponent{0.f, 1.0f, startY, pos.y});
         auto& hc = ctx.clientRegistry.emplace<HealthComponent>(ce, HealthComponent{hp});
@@ -1654,6 +1845,23 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
     spdlog::info("GameScene: spawned building netId={} team={} type={} tier={} hp={:.0f}",
                  netId, teamId, (int)type, tier, hp);
     return e;
+}
+
+// ---------------------------------------------------------------------------
+// ApplyUpgrade
+// ---------------------------------------------------------------------------
+
+void GameScene::ApplyUpgrade(SceneContext& ctx, uint32_t teamId, UpgradePathID pathId) {
+    if (!ctx.network.IsHosting()) return;
+    if (!UpgradeSystem::Apply(ctx.serverRegistry, teamId, pathId)) return;
+
+    // Broadcast to all clients
+    UpgradeCompletedPacket pkt;
+    pkt.pathId = pathId;
+    pkt.teamId = teamId;
+    ctx.network.BroadcastToAll(pkt);
+
+    spdlog::info("GameScene: team {} completed upgrade path {}", teamId, pathId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1809,7 +2017,8 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
     auto combatView = ctx.serverRegistry.view<TransformComponent, UnitComponent,
                                                HealthComponent, CombatComponent,
                                                MovementOrderComponent>();
-    std::vector<std::pair<entt::entity, uint32_t>> toKill; // entity + netId
+    struct KillRec { entt::entity dead; uint32_t netId; uint32_t killerTeam; };
+    std::vector<KillRec> toKill;
 
     for (auto e : combatView) {
         auto& tf  = combatView.get<TransformComponent>(e);
@@ -1874,7 +2083,7 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
                         thc->dead = true;
                         auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
                         uint32_t dnetId = dnc ? dnc->netId : 0;
-                        toKill.push_back({cc.target, dnetId});
+                        toKill.push_back({cc.target, dnetId, uc.teamId});
                         cc.target = entt::null;
                     }
                 }
@@ -1927,8 +2136,9 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
     }
 
     // Process kills
-    for (auto& [deadEnt, deadNetId] : toKill) {
-        HandleUnitDeath(ctx, deadEnt, deadNetId);
+    for (auto& kr : toKill) {
+        UpgradeSystem::AddKill(kr.killerTeam);
+        HandleUnitDeath(ctx, kr.dead, kr.netId);
     }
 }
 

@@ -16,6 +16,7 @@
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
 #include "HUDTextureRegistry.h"
+#include "UpgradeSystem.h"
 #include "../Networking/Packets.h"
 #include <unordered_map>
 #include <vector>
@@ -154,7 +155,8 @@ private:
     /** @brief Spawns a building on the server and broadcasts to clients. */
     entt::entity SpawnBuilding(SceneContext& ctx, BuildingType type, uint32_t teamId,
                                glm::vec3 pos, uint32_t tier = 1,
-                               const std::string& model = "assets/cube.glb");
+                               const std::string& model = "assets/cube.glb",
+                               SpecialBuildingType specialType = SpecialBuildingType::NectarRefinery);
 
     /** @brief Handle destruction of a building: broadcast, remove. */
     void HandleBuildingDeath(SceneContext& ctx, entt::entity entity, uint32_t netId);
@@ -203,6 +205,9 @@ private:
     /** @brief Cancel placement mode and destroy the ghost entity. */
     void CancelPlacement(SceneContext& ctx);
 
+    /** @brief Server: apply an upgrade path for a team and broadcast it. */
+    void ApplyUpgrade(SceneContext& ctx, uint32_t teamId, UpgradePathID pathId);
+
     /// Handles for static mesh collision bodies (scene geometry).
     /// Stored so they can be removed on OnExit().
     std::vector<PhysicsBodyHandle> m_MeshCollisionBodies;
@@ -233,8 +238,10 @@ private:
 
     /// Client-side entity for building placement ghost (transparent preview).
     entt::entity m_GhostEntity = entt::null;
-    /// Currently selected building type for placement (-1 = none).
+    /// Currently selected building type for placement (-1 = none, <0 = special building).
     int m_SelectedBuildingType = -1;
+    /// When placing a special building, which one.
+    SpecialBuildingType m_SelectedSpecialBuilding = SpecialBuildingType::NectarRefinery;
     /// Whether the player is in placement hover mode.
     bool m_PlacementActive = false;
 
