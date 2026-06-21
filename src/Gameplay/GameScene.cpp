@@ -41,6 +41,33 @@
 #include <algorithm>
 
 // ---------------------------------------------------------------------------
+// Terrain placement helpers
+//
+// The building/unit systems were written for a flat Y=0 map. These helpers
+// let placement and spawning query the terraced worldgen terrain so props
+// sit on the ground and can only be built on valid plateau tiles.
+// ---------------------------------------------------------------------------
+namespace {
+
+/// World-space ground height (terrace top) at the given world XZ.
+float GroundHeightAt(const WorldManager& world, float wx, float wz) {
+    int tx, tz;
+    world.WorldToTile(wx, wz, tx, tz);
+    return world.TierToWorldHeight(world.GetTile(tx, tz).tier);
+}
+
+/// True if a building may be placed at the given world XZ:
+/// a flat, dry, interior plateau tile (WorldManager::buildable flag).
+bool IsBuildableAt(const WorldManager& world, float wx, float wz) {
+    if (world.GetGridSize() <= 0) return false;
+    int tx, tz;
+    world.WorldToTile(wx, wz, tx, tz);
+    return world.GetTile(tx, tz).buildable;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
@@ -263,20 +290,32 @@ void GameScene::OnEnter(SceneContext& ctx) {
         HUDTextures::Load(ctx.renderer->GetDevice());
 
         // -----------------------------------------------------------------
-        // Spawn team buildings (destroyable structures)
+        // Demo team bases + units, anchored to two real territory spawn
+        // points so they land on buildable plateau ground (not random
+        // cliffs/water). SpawnBuilding / SpawnUnit snap Y to the terrain.
         // -----------------------------------------------------------------
-        SpawnBuilding(ctx, BuildingType::Main, 0, glm::vec3{-30.f, 0.f,  0.f});
-        SpawnBuilding(ctx, BuildingType::Main, 1, glm::vec3{ 30.f, 0.f,  0.f});
-        // Additional demo buildings
-        SpawnBuilding(ctx, BuildingType::Attack, 0, glm::vec3{-20.f, 0.f,  12.f});
-        SpawnBuilding(ctx, BuildingType::Defense, 1, glm::vec3{ 20.f, 0.f, -12.f});
+        {
+            const auto& terr = m_World.GetTerrains();
+            std::vector<glm::vec2> teamSpawns;
+            for (const auto& td : terr) {
+                if (td.bugClass == BugClass::BossArena) continue;
+                teamSpawns.push_back(td.spawnPoint);
+                if (teamSpawns.size() == 2) break;
+            }
+            while (teamSpawns.size() < 2) teamSpawns.push_back(glm::vec2(0.f));
 
-        // -----------------------------------------------------------------
-        // Spawn a few demo units per team so the system runs immediately
-        // -----------------------------------------------------------------
-        for (int i = 0; i < 3; i++) {
-            SpawnUnit(ctx, 0, glm::vec3{-20.f + i * 3.f, 0.f,  5.f});
-            SpawnUnit(ctx, 1, glm::vec3{ 20.f - i * 3.f, 0.f, -5.f});
+            const glm::vec2 base0 = teamSpawns[0];
+            const glm::vec2 base1 = teamSpawns[1];
+
+            SpawnBuilding(ctx, BuildingType::Main,    0, glm::vec3{base0.x,        0.f, base0.y});
+            SpawnBuilding(ctx, BuildingType::Main,    1, glm::vec3{base1.x,        0.f, base1.y});
+            SpawnBuilding(ctx, BuildingType::Attack,  0, glm::vec3{base0.x + 4.f,  0.f, base0.y});
+            SpawnBuilding(ctx, BuildingType::Defense, 1, glm::vec3{base1.x + 4.f,  0.f, base1.y});
+
+            for (int i = 0; i < 3; i++) {
+                SpawnUnit(ctx, 0, glm::vec3{base0.x + (float)i * 3.f, 0.f, base0.y + 3.f});
+                SpawnUnit(ctx, 1, glm::vec3{base1.x - (float)i * 3.f, 0.f, base1.y - 3.f});
+            }
         }
 
         /**
@@ -1056,14 +1095,18 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 ctx.clientRegistry.valid(m_GhostEntity)) {
                 glm::vec2 mpos = Input::GetMousePosition();
                 glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
-                // Snap to 2x2 grid
-                worldPos.x = std::round(worldPos.x / 2.f) * 2.f;
-                worldPos.z = std::round(worldPos.z / 2.f) * 2.f;
-                worldPos.y = 0.f;
+                // Snap to the worldgen tile grid and sit on the terrace surface.
+                int gtx, gtz;
+                m_World.WorldToTile(worldPos.x, worldPos.z, gtx, gtz);
+                glm::vec2 tileCenter = m_World.TileToWorld(gtx, gtz);
+                worldPos.x = tileCenter.x;
+                worldPos.z = tileCenter.y;
+                worldPos.y = m_World.TierToWorldHeight(m_World.GetTile(gtx, gtz).tier);
+                const bool placeValid = m_World.GetTile(gtx, gtz).buildable;
                 auto* tf = ctx.clientRegistry.try_get<TransformComponent>(m_GhostEntity);
                 if (tf) tf->position = worldPos;
 
-                // Left-click to place (skip if hovering over UI)
+                // Left-click to place (skip if hovering over UI; only on buildable ground)
                 if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT) &&
                     !ImGui::GetIO().WantCaptureMouse && ctx.network.IsHosting()) {
                     // Check no existing building at this position
@@ -1075,7 +1118,9 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                         if (bc.destroyed) continue;
                         if (glm::distance(btf.position, worldPos) < 1.5f) { blocked = true; break; }
                     }
-                    if (!blocked) {
+                    if (!placeValid) {
+                        spdlog::info("Building placement rejected: tile not buildable (cliff/water/edge)");
+                    } else if (!blocked) {
                         // Team 0 for host, TODO: proper team assignment
                         uint32_t placeTeam = 0;
                         if (m_SelectedBuildingType >= 0) {
@@ -2040,6 +2085,9 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, flo
 {
     if (!ctx.network.IsHosting()) return;
 
+    // Drop the unit onto the terraced terrain instead of the flat Y=0 plane.
+    pos.y = GroundHeightAt(m_World, pos.x, pos.z);
+
     static std::mt19937 rng{std::random_device{}()};
     // Pick a random bug class from available ones (skip None)
     static const BugClass classes[] = {
@@ -2091,6 +2139,11 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
                                        SpecialBuildingType specialType)
 {
     if (!ctx.network.IsHosting()) return entt::null;
+
+    // Snap to the terrain surface so buildings rest on the terraced ground
+    // instead of the old flat Y=0 plane. Authoritative on the server; the
+    // broadcast carries this Y to every client.
+    pos.y = GroundHeightAt(m_World, pos.x, pos.z);
 
     // Determine the owner's bug class from the first player of this team
     BugClass ownerClass = BugClass::Termites;
