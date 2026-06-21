@@ -44,3 +44,6 @@ build-windows/
 bin/
 obj/
 _deps/
+
+# Doxygen-generated HTML (regenerate via doxygen tools/Doxyfile)
+docs/generated/

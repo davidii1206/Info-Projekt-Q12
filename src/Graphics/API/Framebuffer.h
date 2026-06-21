@@ -24,6 +24,7 @@ public:
      * @param height Height in pixels.
      * @param formats List of pixel formats for each color target.
      * @param hasDepth Whether to include a depth target.
+     * @param depthFilter Sampling filter to use for the depth texture.
      */
     Framebuffer(SDL_GPUDevice* device, uint32_t width, uint32_t height, const std::vector<SDL_GPUTextureFormat>& formats, bool hasDepth = true, TextureFilter depthFilter = TextureFilter::Nearest);
 

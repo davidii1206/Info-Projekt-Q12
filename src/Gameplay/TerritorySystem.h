@@ -69,6 +69,7 @@ namespace TerritoryColors
         return ImVec4(palette[idx][0], palette[idx][1], palette[idx][2], alpha);
     }
 
+    /// @brief Like ForTeam but returns a packed ImU32 colour suitable for ImDrawList.
     inline ImU32 ForTeamU32(uint32_t teamId, float alpha = 0.35f)
     {
         ImVec4 c = ForTeam(teamId, alpha);
@@ -108,6 +109,7 @@ struct TerritoryComponent
     float    captureProgress = 0.f;     ///< 0–captureTime seconds of progress.
 
     TerritoryComponent() = default;
+    /// @brief Constructs a named zone with explicit half-extents and capture time.
     TerritoryComponent(const char* n, float hw, float hd, float ct = 10.f)
         : halfW(hw), halfD(hd), captureTime(ct)
     {

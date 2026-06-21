@@ -31,9 +31,9 @@ class GraphicsPipeline;
 /// One instanced draw batch: all scatter entities sharing the same model path
 /// and the same GLTF mesh node are collapsed into a single DrawIndexed call.
 struct ScatterBatch {
-    std::string             modelPath;
+    std::string             modelPath;       ///< GLB path shared by all instances in this batch.
     uint32_t                meshInstanceIdx; ///< Index into SceneData::meshInstances
-    uint32_t                instanceCount;
+    uint32_t                instanceCount;   ///< Number of instances in this batch.
     std::unique_ptr<GPUBuffer> instanceBuffer; ///< N × mat4, entityMat * meshNodeTransform
 };
 
@@ -246,12 +246,13 @@ private:
     bool m_ShowMapOverlay = false;
 
     // --- Camera Modes ---
+    /// @brief Active camera/control mode.
     enum class CameraMode { Exploring, Commander, Building };
-    CameraMode m_CameraMode = CameraMode::Exploring;
+    CameraMode m_CameraMode = CameraMode::Exploring; ///< Current camera mode.
     /// Saved 1st-person camera state (restored when leaving Commander/Building).
     glm::vec3 m_SavedExplorePos{0.f};
-    float     m_SavedExploreYaw   = 0.f;
-    float     m_SavedExplorePitch = 0.f;
+    float     m_SavedExploreYaw   = 0.f; ///< Saved 1st-person yaw.
+    float     m_SavedExplorePitch = 0.f; ///< Saved 1st-person pitch.
     /// Saved Commander camera XZ position (restored when switching back from Building).
     glm::vec3 m_SavedCommanderPos{0.f};
     /// Default height above ground for Commander and Building modes.
@@ -273,7 +274,7 @@ private:
     std::vector<uint32_t> m_SelectedUnits;
     /// Whether the game has ended.
     bool     m_GameOver      = false;
-    uint32_t m_WinnerTeam    = 0xFFFFFFFFu;
+    uint32_t m_WinnerTeam    = 0xFFFFFFFFu; ///< Winning team once the game is over (0xFFFFFFFF = none).
 
     // --- Server state ---
     /// ID for the next networked entity.
@@ -302,28 +303,30 @@ private:
 
     /// Accumulator for territory snapshot broadcasting (2 Hz).
     float m_TerritorySnapAccum = 0.f;
-    static constexpr float TERRITORY_SNAP_RATE = 1.f / 2.f;
+    static constexpr float TERRITORY_SNAP_RATE = 1.f / 2.f; ///< Territory snapshot rate (2 Hz).
 
     /// Accumulator for fog snapshot broadcasting (2 Hz).
     float m_FogSnapAccum = 0.f;
-    static constexpr float FOG_SNAP_RATE = 1.f / 2.f;
+    static constexpr float FOG_SNAP_RATE = 1.f / 2.f; ///< Fog snapshot rate (2 Hz).
 
     // --- Client-side synced state ---
     /// Client-side fog grid copy (updated from server snapshot).
     FogGrid m_ClientFog;
-    bool    m_HasFogData = false;
+    bool    m_HasFogData = false; ///< True once a fog snapshot has been received.
 
     /// Client-side territory zone cache (updated from server snapshot).
     struct ClientTerritoryZone {
-        char     name[32]{};
-        float    halfW = 8.f, halfD = 8.f;
-        float    captureProgress = 0.f, captureTime = 10.f;
-        uint32_t ownerTeam = 0xFFFF'FFFFu;
-        uint32_t contestedBy = 0xFFFF'FFFFu;
-        glm::vec3 center{0.f};
+        char     name[32]{};            ///< Zone display name.
+        float    halfW = 8.f;           ///< Zone half-extent along X.
+        float    halfD = 8.f;           ///< Zone half-extent along Z.
+        float    captureProgress = 0.f; ///< Current capture progress (seconds).
+        float    captureTime = 10.f;    ///< Capture time required (seconds).
+        uint32_t ownerTeam = 0xFFFF'FFFFu;        ///< Owning team (0xFFFFFFFF = neutral).
+        uint32_t contestedBy = 0xFFFF'FFFFu;      ///< Team currently contesting, if any.
+        glm::vec3 center{0.f};                     ///< Zone centre (world space).
     };
-    std::vector<ClientTerritoryZone> m_ClientTerritories;
-    bool m_HasTerritoryData = false;
+    std::vector<ClientTerritoryZone> m_ClientTerritories; ///< Synced territory cache for the overlay.
+    bool m_HasTerritoryData = false; ///< True once a territory snapshot has been received.
 
     // --- Resource networking ---
     /// Tracks resource entities on server for netId assignment and broadcast.
@@ -361,13 +364,13 @@ private:
 
 
     // Sonnenlicht — schräg von oben (Mittag, leicht südwestlich)
-    glm::vec3 m_SunDirection     = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f));
-    glm::vec3 m_SunColor         = {1.0f, 0.97f, 0.88f};  // warmes Tageslicht
-    float     m_SunIntensity     = 1.0f;
+    glm::vec3 m_SunDirection     = glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)); ///< Sun direction.
+    glm::vec3 m_SunColor         = {1.0f, 0.97f, 0.88f};  ///< Sun colour (warm daylight).
+    float     m_SunIntensity     = 1.0f;                  ///< Sun intensity.
 
     // Ambient — bläuliches Himmelslicht, Schatten nicht pechschwarz
-    glm::vec3 m_AmbientColor     = {0.45f, 0.60f, 0.90f};
-    float     m_AmbientIntensity = 0.25f;
+    glm::vec3 m_AmbientColor     = {0.45f, 0.60f, 0.90f}; ///< Ambient sky colour.
+    float     m_AmbientIntensity = 0.25f;                 ///< Ambient intensity.
 
     // Shadow tuning — adjustable at runtime via the "Shadow Debug" ImGui window.
     float m_ShadowBiasConstant = 0.1f;  ///< Uniform depth offset (world-unit scale)
@@ -375,8 +378,8 @@ private:
     float m_ShadowOrthoSize    = 40.0f; ///< Half-size of the orthographic shadow frustum
 
     // Cached values to detect when the shadow pipeline needs to be rebuilt
-    float m_LastShadowBiasConstant = -1.0f;
-    float m_LastShadowBiasSlope    = -1.0f;
+    float m_LastShadowBiasConstant = -1.0f; ///< Last applied bias constant (rebuild trigger).
+    float m_LastShadowBiasSlope    = -1.0f; ///< Last applied bias slope (rebuild trigger).
 
     // --- GPU Instancing ---
     /// Pre-built batches (one per unique model path × GLTF mesh node). Built once in OnEnter().

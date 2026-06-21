@@ -1,6 +1,11 @@
 /**
  * @file Packets.h
  * @brief Definitions for all network packet structures and types.
+ *
+ * Every packet is a plain trivially-copyable struct whose first byte is a
+ * PacketType tag. Packets are sent verbatim over enet (UDP). Server→Client
+ * packets describe authoritative world changes; Client→Server packets carry
+ * player intent.
  */
 
 #pragma once
@@ -9,7 +14,7 @@
 /**
  * @enum PacketType
  * @brief Identifiers for different types of network packets.
- * 
+ *
  * First byte of every packet must be one of these values.
  */
 enum class PacketType : uint8_t {
@@ -67,7 +72,9 @@ struct PlayerJoinedPacket {
     PacketType type     = PacketType::PLAYER_JOINED; /**< Packet type identifier. */
     uint32_t   netId    = 0;                         /**< Network ID of the new entity. */
     uint32_t   playerId = 0;                         /**< Player ID of the new player. */
-    float      x = 0.f, y = 0.f, z = 0.f;            /**< Initial position. */
+    float      x = 0.f;                              /**< Initial X position. */
+    float      y = 0.f;                              /**< Initial Y position. */
+    float      z = 0.f;                              /**< Initial Z position. */
 };
 
 /**
@@ -87,20 +94,30 @@ struct AssetJoinedPacket {
     PacketType type = PacketType::ASSET_JOINED; /**< Packet type identifier. */
     uint32_t   netId = 0;                       /**< Network ID of the new entity. */
     char       modelPath[128]{};                /**< Path to the asset file. */
-    float      x = 0.f, y = 0.f, z = 0.f;       /**< Initial position. */
+    float      x = 0.f;                          /**< Initial X position. */
+    float      y = 0.f;                          /**< Initial Y position. */
+    float      z = 0.f;                          /**< Initial Z position. */
 };
 
 /**
  * @struct EntitySnapshotPacket
- * @brief Regular update from server containing entity state.
+ * @brief Regular update from server containing an entity's full transform + velocity.
  */
 struct EntitySnapshotPacket {
     PacketType type  = PacketType::ENTITY_SNAPSHOT; /**< Packet type identifier. */
     uint32_t   netId = 0;                            /**< Network ID of the entity. */
-    float      x  = 0.f, y  = 0.f, z  = 0.f;         /**< Current position. */
-    float      rx = 0.f, ry = 0.f, rz = 0.f;         /**< Current rotation (Euler angles). */
-    float      sx = 1.f, sy = 1.f, sz = 1.f;         /**< Current scale. */
-    float      vx = 0.f, vy = 0.f, vz = 0.f;         /**< Current velocity. */
+    float      x  = 0.f;                             /**< Position X. */
+    float      y  = 0.f;                             /**< Position Y. */
+    float      z  = 0.f;                             /**< Position Z. */
+    float      rx = 0.f;                             /**< Rotation X (Euler degrees). */
+    float      ry = 0.f;                             /**< Rotation Y (Euler degrees). */
+    float      rz = 0.f;                             /**< Rotation Z (Euler degrees). */
+    float      sx = 1.f;                             /**< Scale X. */
+    float      sy = 1.f;                             /**< Scale Y. */
+    float      sz = 1.f;                             /**< Scale Z. */
+    float      vx = 0.f;                             /**< Velocity X. */
+    float      vy = 0.f;                             /**< Velocity Y. */
+    float      vz = 0.f;                             /**< Velocity Z. */
 };
 
 /**
@@ -109,9 +126,9 @@ struct EntitySnapshotPacket {
  */
 struct PlayerInputPacket {
     PacketType type = PacketType::PLAYER_INPUT; /**< Packet type identifier. */
-    float      dx   = 0.f;                       /**< Horizontal movement input. */
-    float      dy   = 0.f;                       /**< Vertical movement input. */
-    float      dz   = 0.f;                       /**< Forward/backward movement input. */
+    float      dx   = 0.f;                       /**< Horizontal (X) movement input. */
+    float      dy   = 0.f;                       /**< Vertical (Y) movement input. */
+    float      dz   = 0.f;                       /**< Forward/backward (Z) movement input. */
     float      yaw  = 0.f;                       /**< Current camera yaw. */
     float      pitch = 0.f;                      /**< Current camera pitch. */
 };
@@ -121,12 +138,15 @@ struct PlayerInputPacket {
  * @brief Sent when a new unit entity is spawned in the world.
  */
 struct UnitSpawnedPacket {
-    PacketType type    = PacketType::UNIT_SPAWNED;
-    uint32_t   netId   = 0;
-    uint32_t   teamId  = 0;
-    uint8_t    bugClass = 0;
-    float      x = 0.f, y = 0.f, z = 0.f;
-    float      hp = 100.f, maxHp = 100.f;
+    PacketType type    = PacketType::UNIT_SPAWNED; /**< Packet type identifier. */
+    uint32_t   netId   = 0;                        /**< Network ID of the unit. */
+    uint32_t   teamId  = 0;                        /**< Owning team. */
+    uint8_t    bugClass = 0;                       /**< BugClass enum value (faction/type). */
+    float      x = 0.f;                            /**< Spawn position X. */
+    float      y = 0.f;                            /**< Spawn position Y. */
+    float      z = 0.f;                            /**< Spawn position Z. */
+    float      hp = 100.f;                         /**< Current hit points. */
+    float      maxHp = 100.f;                      /**< Maximum hit points. */
 };
 
 /**
@@ -134,8 +154,8 @@ struct UnitSpawnedPacket {
  * @brief Sent when a unit entity dies.
  */
 struct UnitDiedPacket {
-    PacketType type  = PacketType::UNIT_DIED;
-    uint32_t   netId = 0;
+    PacketType type  = PacketType::UNIT_DIED; /**< Packet type identifier. */
+    uint32_t   netId = 0;                      /**< Network ID of the dead unit. */
 };
 
 /**
@@ -143,9 +163,9 @@ struct UnitDiedPacket {
  * @brief Periodic health sync for a unit.
  */
 struct UnitHpUpdatePacket {
-    PacketType type  = PacketType::UNIT_HP_UPDATE;
-    uint32_t   netId = 0;
-    float      hp    = 0.f;
+    PacketType type  = PacketType::UNIT_HP_UPDATE; /**< Packet type identifier. */
+    uint32_t   netId = 0;                          /**< Network ID of the unit. */
+    float      hp    = 0.f;                         /**< Current hit points. */
 };
 
 /**
@@ -153,8 +173,25 @@ struct UnitHpUpdatePacket {
  * @brief Broadcast when the game ends.
  */
 struct GameOverPacket {
-    PacketType type        = PacketType::GAME_OVER;
-    uint32_t   winnerTeam  = 0xFFFFFFFFu; ///< 0xFFFFFFFF = draw/no winner
+    PacketType type        = PacketType::GAME_OVER; /**< Packet type identifier. */
+    uint32_t   winnerTeam  = 0xFFFFFFFFu; ///< Winning team, or 0xFFFFFFFF = draw/no winner.
+};
+
+/**
+ * @struct TerritoryZoneData
+ * @brief One territory zone's networked state (part of TerritorySnapshotPacket).
+ */
+struct TerritoryZoneData {
+    char     name[32]      = "Zone"; ///< Display name shown in the overlay.
+    float    halfW         = 8.f;    ///< Half-width of the zone along X.
+    float    halfD         = 8.f;    ///< Half-depth of the zone along Z.
+    float    captureTime   = 10.f;   ///< Seconds of dominance required to capture.
+    float    captureProgress = 0.f;  ///< Current capture progress in seconds.
+    uint32_t ownerTeam     = 0xFFFF'FFFFu; ///< Owning team, or 0xFFFFFFFF if neutral.
+    uint32_t contestedBy   = 0xFFFF'FFFFu; ///< Team currently ahead in capture, if any.
+    float    centerX = 0.f;          ///< Zone centre X (world space).
+    float    centerY = 0.f;          ///< Zone centre Y (world space).
+    float    centerZ = 0.f;          ///< Zone centre Z (world space).
 };
 
 /**
@@ -164,21 +201,10 @@ struct GameOverPacket {
  * Sent periodically (e.g. 2 Hz) so clients can render the territory overlay
  * without needing direct access to the server registry.
  */
-struct TerritoryZoneData {
-    char     name[32]      = "Zone";
-    float    halfW         = 8.f;
-    float    halfD         = 8.f;
-    float    captureTime   = 10.f;
-    float    captureProgress = 0.f;
-    uint32_t ownerTeam     = 0xFFFF'FFFFu;
-    uint32_t contestedBy   = 0xFFFF'FFFFu;
-    float    centerX = 0.f, centerY = 0.f, centerZ = 0.f;
-};
-
 struct TerritorySnapshotPacket {
-    PacketType type      = PacketType::TERRITORY_SNAPSHOT;
-    uint32_t   zoneCount = 0;
-    TerritoryZoneData zones[8]{};
+    PacketType type      = PacketType::TERRITORY_SNAPSHOT; /**< Packet type identifier. */
+    uint32_t   zoneCount = 0;                              /**< Number of valid entries in zones[]. */
+    TerritoryZoneData zones[8]{};                          /**< Per-zone state (up to 8 zones). */
 };
 
 /**
@@ -189,10 +215,10 @@ struct TerritorySnapshotPacket {
  * corresponds to cell index w*64+i (row-major: z*cellsX + x).
  */
 struct FogSnapshotPacket {
-    PacketType type    = PacketType::FOG_SNAPSHOT;
-    uint16_t   cellsX  = 0;
-    uint16_t   cellsZ  = 0;
-    /// Enough for a 100×100 grid (10 000 bits → 157 uint64s).
+    PacketType type    = PacketType::FOG_SNAPSHOT; /**< Packet type identifier. */
+    uint16_t   cellsX  = 0;                         /**< Number of fog cells along X. */
+    uint16_t   cellsZ  = 0;                         /**< Number of fog cells along Z. */
+    /// Bit-packed revealed flags; enough for a 100×100 grid (10 000 bits → 157 uint64s).
     uint64_t   gridData[160]{};
 };
 
@@ -201,10 +227,12 @@ struct FogSnapshotPacket {
  * @brief Server → Client: a resource node appeared (permanent spawn or meat drop).
  */
 struct ResourceSpawnedPacket {
-    PacketType type     = PacketType::RESOURCE_SPAWNED;
-    uint32_t   netId    = 0;
-    uint8_t    resourceType = 1; ///< ResourceType enum value.
-    float      x = 0.f, y = 0.f, z = 0.f;
+    PacketType type     = PacketType::RESOURCE_SPAWNED; /**< Packet type identifier. */
+    uint32_t   netId    = 0;                            /**< Network ID of the resource node. */
+    uint8_t    resourceType = 1;                        ///< ResourceType enum value.
+    float      x = 0.f;                                 /**< Position X. */
+    float      y = 0.f;                                 /**< Position Y. */
+    float      z = 0.f;                                 /**< Position Z. */
 };
 
 /**
@@ -212,8 +240,8 @@ struct ResourceSpawnedPacket {
  * @brief Server → Client: a resource node has been depleted or destroyed.
  */
 struct ResourceDepletedPacket {
-    PacketType type  = PacketType::RESOURCE_DEPLETED;
-    uint32_t   netId = 0;
+    PacketType type  = PacketType::RESOURCE_DEPLETED; /**< Packet type identifier. */
+    uint32_t   netId = 0;                             /**< Network ID of the depleted node. */
 };
 
 /**
@@ -224,11 +252,13 @@ struct ResourceDepletedPacket {
  * exactly which units were selected (selection state is not synced).
  */
 struct CommanderOrderPacket {
-    PacketType type          = PacketType::COMMANDER_ORDER;
-    uint32_t   playerId      = 0;
-    float      x = 0.f, y = 0.f, z = 0.f; ///< World destination
-    uint32_t   selectedCount = 0;           ///< How many units are selected (max 32).
-    uint32_t   selectedNetIds[32]{};        ///< NetIds of selected units.
+    PacketType type          = PacketType::COMMANDER_ORDER; /**< Packet type identifier. */
+    uint32_t   playerId      = 0;                           /**< Issuing player's ID. */
+    float      x = 0.f;                                     ///< World destination X.
+    float      y = 0.f;                                     ///< World destination Y.
+    float      z = 0.f;                                     ///< World destination Z.
+    uint32_t   selectedCount = 0;                           ///< How many units are selected (max 32).
+    uint32_t   selectedNetIds[32]{};                        ///< NetIds of selected units.
 };
 
 /**
@@ -236,14 +266,17 @@ struct CommanderOrderPacket {
  * @brief Server → Client: a building was constructed.
  */
 struct BuildingSpawnedPacket {
-    PacketType type    = PacketType::BUILDING_SPAWNED;
-    uint32_t   netId   = 0;
-    uint32_t   teamId  = 0;
-    uint8_t    buildingType = 0; ///< BuildingType enum value.
-    uint8_t    specialType  = 0; ///< SpecialBuildingType enum value (for Special buildings).
-    uint32_t   tier    = 1;
-    float      x = 0.f, y = 0.f, z = 0.f;
-    float      hp = 500.f, maxHp = 500.f;
+    PacketType type    = PacketType::BUILDING_SPAWNED; /**< Packet type identifier. */
+    uint32_t   netId   = 0;                            /**< Network ID of the building. */
+    uint32_t   teamId  = 0;                            /**< Owning team. */
+    uint8_t    buildingType = 0;                       ///< BuildingType enum value.
+    uint8_t    specialType  = 0;                       ///< SpecialBuildingType enum value (for Special buildings).
+    uint32_t   tier    = 1;                            /**< Building tier/level. */
+    float      x = 0.f;                                /**< Position X. */
+    float      y = 0.f;                                /**< Position Y (terrain surface height). */
+    float      z = 0.f;                                /**< Position Z. */
+    float      hp = 500.f;                             /**< Current hit points. */
+    float      maxHp = 500.f;                          /**< Maximum hit points. */
 };
 
 /**
@@ -251,8 +284,8 @@ struct BuildingSpawnedPacket {
  * @brief Server → Client: a building was destroyed.
  */
 struct BuildingDestroyedPacket {
-    PacketType type  = PacketType::BUILDING_DESTROYED;
-    uint32_t   netId = 0;
+    PacketType type  = PacketType::BUILDING_DESTROYED; /**< Packet type identifier. */
+    uint32_t   netId = 0;                              /**< Network ID of the destroyed building. */
 };
 
 /**
@@ -260,7 +293,7 @@ struct BuildingDestroyedPacket {
  * @brief Server → Client: a team completed an upgrade path.
  */
 struct UpgradeCompletedPacket {
-    PacketType type   = PacketType::UPGRADE_COMPLETED;
-    uint32_t   pathId = 0;    ///< UpgradePathID
-    uint32_t   teamId = 0;    ///< Which team completed it
+    PacketType type   = PacketType::UPGRADE_COMPLETED; /**< Packet type identifier. */
+    uint32_t   pathId = 0;    ///< UpgradePathID that was completed.
+    uint32_t   teamId = 0;    ///< Which team completed it.
 };

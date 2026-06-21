@@ -9,9 +9,9 @@ namespace UpgradeSystem {
 
     /// Per-team upgrade state.
     struct TeamState {
-        int baseLevel = 1;
-        std::vector<UpgradePathID> completedPaths;
-        int killCount = 0;
+        int baseLevel = 1;                          ///< Current base level (gates base upgrades).
+        std::vector<UpgradePathID> completedPaths;  ///< IDs of completed upgrade paths.
+        int killCount = 0;                          ///< Enemy kills (used by KillCount requirements).
     };
 
     /// Initialise / reset all team state.

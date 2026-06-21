@@ -184,8 +184,8 @@ inline const char* SpecialBuildingTypeName(SpecialBuildingType t) {
  * @brief Defines the cost to upgrade a building to the next tier.
  */
 struct UpgradeRequirement {
-    ResourceInventory cost;
-    float buildTime = 5.0f; // Seconds to complete upgrade
+    ResourceInventory cost;       ///< Resource cost of the upgrade.
+    float buildTime = 5.0f;       ///< Seconds to complete the upgrade.
 };
 
 // ---------------------------------------------------------------------------
@@ -201,13 +201,13 @@ struct UpgradeRequirement {
  */
 struct TribeBuildingData {
     // Kostenmultiplikatoren (1.0 = Standard)
-    float storageCostMul      = 1.0f;
-    float barracksCostMul     = 1.0f;
-    float upgradeCostMul      = 1.0f;
-    float conversionCostMul   = 1.0f;
-    float defenseCostMul      = 1.0f;
-    float attackCostMul       = 1.0f;
-    float outpostCostMul      = 1.0f;
+    float storageCostMul      = 1.0f; ///< Storage building cost multiplier.
+    float barracksCostMul     = 1.0f; ///< Barracks building cost multiplier.
+    float upgradeCostMul      = 1.0f; ///< Upgrade building cost multiplier.
+    float conversionCostMul   = 1.0f; ///< Conversion building cost multiplier.
+    float defenseCostMul      = 1.0f; ///< Defense building cost multiplier.
+    float attackCostMul       = 1.0f; ///< Attack building cost multiplier.
+    float outpostCostMul      = 1.0f; ///< Outpost building cost multiplier.
 
     // Stat-Multiplikatoren
     float storageCapacityMul  = 1.0f; ///< Erhöhtes Ressourcen-Limit
@@ -217,9 +217,9 @@ struct TribeBuildingData {
     float attackDmgMul        = 1.0f; ///< Mehr Angriffsschaden
 
     // Spezialgebäude, die dieser Stamm freischaltet (1–2 Stück)
-    SpecialBuildingType specialA = SpecialBuildingType::NectarRefinery;
-    SpecialBuildingType specialB = SpecialBuildingType::NectarRefinery; // ggf. doppelt = nur 1
-    bool hasSpecialB = false;
+    SpecialBuildingType specialA = SpecialBuildingType::NectarRefinery; ///< First special building this tribe unlocks.
+    SpecialBuildingType specialB = SpecialBuildingType::NectarRefinery; ///< Second special (may equal specialA = only one).
+    bool hasSpecialB = false; ///< Whether the tribe has a distinct second special building.
 };
 
 /**
@@ -620,33 +620,35 @@ inline std::vector<SpecialBuildingType> GetSpecialBuildingsForTribe(BugClass bc)
  * Für Special-Gebäude enthält `specialType` den Spezialtyp.
  */
 struct BuildingComponent {
-    BuildingType type;
-    BugClass ownerClass;
-    uint32_t teamId = 0;
-    uint32_t tier  = 1;
+    BuildingType type;       ///< General building category.
+    BugClass ownerClass;     ///< Tribe that owns the building (drives bonuses).
+    uint32_t teamId = 0;     ///< Owning team.
+    uint32_t tier  = 1;      ///< Current tier/level (legacy field, see currentTier).
 
     /// Für BuildingType::Special: der genaue Spezialgebäudetyp.
     SpecialBuildingType specialType = SpecialBuildingType::NectarRefinery;
 
-    float hp    = 100.0f;
-    float maxHp = 100.0f;
+    float hp    = 100.0f;    ///< Current hit points.
+    float maxHp = 100.0f;    ///< Maximum hit points.
 
-    bool destroyed = false;
+    bool destroyed = false;  ///< True once the building has been destroyed.
 
-    uint32_t currentTier = 1;
-    uint32_t maxTier = 3;
+    uint32_t currentTier = 1; ///< Current upgrade tier.
+    uint32_t maxTier = 3;     ///< Highest reachable tier.
 
-    bool isUpgrading      = false;
-    float upgradeTimer    = 0.0f;
-    float currentUpgradeTime = 0.0f;
-    bool upgradedThisTick = false;
+    bool isUpgrading      = false; ///< True while an upgrade is in progress.
+    float upgradeTimer    = 0.0f;  ///< Seconds remaining on the current upgrade.
+    float currentUpgradeTime = 0.0f; ///< Total duration of the current upgrade.
+    bool upgradedThisTick = false; ///< Set the tick an upgrade completes (for broadcast).
 
     BuildingComponent() = default;
+    /// @brief Constructs a general building (defaults specialType to NectarRefinery).
     BuildingComponent(BuildingType t, uint32_t tid, uint32_t tier_, float initialHp, float maxInitialHp, bool destroyed_)
         : type(t), ownerClass(BugClass::Termites), teamId(tid), tier(tier_),
           specialType(SpecialBuildingType::NectarRefinery),
           hp(initialHp), maxHp(maxInitialHp), destroyed(destroyed_) {}
 
+    /// @brief Constructs a building with an explicit special-building type.
     BuildingComponent(BuildingType t, uint32_t tid, uint32_t tier_,
                       SpecialBuildingType st_, float initialHp, float maxInitialHp, bool destroyed_)
         : type(t), ownerClass(BugClass::Termites), teamId(tid), tier(tier_),

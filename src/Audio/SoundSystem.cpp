@@ -8,18 +8,19 @@
 
 // ── Minimaler WAV-Parser ──────────────────────────────────────────────────────
 
+/// @brief Canonical RIFF/WAVE file header layout used by LoadWAVFile().
 struct WavHeader {
-    char     riff[4];
-    uint32_t chunkSize;
-    char     wave[4];
-    char     fmt[4];
-    uint32_t fmtSize;
-    uint16_t audioFormat;
-    uint16_t numChannels;
-    uint32_t sampleRate;
-    uint32_t byteRate;
-    uint16_t blockAlign;
-    uint16_t bitsPerSample;
+    char     riff[4];      ///< "RIFF" magic.
+    uint32_t chunkSize;    ///< File size minus 8.
+    char     wave[4];      ///< "WAVE" magic.
+    char     fmt[4];       ///< "fmt " chunk id.
+    uint32_t fmtSize;      ///< Size of the fmt chunk.
+    uint16_t audioFormat;  ///< 1 = PCM.
+    uint16_t numChannels;  ///< 1 = mono, 2 = stereo.
+    uint32_t sampleRate;   ///< Samples per second.
+    uint32_t byteRate;     ///< Bytes per second.
+    uint16_t blockAlign;   ///< Frame size in bytes.
+    uint16_t bitsPerSample; ///< Bits per sample (8 / 16).
 };
 
 static bool LoadWAVFile(const std::string& path,

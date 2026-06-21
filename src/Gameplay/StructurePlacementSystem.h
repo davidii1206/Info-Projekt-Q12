@@ -4,14 +4,18 @@
 
 class WorldManager;
 
+/**
+ * @struct StructurePlacementConfig
+ * @brief Parameters controlling faction-base and neutral-node placement.
+ */
 struct StructurePlacementConfig {
-    uint32_t seed         = 12345;
-    const char* baseModelPath = "assets/prim_sphere_red.glb";
-    const char* nodeModelPath = "assets/prim_cylinder_brown.glb";
-    float baseModelScale  = 2.5f;
-    float nodeModelScale  = 1.5f;
-    int   maxNeutralNodes = 16;
-    float nodeMinSpacing  = 15.0f; // world-unit radius between neutral nodes
+    uint32_t seed         = 12345; ///< Deterministic placement seed.
+    const char* baseModelPath = "assets/prim_sphere_red.glb";     ///< Model for faction bases.
+    const char* nodeModelPath = "assets/prim_cylinder_brown.glb"; ///< Model for neutral nodes.
+    float baseModelScale  = 2.5f;  ///< Scale applied to base models.
+    float nodeModelScale  = 1.5f;  ///< Scale applied to node models.
+    int   maxNeutralNodes = 16;    ///< Maximum number of neutral resource nodes.
+    float nodeMinSpacing  = 15.0f; ///< Minimum world-unit radius between neutral nodes.
 };
 
 namespace StructurePlacementSystem {

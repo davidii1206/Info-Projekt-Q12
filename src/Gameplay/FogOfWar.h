@@ -114,6 +114,7 @@ struct FogGrid
         }
     }
 
+    /// @return True if the cell (cx, cz) has been revealed.
     bool IsRevealed(int cx, int cz) const
     {
         if (!InBounds(cx, cz)) return false;
@@ -123,6 +124,7 @@ struct FogGrid
     /// Resets all cells to hidden (useful on map restart).
     void Reset() { revealed.assign(revealed.size(), false); }
 
+    /// @return True once Init() has allocated the grid.
     bool IsInitialised() const { return !revealed.empty(); }
 };
 

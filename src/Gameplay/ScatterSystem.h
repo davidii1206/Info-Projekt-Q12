@@ -63,8 +63,8 @@ struct ScatterLayer {
     std::vector<BugClass> biomes;
 
     /// Allowed normalized-height band [0..1] sampled from the heightmap.
-    float minHeight = 0.0f;
-    float maxHeight = 1.0f;
+    float minHeight = 0.0f; ///< Lower bound of the allowed normalized-height band.
+    float maxHeight = 1.0f; ///< Upper bound of the allowed normalized-height band.
 
     /// Maximum ground steepness [0..1] (0 = flat only, 1 = any slope).
     float maxSlope = 1.0f;
@@ -73,8 +73,8 @@ struct ScatterLayer {
     float density = 0.25f;
 
     /// Uniform scale range applied to each instance.
-    float minScale = 0.8f;
-    float maxScale = 1.2f;
+    float minScale = 0.8f; ///< Lower bound of the uniform per-instance scale.
+    float maxScale = 1.2f; ///< Upper bound of the uniform per-instance scale.
 
     /// Per-axis multiplier applied on top of the uniform scale.
     /// Use to squash/stretch a model without changing its art: e.g.
@@ -98,8 +98,8 @@ struct ScatterLayer {
     /// Independent random scale jitter applied per-instance on top of the uniform
     /// minScale..maxScale range.  scaleXZJitter controls width (X and Z together);
     /// scaleYJitter controls height.  Both are ±fractions, e.g. 0.20 → ±20 %.
-    float scaleXZJitter = 0.0f;
-    float scaleYJitter  = 0.0f;
+    float scaleXZJitter = 0.0f; ///< ±fraction random width jitter (X/Z).
+    float scaleYJitter  = 0.0f; ///< ±fraction random height jitter (Y).
 
     /// Reserved — tilt prop to follow terrain normal (good for rocks, bad for trees).
     /// Not yet implemented: requires per-tile normal from neighbouring heights.
@@ -120,8 +120,8 @@ struct ScatterConfig {
 
     /// World-space XZ extents the scatter covers. Match your terrain footprint.
     /// Overridden in GameScene to match the current world extent (±250).
-    glm::vec2 worldMin = {-250.f, -250.f};
-    glm::vec2 worldMax = { 250.f,  250.f};
+    glm::vec2 worldMin = {-250.f, -250.f}; ///< Minimum world XZ corner of the scatter area.
+    glm::vec2 worldMax = { 250.f,  250.f}; ///< Maximum world XZ corner of the scatter area.
 
     /// Spacing (world units) between candidate points. Smaller = denser & slower.
     float spacing = 2.0f;

@@ -32,13 +32,14 @@ struct Light {
  * @brief ECS component for entities that emit light.
  */
 struct LightComponent {
-    LightType type      = LightType::Point;
-    glm::vec3 color     = {1.0f, 1.0f, 1.0f};
-    float     intensity = 1.0f;
-    float     range     = 10.0f;
-    glm::vec3 direction = {0.0f, -1.0f, 0.0f};
+    LightType type      = LightType::Point;   ///< Light type (directional/point/spot).
+    glm::vec3 color     = {1.0f, 1.0f, 1.0f}; ///< Light colour (linear RGB).
+    float     intensity = 1.0f;               ///< Brightness multiplier.
+    float     range     = 10.0f;              ///< Effective range (for point/spot).
+    glm::vec3 direction = {0.0f, -1.0f, 0.0f}; ///< Direction (for directional/spot).
 
-    LightComponent() = default;
+    LightComponent() = default; ///< Default constructor.
+    /// @brief Constructs a light with explicit parameters.
     LightComponent(LightType t, glm::vec3 c, float i, float r,
                    glm::vec3 d = {0.f, -1.f, 0.f})
         : type(t), color(c), intensity(i), range(r), direction(d) {}

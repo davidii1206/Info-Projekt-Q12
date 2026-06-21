@@ -93,6 +93,7 @@ public:
      * @param func Function to execute for the pass.
      * @param needsDepth Whether the pass needs a depth buffer.
      * @param preFunc Optional function to execute before the pass (e.g., for clearing).
+     * @param depthClearValue Value used to clear the depth attachment (default 0.0).
      */
     void AddPass(const std::string& name, Framebuffer* target, std::function<void(RenderContext&)> func, bool needsDepth = true, std::function<void(SDL_GPUCommandBuffer*)> preFunc = nullptr, float depthClearValue = 0.0f);
 

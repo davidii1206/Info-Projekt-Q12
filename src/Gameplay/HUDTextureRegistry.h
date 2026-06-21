@@ -163,7 +163,7 @@ public:
     void Clear() { m_Textures.clear(); }
 
 private:
-    std::unordered_map<std::string, std::unique_ptr<Texture>> m_Textures;
+    std::unordered_map<std::string, std::unique_ptr<Texture>> m_Textures; ///< Cache of loaded HUD textures keyed by path/name.
 };
 
 // ---------------------------------------------------------------------------

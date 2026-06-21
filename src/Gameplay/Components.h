@@ -96,7 +96,7 @@ struct ScatterPropComponent {
  */
 struct StructureComponent {
     uint16_t territoryId  = 0xFFFF; /**< Owning territory, or 0xFFFF for neutral. */
-    bool     isFactionBase = false;
+    bool     isFactionBase = false; /**< True for a faction base marker, false for a neutral node. */
 };
 
 // ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ struct PhysicsBodyComponent {
  * @brief Links an ECS entity to a Jolt Physics body.
  */
 struct PhysicsComponent {
-    JPH::BodyID bodyID;
+    JPH::BodyID bodyID; ///< The Jolt physics body backing this entity.
 };
 
 /**
@@ -166,7 +166,8 @@ struct HealthComponent {
     float maxHp = 100.f; ///< Maximum hit points.
     bool  dead  = false; ///< True once hp <= 0.
 
-    HealthComponent() = default;
+    HealthComponent() = default; ///< Default constructor.
+    /// @brief Constructs full health with the given maximum.
     explicit HealthComponent(float max) : hp(max), maxHp(max) {}
 };
 
@@ -198,10 +199,10 @@ struct MovementOrderComponent {
  * @brief Marks an entity as a team base with health (destroyable).
  */
 struct BaseHealthComponent {
-    uint32_t teamId = 0;
-    float    hp     = 500.f;
-    float    maxHp  = 500.f;
-    bool     destroyed = false;
+    uint32_t teamId = 0;       ///< Owning team.
+    float    hp     = 500.f;   ///< Current base hit points.
+    float    maxHp  = 500.f;   ///< Maximum base hit points.
+    bool     destroyed = false; ///< True once the base is destroyed.
 };
 
 // ---------------------------------------------------------------------------
@@ -220,10 +221,10 @@ struct GhostComponent {};
  * @brief Building under construction — slides up from below ground over time.
  */
 struct ConstructionComponent {
-    float elapsed  = 0.f;
-    float duration = 2.f;
-    float startY   = 0.f;
-    float targetY  = 0.f;
+    float elapsed  = 0.f; ///< Elapsed construction time (seconds).
+    float duration = 2.f; ///< Total slide-up duration (seconds).
+    float startY   = 0.f; ///< Starting Y (below ground).
+    float targetY  = 0.f; ///< Final Y (resting on terrain).
 };
 
 // ---------------------------------------------------------------------------
@@ -294,7 +295,8 @@ struct SpecialBuildingComponent {
     float               cooldownTotal  = 0.f; ///< Total cooldown time
     bool                active         = true; ///< Whether the effect is running
 
-    SpecialBuildingComponent() = default;
+    SpecialBuildingComponent() = default; ///< Default constructor.
+    /// @brief Constructs from a special type, seeding effect values from its info.
     explicit SpecialBuildingComponent(SpecialBuildingType t)
         : specialType(t)
     {

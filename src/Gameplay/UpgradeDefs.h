@@ -18,7 +18,7 @@ enum class UpgradeReqType : uint8_t {
 
 /// One requirement that must be met before an upgrade can be taken.
 struct UpgradeRequirementDef {
-    UpgradeReqType type = UpgradeReqType::Resources;
+    UpgradeReqType type = UpgradeReqType::Resources; ///< Which kind of requirement this is.
 
     /// For Resources: the minimum amounts needed.
     ResourceInventory cost;
@@ -36,38 +36,38 @@ struct UpgradeRequirementDef {
 /// Passive bonuses granted by completing an upgrade path.
 struct UpgradeEffectDef {
     // Unit stat modifiers (multiplied into base values)
-    float unitDamageMul     = 1.0f;
-    float unitDefenseMul    = 1.0f;
-    float unitSpeedMul      = 1.0f;
+    float unitDamageMul     = 1.0f; ///< Unit attack-damage multiplier.
+    float unitDefenseMul    = 1.0f; ///< Unit defense/damage-reduction multiplier.
+    float unitSpeedMul      = 1.0f; ///< Unit movement-speed multiplier.
 
     // Building modifiers
-    float buildingHpMul     = 1.0f;
-    float buildingCostMul   = 1.0f;
+    float buildingHpMul     = 1.0f; ///< Building max-HP multiplier.
+    float buildingCostMul   = 1.0f; ///< Building cost multiplier.
 
     // Economy modifiers
-    float resourceGatherRateMul = 1.0f;
-    float resourceStorageMul    = 1.0f;
+    float resourceGatherRateMul = 1.0f; ///< Resource gather-rate multiplier.
+    float resourceStorageMul    = 1.0f; ///< Resource storage-capacity multiplier.
 
     // Production modifiers
-    float unitSpawnRateMul  = 1.0f;
-    float conversionRateMul = 1.0f;
+    float unitSpawnRateMul  = 1.0f; ///< Unit spawn-rate multiplier.
+    float conversionRateMul = 1.0f; ///< Conversion-building rate multiplier.
 
     // Unlocks (Count = nothing unlocked)
-    BuildingType unlockBuilding       = BuildingType::Count;
-    SpecialBuildingType unlockSpecial = SpecialBuildingType::Count;
+    BuildingType unlockBuilding       = BuildingType::Count;        ///< Building unlocked (Count = none).
+    SpecialBuildingType unlockSpecial = SpecialBuildingType::Count; ///< Special building unlocked (Count = none).
 };
 
 /// An upgrade path: one purchaseable upgrade with requirements and effects.
 struct UpgradePathDef {
-    UpgradePathID id;
-    const char*   name        = "Unnamed Upgrade";
-    const char*   description = "";
+    UpgradePathID id;                          ///< Unique path identifier.
+    const char*   name        = "Unnamed Upgrade"; ///< Display name.
+    const char*   description = "";            ///< Tooltip / description text.
 
     /// Building type this upgrade applies to (Main → base upgrade, Count → base upgrade)
     BuildingType appliesTo    = BuildingType::Count;
 
-    std::vector<UpgradeRequirementDef> requirements;
-    UpgradeEffectDef effects;
+    std::vector<UpgradeRequirementDef> requirements; ///< All conditions that must be met.
+    UpgradeEffectDef effects;                         ///< Bonuses granted on completion.
 };
 
 // ---------------------------------------------------------------------------

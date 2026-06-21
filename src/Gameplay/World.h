@@ -123,6 +123,7 @@ public:
      */
     PhysicsServer*  GetPhysicsServer()    { return m_Physics; }
 
+    /// @brief Sets the post-processor used during the world's render pass.
     void SetPostProcessor(PostProcessor* pp) { m_PostProcessor = pp; }
 
 private:

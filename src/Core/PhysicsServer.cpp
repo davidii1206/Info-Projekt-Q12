@@ -56,11 +56,13 @@ public:
         mMap[ObjectLayers::TRIGGER] = BPLayers::MOVING; // triggers move with the world
     }
 
+    /// @return Number of broadphase layers in use.
     uint32 GetNumBroadPhaseLayers() const override
     {
         return BPLayers::COUNT;
     }
 
+    /// @brief Maps an ObjectLayer to its broadphase layer.
     BroadPhaseLayer GetBroadPhaseLayer(ObjectLayer inLayer) const override
     {
         assert(inLayer < ObjectLayers::COUNT);
@@ -80,7 +82,7 @@ public:
 #endif
 
 private:
-    BroadPhaseLayer mMap[ObjectLayers::COUNT];
+    BroadPhaseLayer mMap[ObjectLayers::COUNT]; ///< ObjectLayer → BroadPhaseLayer mapping.
 };
 
 /**
@@ -90,6 +92,7 @@ private:
 class BugminObjVsBPLayerFilter final : public ObjectVsBroadPhaseLayerFilter
 {
 public:
+    /// @return True if the object layer should be tested against the broadphase layer.
     bool ShouldCollide(ObjectLayer inObjLayer, BroadPhaseLayer inBPLayer) const override
     {
         switch (inObjLayer)
@@ -149,6 +152,7 @@ public:
 class BugminContactListener final : public ContactListener
 {
 public:
+    /// @brief Called before a contact is added; we accept every pair.
     ValidateResult OnContactValidate(
         const Body&,
         const Body&,
@@ -158,6 +162,7 @@ public:
         return ValidateResult::AcceptAllContactsForThisBodyPair;
     }
 
+    /// @brief Called once when a new contact between two bodies starts.
     void OnContactAdded(
         const Body&            b1,
         const Body&            b2,
@@ -169,7 +174,9 @@ public:
         (void)b1; (void)b2;
     }
 
+    /// @brief Called every step a contact persists (no-op).
     void OnContactPersisted(const Body&, const Body&, const ContactManifold&, ContactSettings&) override {}
+    /// @brief Called when a contact ends (no-op).
     void OnContactRemoved(const SubShapeIDPair&) override {}
 };
 
@@ -180,7 +187,9 @@ public:
 class BugminBodyActivationListener final : public BodyActivationListener
 {
 public:
+    /// @brief Called when a body becomes active (currently unused).
     void OnBodyActivated  (const BodyID& id, uint64) override { (void)id; }
+    /// @brief Called when a body becomes inactive (currently unused).
     void OnBodyDeactivated(const BodyID& id, uint64) override { (void)id; }
 };
 

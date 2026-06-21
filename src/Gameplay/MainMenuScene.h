@@ -75,7 +75,7 @@ private:
     std::unique_ptr<Camera> m_Camera; /**< Main camera for the menu. */
 
     // Generation parameters
-    WorldGenConfig m_GenConfig;
-    Texture* m_DebugTexture = nullptr;
-    std::unique_ptr<WorldManager> m_WorldManager;
+    WorldGenConfig m_GenConfig;                     ///< Editable world-gen config for the preview.
+    Texture* m_DebugTexture = nullptr;              ///< Territory-preview texture (owned).
+    std::unique_ptr<WorldManager> m_WorldManager;   ///< World generator used for the menu preview.
 };

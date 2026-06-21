@@ -257,8 +257,8 @@ private:
      * @brief Internal tracking for connect/disconnect events.
      */
     struct ConnectionEvent {
-        uint32_t peerId;
-        bool isConnect;
+        uint32_t peerId;  ///< Peer identifier that connected/disconnected.
+        bool isConnect;   ///< True for a connect, false for a disconnect.
     };
     ThreadSafeQueue<ConnectionEvent> connectionEvents; /**< Queue for connectivity events. */
     
@@ -434,8 +434,8 @@ private:
      * @brief Tracker for connectivity changes.
      */
     struct ConnectionEvent {
-        uint32_t peerId;
-        bool isConnect;
+        uint32_t peerId;  ///< Peer identifier that connected/disconnected.
+        bool isConnect;   ///< True for a connect, false for a disconnect.
     };
     std::queue<ConnectionEvent> connectionQueue; /**< Internal queue for connection events. */
     std::mutex connectionMutex;                  /**< Mutex for connectionQueue. */

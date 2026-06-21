@@ -21,7 +21,7 @@
  * @brief All collectable resource categories in the game.
  */
 enum class ResourceType : uint8_t {
-    None    = 0,
+    None    = 0,  ///< No / invalid resource.
     Pilze   = 1,  ///< Mushrooms  – found near trees / shaded areas
     Beeren  = 2,  ///< Berries    – bushes and clearings
     Nektar  = 3,  ///< Nectar     – flowers
@@ -65,6 +65,7 @@ struct ResourceComponent {
     bool         depleted   = false;              ///< True while waiting to respawn.
 
     ResourceComponent() = default;
+    /// @brief Constructs a resource node of the given type, amount and respawn behaviour.
     ResourceComponent(ResourceType t, int amt, bool perm, float respawn = 30.f)
         : type(t), amount(amt), permanent(perm), respawnTime(respawn) {}
 };
@@ -101,12 +102,12 @@ struct BaseComponent {
  * units to track what they are currently carrying.
  */
 struct ResourceInventory {
-    int pilze    = 0;
-    int beeren   = 0;
-    int nektar   = 0;
-    int samen    = 0;
-    int insekten = 0;
-    int fleisch  = 0;
+    int pilze    = 0; ///< Mushrooms held.
+    int beeren   = 0; ///< Berries held.
+    int nektar   = 0; ///< Nectar held.
+    int samen    = 0; ///< Seeds held.
+    int insekten = 0; ///< Insects held.
+    int fleisch  = 0; ///< Meat held.
 
     /// Adds `amount` of the given type.
     void Add(ResourceType t, int amount) {

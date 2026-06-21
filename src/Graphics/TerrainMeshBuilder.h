@@ -19,8 +19,8 @@ namespace TerrainMeshBuilder {
 /// CPU-side terrain mesh: plateau tops, cliff walls and ramp wedges, flat
 /// shaded with per-tier vertex colors (see ModelVertex::color).
 struct TerrainMeshData {
-    std::vector<ModelVertex> vertices;
-    std::vector<uint32_t> indices;
+    std::vector<ModelVertex> vertices; ///< CPU-side terrain vertices.
+    std::vector<uint32_t> indices;     ///< Triangle indices into @ref vertices.
 };
 
 /// Builds the full-grid terrain mesh from world.GetTiles(). Deterministic -

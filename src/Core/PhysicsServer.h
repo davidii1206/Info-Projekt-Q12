@@ -88,7 +88,7 @@ struct PhysicsServerConfig
 class PhysicsServer
 {
 public:
-    using Config = PhysicsServerConfig;
+    using Config = PhysicsServerConfig; ///< Convenience alias for PhysicsServerConfig.
 
     /**
      * @brief Constructs the PhysicsServer with an optional configuration.
@@ -237,24 +237,24 @@ private:
     /** @brief Scans tracked bodies and populates the snapshot list. */
     void CollectSnapshots();
 
-    Config mCfg;
+    Config mCfg; ///< Active configuration.
 
-    std::unique_ptr<JPH::TempAllocatorImpl>    mTempAllocator;
-    std::unique_ptr<JPH::JobSystemThreadPool>  mJobSystem;
-    std::unique_ptr<JPH::PhysicsSystem>        mPhysicsSystem;
+    std::unique_ptr<JPH::TempAllocatorImpl>    mTempAllocator; ///< Jolt temporary allocator.
+    std::unique_ptr<JPH::JobSystemThreadPool>  mJobSystem;     ///< Jolt worker thread pool.
+    std::unique_ptr<JPH::PhysicsSystem>        mPhysicsSystem; ///< The Jolt physics system.
 
-    std::unique_ptr<BugminBPLayerInterface>       mBPLayerInterface;
-    std::unique_ptr<BugminObjVsBPLayerFilter>     mObjVsBPLayerFilter;
-    std::unique_ptr<BugminObjLayerPairFilter>     mObjLayerPairFilter;
-    std::unique_ptr<BugminContactListener>        mContactListener;
-    std::unique_ptr<BugminBodyActivationListener> mBodyActivationListener;
+    std::unique_ptr<BugminBPLayerInterface>       mBPLayerInterface;       ///< Broadphase layer interface.
+    std::unique_ptr<BugminObjVsBPLayerFilter>     mObjVsBPLayerFilter;     ///< Object-vs-broadphase filter.
+    std::unique_ptr<BugminObjLayerPairFilter>     mObjLayerPairFilter;     ///< Object-layer pair filter.
+    std::unique_ptr<BugminContactListener>        mContactListener;        ///< Contact event listener.
+    std::unique_ptr<BugminBodyActivationListener> mBodyActivationListener; ///< Body activation listener.
 
-    std::unordered_map<uint32_t, JPH::BodyID> mEntityToBody;
-    std::unordered_map<uint32_t, uint32_t>    mBodyToEntity;
+    std::unordered_map<uint32_t, JPH::BodyID> mEntityToBody; ///< Maps entity ID → Jolt body.
+    std::unordered_map<uint32_t, uint32_t>    mBodyToEntity; ///< Maps body index → entity ID.
 
-    std::vector<TransformSnapshot> mSnapshots;
+    std::vector<TransformSnapshot> mSnapshots; ///< Per-step snapshots of tracked bodies.
 
-    float    mAccumulator = 0.f;
-    uint64_t mStepCount   = 0;
-    bool     mInitialised = false;
+    float    mAccumulator = 0.f;   ///< Fixed-timestep accumulator.
+    uint64_t mStepCount   = 0;     ///< Total simulation steps performed.
+    bool     mInitialised = false; ///< Whether Init() has run.
 };
