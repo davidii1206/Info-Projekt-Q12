@@ -15,40 +15,34 @@
 ########################
 
 //Enable CoreAudio backend
-ALSOFT_BACKEND_COREAUDIO:BOOL=OFF
+ALSOFT_BACKEND_COREAUDIO:BOOL=ON
 
 //Enable DirectSound backend
 ALSOFT_BACKEND_DSOUND:BOOL=ON
 
 //Enable JACK backend
-ALSOFT_BACKEND_JACK:BOOL=OFF
+ALSOFT_BACKEND_JACK:BOOL=ON
 
 //Enable Oboe backend
 ALSOFT_BACKEND_OBOE:BOOL=ON
 
 //Enable OpenSL backend
-ALSOFT_BACKEND_OPENSL:BOOL=OFF
-
-//No help, variable specified on the command line.
-ALSOFT_BACKEND_OSS:UNINITIALIZED=OFF
+ALSOFT_BACKEND_OPENSL:BOOL=ON
 
 //Enable PipeWire backend
 ALSOFT_BACKEND_PIPEWIRE:BOOL=OFF
 
 //Enable PortAudio backend
-ALSOFT_BACKEND_PORTAUDIO:BOOL=OFF
+ALSOFT_BACKEND_PORTAUDIO:BOOL=ON
 
 //Enable PulseAudio backend
-ALSOFT_BACKEND_PULSEAUDIO:BOOL=OFF
+ALSOFT_BACKEND_PULSEAUDIO:BOOL=ON
 
 //Enable SDL2 backend
 ALSOFT_BACKEND_SDL2:BOOL=OFF
 
 //Enable SDL3 backend
 ALSOFT_BACKEND_SDL3:BOOL=OFF
-
-//No help, variable specified on the command line.
-ALSOFT_BACKEND_SNDIO:UNINITIALIZED=OFF
 
 //Enable WASAPI backend
 ALSOFT_BACKEND_WASAPI:BOOL=ON
@@ -93,7 +87,7 @@ ALSOFT_EAX:BOOL=ON
 ALSOFT_EMBED_HRTF_DATA:BOOL=ON
 
 //Enable use of C++20 modules when supported
-ALSOFT_ENABLE_MODULES:BOOL=OFF
+ALSOFT_ENABLE_MODULES:BOOL=ON
 
 //Build example programs
 ALSOFT_EXAMPLES:BOOL=ON
@@ -128,11 +122,14 @@ ALSOFT_INSTALL_UTILS:BOOL=ON
 //Disable building the alsoft-config utility
 ALSOFT_NO_CONFIG_UTIL:BOOL=OFF
 
+//Do not define GUIDs, IIDs, CLSIDs, or PropertyKeys
+ALSOFT_NO_UID_DEFS:BOOL=OFF
+
 //Require CoreAudio backend
 ALSOFT_REQUIRE_COREAUDIO:BOOL=OFF
 
 //Require DirectSound backend
-ALSOFT_REQUIRE_DSOUND:BOOL=ON
+ALSOFT_REQUIRE_DSOUND:BOOL=OFF
 
 //Require JACK backend
 ALSOFT_REQUIRE_JACK:BOOL=OFF
@@ -174,10 +171,10 @@ ALSOFT_REQUIRE_SSE3:BOOL=OFF
 ALSOFT_REQUIRE_SSE4_1:BOOL=OFF
 
 //Require WASAPI backend
-ALSOFT_REQUIRE_WASAPI:BOOL=ON
+ALSOFT_REQUIRE_WASAPI:BOOL=OFF
 
 //Require Windows Multimedia backend
-ALSOFT_REQUIRE_WINMM:BOOL=ON
+ALSOFT_REQUIRE_WINMM:BOOL=OFF
 
 //Search the installation data directory
 ALSOFT_SEARCH_INSTALL_DATADIR:BOOL=OFF
@@ -228,9 +225,12 @@ CMAKE_ADDR2LINE:FILEPATH=/usr/bin/x86_64-w64-mingw32-addr2line
 //Path to a program.
 CMAKE_AR:FILEPATH=/usr/bin/x86_64-w64-mingw32-ar
 
-//Choose the type of build, options are: Debug Release RelWithDebInfo
-// MinSizeRel.
+//Choose the type of build, options are: None Debug Release RelWithDebInfo
+// MinSizeRel ...
 CMAKE_BUILD_TYPE:STRING=RelWithDebInfo
+
+//Enable/Disable color output during build.
+CMAKE_COLOR_MAKEFILE:BOOL=ON
 
 //A wrapper around 'ar' adding the appropriate '--plugin' option
 // for the GCC compiler
@@ -305,9 +305,6 @@ CMAKE_EXE_LINKER_FLAGS_RELEASE:STRING=
 //Flags used by the linker during RELWITHDEBINFO builds.
 CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO:STRING=
 
-//Enable/Disable output of build database during the build.
-CMAKE_EXPORT_BUILD_DATABASE:BOOL=
-
 //Enable/Disable output of compile commands during generation.
 CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=
 
@@ -371,8 +368,8 @@ CMAKE_INSTALL_SYSCONFDIR:PATH=etc
 //Path to a program.
 CMAKE_LINKER:FILEPATH=/usr/bin/x86_64-w64-mingw32-ld
 
-//Program used to build from build.ninja files.
-CMAKE_MAKE_PROGRAM:FILEPATH=/usr/bin/ninja
+//Path to a program.
+CMAKE_MAKE_PROGRAM:FILEPATH=/usr/bin/make
 
 //Flags used by the linker during the creation of modules during
 // all build types.
@@ -507,8 +504,8 @@ CMAKE_STRIP:FILEPATH=/usr/bin/x86_64-w64-mingw32-strip
 //Path to a program.
 CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 
-//No help, variable specified on the command line.
-CMAKE_TOOLCHAIN_FILE:UNINITIALIZED=/home/david/Dokumente/coding_projects/bugmin/cmake/mingw-toolchain.cmake
+//The CMake toolchain file
+CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/david/Dokumente/coding_projects/bugmin/cmake/mingw-toolchain.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
@@ -822,6 +819,9 @@ JoltPhysics_IS_TOP_LEVEL:STATIC=OFF
 //Value Computed by CMake
 JoltPhysics_SOURCE_DIR:STATIC=/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/jolt-src/Build
 
+//Build OpenAL as static library to avoid DLL dependency
+LIBTYPE:STRING=STATIC
+
 //Extra compile options of LibUSB
 LibUSB_COMPILE_OPTIONS:STRING=
 
@@ -1060,14 +1060,14 @@ SDL_JOYSTICK:BOOL=ON
 //Use KMS DRM video driver
 SDL_KMSDRM:BOOL=OFF
 
+//Build a lean SDL library with reduced graphics functionality
+SDL_LEAN_AND_MEAN:BOOL=OFF
+
 //Use the system C library
 SDL_LIBC:BOOL=ON
 
 //Prefer iconv() from libiconv, if available, over libc version
 SDL_LIBICONV:BOOL=OFF
-
-//Enable libudev support
-SDL_LIBUDEV:BOOL=ON
 
 //Use MMX assembly routines
 SDL_MMX:BOOL=ON
@@ -1188,9 +1188,6 @@ SDL_X11:BOOL=OFF
 
 //Use Xinput for Windows
 SDL_XINPUT:BOOL=ON
-
-//sed executable
-SED_EXECUTABLE:FILEPATH=/usr/bin/sed
 
 //Path to a file.
 SNDFILE_INCLUDE_DIR:PATH=SNDFILE_INCLUDE_DIR-NOTFOUND
@@ -1416,9 +1413,6 @@ nlohmann_json_SOURCE_DIR:STATIC=/home/david/Dokumente/coding_projects/bugmin/bui
 //Path to a library.
 pkgcfg_lib_PC_LibUSB_usb-1.0:FILEPATH=pkgcfg_lib_PC_LibUSB_usb-1.0-NOTFOUND
 
-//Path to a library.
-pkgcfg_lib_PIPEWIRE_pipewire-0.3:FILEPATH=pkgcfg_lib_PIPEWIRE_pipewire-0.3-NOTFOUND
-
 //Value Computed by CMake
 spdlog_BINARY_DIR:STATIC=/home/david/Dokumente/coding_projects/bugmin/build-windows/_deps/spdlog-build
 
@@ -1454,6 +1448,8 @@ CMAKE_CACHE_MAJOR_VERSION:INTERNAL=4
 CMAKE_CACHE_MINOR_VERSION:INTERNAL=3
 //Patch version of cmake used to create the current loaded cache
 CMAKE_CACHE_PATCH_VERSION:INTERNAL=3
+//ADVANCED property for variable: CMAKE_COLOR_MAKEFILE
+CMAKE_COLOR_MAKEFILE-ADVANCED:INTERNAL=1
 //Path to CMake executable.
 CMAKE_COMMAND:INTERNAL=/usr/bin/cmake
 //Path to cpack program executable.
@@ -1508,14 +1504,12 @@ CMAKE_EXE_LINKER_FLAGS_MINSIZEREL-ADVANCED:INTERNAL=1
 CMAKE_EXE_LINKER_FLAGS_RELEASE-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO
 CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
-//ADVANCED property for variable: CMAKE_EXPORT_BUILD_DATABASE
-CMAKE_EXPORT_BUILD_DATABASE-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_EXPORT_COMPILE_COMMANDS
 CMAKE_EXPORT_COMPILE_COMMANDS-ADVANCED:INTERNAL=1
 //Name of external makefile project generator.
 CMAKE_EXTRA_GENERATOR:INTERNAL=
 //Name of generator.
-CMAKE_GENERATOR:INTERNAL=Ninja
+CMAKE_GENERATOR:INTERNAL=Unix Makefiles
 //Generator instance identifier.
 CMAKE_GENERATOR_INSTANCE:INTERNAL=
 //Name of generator platform.
@@ -2144,41 +2138,6 @@ PC_LibUSB_libusb-1.0_INCLUDEDIR:INTERNAL=
 PC_LibUSB_libusb-1.0_LIBDIR:INTERNAL=
 PC_LibUSB_libusb-1.0_PREFIX:INTERNAL=
 PC_LibUSB_libusb-1.0_VERSION:INTERNAL=
-PIPEWIRE_CFLAGS:INTERNAL=-I/usr/include/pipewire-0.3;-I/usr/include/spa-0.2;-D_REENTRANT;-fno-strict-aliasing;-fno-strict-overflow
-PIPEWIRE_CFLAGS_I:INTERNAL=
-PIPEWIRE_CFLAGS_OTHER:INTERNAL=-D_REENTRANT;-fno-strict-aliasing;-fno-strict-overflow
-PIPEWIRE_FOUND:INTERNAL=1
-PIPEWIRE_INCLUDEDIR:INTERNAL=/usr/include
-PIPEWIRE_INCLUDE_DIRS:INTERNAL=/usr/include/pipewire-0.3;/usr/include/spa-0.2
-PIPEWIRE_LDFLAGS:INTERNAL=-L/usr/lib;-lpipewire-0.3
-PIPEWIRE_LDFLAGS_OTHER:INTERNAL=
-PIPEWIRE_LIBDIR:INTERNAL=/usr/lib
-PIPEWIRE_LIBRARIES:INTERNAL=pipewire-0.3
-PIPEWIRE_LIBRARY_DIRS:INTERNAL=/usr/lib
-PIPEWIRE_LIBS:INTERNAL=
-PIPEWIRE_LIBS_L:INTERNAL=
-PIPEWIRE_LIBS_OTHER:INTERNAL=
-PIPEWIRE_LIBS_PATHS:INTERNAL=
-PIPEWIRE_MODULE_NAME:INTERNAL=libpipewire-0.3
-PIPEWIRE_PREFIX:INTERNAL=/usr
-PIPEWIRE_STATIC_CFLAGS:INTERNAL=-I/usr/include/pipewire-0.3;-I/usr/include/spa-0.2;-D_REENTRANT;-fno-strict-aliasing;-fno-strict-overflow
-PIPEWIRE_STATIC_CFLAGS_I:INTERNAL=
-PIPEWIRE_STATIC_CFLAGS_OTHER:INTERNAL=-D_REENTRANT;-fno-strict-aliasing;-fno-strict-overflow
-PIPEWIRE_STATIC_INCLUDE_DIRS:INTERNAL=/usr/include/pipewire-0.3;/usr/include/spa-0.2
-PIPEWIRE_STATIC_LDFLAGS:INTERNAL=-L/usr/lib;-lpipewire-0.3
-PIPEWIRE_STATIC_LDFLAGS_OTHER:INTERNAL=
-PIPEWIRE_STATIC_LIBDIR:INTERNAL=
-PIPEWIRE_STATIC_LIBRARIES:INTERNAL=pipewire-0.3
-PIPEWIRE_STATIC_LIBRARY_DIRS:INTERNAL=/usr/lib
-PIPEWIRE_STATIC_LIBS:INTERNAL=
-PIPEWIRE_STATIC_LIBS_L:INTERNAL=
-PIPEWIRE_STATIC_LIBS_OTHER:INTERNAL=
-PIPEWIRE_STATIC_LIBS_PATHS:INTERNAL=
-PIPEWIRE_VERSION:INTERNAL=1.6.6
-PIPEWIRE_libpipewire-0.3_INCLUDEDIR:INTERNAL=
-PIPEWIRE_libpipewire-0.3_LIBDIR:INTERNAL=
-PIPEWIRE_libpipewire-0.3_PREFIX:INTERNAL=
-PIPEWIRE_libpipewire-0.3_VERSION:INTERNAL=
 //ADVANCED property for variable: PKG_CONFIG_ARGN
 PKG_CONFIG_ARGN-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: PKG_CONFIG_EXECUTABLE
@@ -2206,12 +2165,8 @@ ZLIB_LIBRARY_RELEASE-ADVANCED:INTERNAL=1
 //CMAKE_INSTALL_PREFIX during last run
 _GNUInstallDirs_LAST_CMAKE_INSTALL_PREFIX:INTERNAL=/usr/local
 __pkg_config_arguments_PC_LibUSB:INTERNAL=libusb-1.0>=1.0.16
-__pkg_config_arguments_PIPEWIRE:INTERNAL=libpipewire-0.3>=0.3.23
 __pkg_config_checked_PC_LibUSB:INTERNAL=1
-__pkg_config_checked_PIPEWIRE:INTERNAL=1
 //ADVANCED property for variable: pkgcfg_lib_PC_LibUSB_usb-1.0
 pkgcfg_lib_PC_LibUSB_usb-1.0-ADVANCED:INTERNAL=1
-//ADVANCED property for variable: pkgcfg_lib_PIPEWIRE_pipewire-0.3
-pkgcfg_lib_PIPEWIRE_pipewire-0.3-ADVANCED:INTERNAL=1
 prefix_result:INTERNAL=/usr/lib
 

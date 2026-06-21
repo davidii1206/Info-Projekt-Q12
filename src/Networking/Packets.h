@@ -37,6 +37,7 @@ enum class PacketType : uint8_t {
     RESOURCE_DEPLETED  = 16, /**< A resource node was depleted or destroyed. */
     BUILDING_SPAWNED   = 17, /**< A building was spawned. */
     BUILDING_DESTROYED = 18, /**< A building was destroyed. */
+    UPGRADE_COMPLETED  = 19, /**< An upgrade path was completed. */
 };
 
 /**
@@ -239,6 +240,7 @@ struct BuildingSpawnedPacket {
     uint32_t   netId   = 0;
     uint32_t   teamId  = 0;
     uint8_t    buildingType = 0; ///< BuildingType enum value.
+    uint8_t    specialType  = 0; ///< SpecialBuildingType enum value (for Special buildings).
     uint32_t   tier    = 1;
     float      x = 0.f, y = 0.f, z = 0.f;
     float      hp = 500.f, maxHp = 500.f;
@@ -251,4 +253,14 @@ struct BuildingSpawnedPacket {
 struct BuildingDestroyedPacket {
     PacketType type  = PacketType::BUILDING_DESTROYED;
     uint32_t   netId = 0;
+};
+
+/**
+ * @struct UpgradeCompletedPacket
+ * @brief Server → Client: a team completed an upgrade path.
+ */
+struct UpgradeCompletedPacket {
+    PacketType type   = PacketType::UPGRADE_COMPLETED;
+    uint32_t   pathId = 0;    ///< UpgradePathID
+    uint32_t   teamId = 0;    ///< Which team completed it
 };

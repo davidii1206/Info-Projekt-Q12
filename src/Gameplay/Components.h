@@ -225,3 +225,81 @@ struct ConstructionComponent {
     float startY   = 0.f;
     float targetY  = 0.f;
 };
+
+// ---------------------------------------------------------------------------
+// Barracks / Breeding Chamber Components
+// ---------------------------------------------------------------------------
+
+/**
+ * @struct BarracksComponent
+ * @brief Tags a building as a barracks (Brutkammer) that can spawn units.
+ *
+ * Server-side only.  A separate system reads the spawn queue and produces
+ * units over time.
+ */
+struct BarracksComponent {
+    /// Units queued for production (each entry = unit type / tier).
+    struct SpawnJob {
+        uint8_t  tier    = 1;   ///< 1–5 unit tier
+        float    timer   = 0.f; ///< Remaining production time
+        float    total   = 5.f; ///< Total time for this job
+    };
+
+    std::vector<SpawnJob> queue;        ///< FIFO spawn queue
+    float                 productionSpeed = 1.f; ///< Multiplier from tribe bonuses
+    uint32_t              maxQueueSize    = 5;   ///< Max queued spawns
+};
+
+/**
+ * @struct ConversionComponent
+ * @brief Tags a building as a conversion chamber (Konversions-Kammer).
+ *
+ * Defines an input → output recipe that runs automatically while the
+ * building has sufficient input resources in the team stockpile.
+ */
+struct ConversionComponent {
+    ResourceType inputType  = ResourceType::Nektar; ///< Input resource type
+    int          inputAmt   = 5;                     ///< Units consumed per cycle
+    ResourceType outputType = ResourceType::Pilze;   ///< Output resource type
+    int          outputAmt  = 3;                     ///< Units produced per cycle
+    float        cycleTime  = 3.f;                   ///< Seconds per conversion cycle
+    float        timer      = 0.f;                   ///< Remaining time
+    bool         active     = false;                 ///< Currently converting
+};
+
+/**
+ * @struct StorageComponent
+ * @brief Tags a building as a resource silo (Speicher).
+ *
+ * Increases the maximum resource capacity for the owning team.
+ * Multiple storage buildings stack multiplicatively or additively.
+ */
+struct StorageComponent {
+    int capacityBonus = 50;   ///< Additional capacity per resource type
+    bool isActive     = true; ///< False if the building is destroyed/under construction
+};
+
+/**
+ * @struct SpecialBuildingComponent
+ * @brief Tags a building as a tribe-specific special building.
+ *
+ * Contains runtime state for the special building's unique effect.
+ * The exact semantics depend on `specialType`.
+ */
+struct SpecialBuildingComponent {
+    SpecialBuildingType specialType;   ///< Which special building this is
+    float               effectValue;   ///< Current effect strength (may scale with tier)
+    float               effectRadius;  ///< Radius of effect
+    float               cooldownTimer  = 0.f; ///< Ability cooldown (if applicable)
+    float               cooldownTotal  = 0.f; ///< Total cooldown time
+    bool                active         = true; ///< Whether the effect is running
+
+    SpecialBuildingComponent() = default;
+    explicit SpecialBuildingComponent(SpecialBuildingType t)
+        : specialType(t)
+    {
+        auto info = GetSpecialBuildingInfo(t);
+        effectValue  = info.effectValue;
+        effectRadius = info.effectRadius;
+    }
+};

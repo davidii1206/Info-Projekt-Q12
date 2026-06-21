@@ -6,10 +6,13 @@
 #include "ResourceSystem.h"
 #include "Components.h"
 #include "ResourceTypes.h"
+#include "Bug_classes.h"
+#include "UpgradeSystem.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 #include <spdlog/spdlog.h>
 #include <limits>
+#include <unordered_set>
 
 namespace ResourceSystem
 {
@@ -41,20 +44,39 @@ namespace
     }
 
     /**
-     * @brief Finds the nearest non-depleted resource entity within detectRadius.
+     * @brief Determines the BugClass for a collector entity.
+     *
+     * Checks UnitComponent and PlayerComponent for bug class info.
+     * Falls back to a heuristic based on teamId (team 0 → Termites, team 1 → Ants).
+     */
+    BugClass GetCollectorBugClass(entt::registry& registry, entt::entity e) {
+        if (auto* uc = registry.try_get<UnitComponent>(e))
+            return uc->bugClass;
+        if (auto* pc = registry.try_get<PlayerComponent>(e))
+            return pc->bugClass;
+        return BugClass::Ants;
+    }
+
+    /**
+     * @brief Finds the nearest non-depleted resource entity within detectRadius
+     *        that matches one of the given acceptable resource types.
      * @return entt::null if none found.
      */
     entt::entity FindNearestResource(entt::registry& registry,
                                      const glm::vec3& from,
-                                     float            maxDist)
+                                     float            maxDist,
+                                     const std::unordered_set<ResourceType>& acceptable)
     {
         entt::entity best = entt::null;
-        float bestDist = maxDist * maxDist; // compare squared distances
+        float bestDist = maxDist * maxDist;
 
         auto view = registry.view<TransformComponent, ResourceComponent>();
         for (auto e : view) {
             const auto& res = view.get<ResourceComponent>(e);
             if (res.depleted) continue;
+            // Skip resources this bug class cannot eat
+            if (!acceptable.empty() && acceptable.find(res.type) == acceptable.end())
+                continue;
 
             const auto& tf = view.get<TransformComponent>(e);
             glm::vec3 diff3 = tf.position - from;
@@ -69,9 +91,6 @@ namespace
 
     /**
      * @brief Finds the nearest base entity for the given teamId.
-     *
-     * Checks both legacy BaseComponent and new BuildingComponent.
-     * @return entt::null if none found.
      */
     entt::entity FindBase(entt::registry& registry, uint32_t teamId)
     {
@@ -80,7 +99,6 @@ namespace
             if (view.get<BaseComponent>(e).teamId == teamId)
                 return e;
         }
-        // Also check new BuildingComponent (any type works as a depot)
         auto bldView = registry.view<TransformComponent, BuildingComponent>();
         for (auto e : bldView) {
             auto& bc = bldView.get<BuildingComponent>(e);
@@ -97,7 +115,6 @@ namespace
 
 void Update(entt::registry& registry, ResourceManager& resourceManager, float dt)
 {
-    // Collectors need: TransformComponent, CollectorComponent, ResourceInventory, PlayerComponent(teamId via playerId)
     auto view = registry.view<TransformComponent, CollectorComponent, ResourceInventory>();
 
     for (auto collectorEntity : view)
@@ -106,9 +123,20 @@ void Update(entt::registry& registry, ResourceManager& resourceManager, float dt
         auto& collector = view.get<CollectorComponent>(collectorEntity);
         auto& inventory = view.get<ResourceInventory>(collectorEntity);
 
-        // Tick cooldown
+        // Determine team and bug class
+        BugClass bc = GetCollectorBugClass(registry, collectorEntity);
+        uint32_t teamId = 0;
+        if (auto* uc = registry.try_get<UnitComponent>(collectorEntity))
+            teamId = uc->teamId;
+        else if (auto* pc = registry.try_get<PlayerComponent>(collectorEntity))
+            teamId = pc->playerId;
+
+        auto edibleVec = GetEdibleResources(bc);
+        std::unordered_set<ResourceType> acceptable(edibleVec.begin(), edibleVec.end());
+
+        // Tick cooldown (scaled by upgrade gather-rate bonus)
         if (collector.collectCooldown > 0.f) {
-            collector.collectCooldown -= dt;
+            collector.collectCooldown -= dt * UpgradeSystem::GetGatherRateMul(teamId);
         }
 
         if (!collector.carryingLoad)
@@ -116,21 +144,19 @@ void Update(entt::registry& registry, ResourceManager& resourceManager, float dt
             // ----------------------------------------------------------------
             // Phase 1: SEEKING / COLLECTING
             // ----------------------------------------------------------------
-            entt::entity target = FindNearestResource(registry, tf.position, DETECT_RADIUS);
+            entt::entity target = FindNearestResource(registry, tf.position, DETECT_RADIUS, acceptable);
 
-            if (target == entt::null) continue; // nothing nearby, wait
+            if (target == entt::null) continue; // nothing suitable nearby
 
             const auto& resTf = registry.get<TransformComponent>(target);
             float distToResource = glm::distance(tf.position, resTf.position);
 
             if (distToResource > collector.collectRadius)
             {
-                // Move toward resource
                 MoveToward(tf.position, resTf.position, COLLECTOR_SPEED, dt);
             }
             else if (collector.collectCooldown <= 0.f)
             {
-                // Collect
                 ResourceType collectedType;
                 int amount = resourceManager.Collect(registry, target, collectedType);
                 if (amount > 0)
@@ -139,8 +165,8 @@ void Update(entt::registry& registry, ResourceManager& resourceManager, float dt
                     collector.collectCooldown = collector.collectRate;
                     collector.carryingLoad    = true;
 
-                    spdlog::debug("[ResourceSystem] Collector picked up {} x {}",
-                                  amount, ResourceTypeName(collectedType));
+                    spdlog::debug("[ResourceSystem] {} collector picked up {} x {}",
+                                  BugClassName(bc), amount, ResourceTypeName(collectedType));
                 }
             }
         }
@@ -149,15 +175,8 @@ void Update(entt::registry& registry, ResourceManager& resourceManager, float dt
             // ----------------------------------------------------------------
             // Phase 2: RETURNING to base
             // ----------------------------------------------------------------
-
-            // Determine team – use PlayerComponent if present, else team 0
-            uint32_t teamId = 0;
-            if (auto* pc = registry.try_get<PlayerComponent>(collectorEntity))
-                teamId = pc->playerId; // approximation; replace with TeamComponent later
-
             entt::entity base = FindBase(registry, teamId);
             if (base == entt::null) {
-                // No base found – drop load and go back to seeking
                 collector.carryingLoad = false;
                 continue;
             }
@@ -167,7 +186,6 @@ void Update(entt::registry& registry, ResourceManager& resourceManager, float dt
 
             if (distToBase > DEPOSIT_RADIUS)
             {
-                // Move toward base
                 MoveToward(tf.position, baseTf.position, COLLECTOR_SPEED, dt);
             }
             else
@@ -185,10 +203,10 @@ void Update(entt::registry& registry, ResourceManager& resourceManager, float dt
                     baseInv->Add(ResourceType::Insekten, inventory.insekten);
                     baseInv->Add(ResourceType::Fleisch,  inventory.fleisch);
 
-                    spdlog::debug("[ResourceSystem] Collector deposited load at base (team {})", teamId);
+                    spdlog::debug("[ResourceSystem] {} collector deposited load at base (team {})",
+                                  BugClassName(bc), teamId);
                 }
 
-                // Reset inventory
                 inventory = ResourceInventory{};
                 collector.carryingLoad = false;
             }
