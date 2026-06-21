@@ -10,17 +10,6 @@
 #include <jc_voronoi.h>
 
 namespace {
-    /// Small deterministic hash used for per-tile ramp placement decisions.
-    uint32_t TileHash(uint32_t seed, int tx, int tz) {
-        uint32_t h = seed;
-        h ^= (uint32_t)tx * 0x9E3779B1u;
-        h ^= (uint32_t)tz * 0x85EBCA77u;
-        h ^= h >> 15;
-        h *= 0x27D4EB2Fu;
-        h ^= h >> 13;
-        return h;
-    }
-
     constexpr int kDX[4] = { 1, -1, 0, 0 };
     constexpr int kDZ[4] = { 0, 0, 1, -1 };
 }
@@ -194,9 +183,8 @@ void WorldManager::GenerateTileGrid() {
         for (int tx = 0; tx < m_GridSize; ++tx) {
             int ia = (int)m_Tiles[(size_t)tz * m_GridSize + tx].territoryId;
             // Check all 4 neighbours for a territory boundary.
-            const int dx4[4]={1,-1,0,0}, dz4[4]={0,0,1,-1};
             for (int d = 0; d < 4; ++d) {
-                int nx=tx+dx4[d], nz=tz+dz4[d];
+                int nx=tx+kDX[d], nz=tz+kDZ[d];
                 if (nx<0||nx>=m_GridSize||nz<0||nz>=m_GridSize) continue;
                 int ib = (int)m_Tiles[(size_t)nz * m_GridSize + nx].territoryId;
                 if (ia == ib) continue;
@@ -461,8 +449,6 @@ void WorldManager::GenerateTileGrid() {
             break;
         }
     }
-
-
 
     // --- Buildable slots --------------------------------------------------------
     // Flat plateau tiles whose 4 neighbours are all in-bounds plateau tiles of
