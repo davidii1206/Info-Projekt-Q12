@@ -56,6 +56,8 @@ public:
      */
     void OnImGui();
 
+    void SetFog(glm::vec3 color, float density, float start = 30.0f);
+
 private:
     /**
      * @brief Initializes the graphics pipelines for post-processing.
@@ -80,9 +82,16 @@ private:
     /// Threshold for normal-based edge detection.
     float m_NormalThreshold = 0.375f;
     /// Number of steps for posterization effect.
-    float m_PosterizeSteps = 5.0f;
+    float m_PosterizeSteps = 16.0f;
     /// Factor by which to downscale the G-Buffer.
     int m_DownscaleFactor = 3;
     /// Current debug visualization mode.
     int m_DebugMode = 0;
+
+    /// Fog colour (linear RGB).
+    glm::vec3 m_FogColor = {0.65f, 0.72f, 0.80f};
+    /// Exponential fog density coefficient.
+    float m_FogDensity = 0.003f;
+    /// World-unit distance at which fog begins.
+    float m_FogStart = 30.0f;
 };

@@ -4,37 +4,56 @@
 #include <glm/glm.hpp>
 #include <SDL3/SDL_gpu.h>
 #include <PerlinNoise.hpp>
-#include <jc_voronoi.h>
 #include "../Gameplay/Bug_classes.h"
 
 struct TerrainData {
     int id;
     BugClass bugClass;
-    int altitude = 0;
     glm::vec2 site;
     glm::vec2 spawnPoint;
     glm::vec3 color;
-    std::vector<glm::vec2> vertices;
-    std::vector<glm::vec2> subSites; // For Ant biome polygons
+};
+
+/// Surface kind of a single terrain tile (see docs/WORLDGEN_PLAN.md §2).
+enum class TileSurface : uint8_t { Plateau, Cliff, Ramp, Water };
+
+/// One cell of the terraced terrain grid. World height for a Plateau/Cliff
+/// tile is `tier * tierHeight`; Ramp tiles interpolate to the lower
+/// neighbour indicated by `rampDir`.
+struct TerrainTile {
+    uint8_t     tier        = 0;                 ///< Terrace level 0..numTiers-1.
+    TileSurface surface     = TileSurface::Plateau;
+    uint16_t    territoryId = 0xFFFF;            ///< Index into m_Terrains, or 0xFFFF if unowned (water/ramp).
+    uint8_t     rampDir     = 0;                 ///< Descent direction for Ramp tiles: 0=+X, 1=-X, 2=+Z, 3=-Z.
+    bool        buildable   = false;             ///< Flat, dry, interior plateau tile.
 };
 
 struct WorldGenConfig {
-    int numTerrains = 8;
+    int numTerrains = 25;
     int seed = 12345;
-    float noiseScale = 0.05f;
-    int noiseOctaves = 4;
     int relaxationIterations = 2;
-    bool randomSpawnInTerrain = false;
     int width = 1024;
     int height = 1024;
 
-    // Thronefall Style
-    int numAltitudeLevels = 4;
-    float altitudeNoiseScale = 0.01f;
-    float altitudeMaxHeight = 1.0f;
-    float slopeSharpness = 0.1f; // Transition sharpness
-    float slopeWidth = 25.0f;    // Base width of ramps
-    bool showHeightmap = true;
+    // --- Terraced model (see docs/WORLDGEN_PLAN.md) ---
+    // Organic-height fields (noiseScale, slopeSharpness, slopeWidth,
+    // altitudeNoiseScale, altitudeMaxHeight, numAltitudeLevels, ...) were
+    // removed during the worldgen teardown.
+
+    /// World spans [-worldExtent, +worldExtent] on X and Z (matches
+    /// FogOfWar / TerritorySystem / ScatterSystem extents).
+    float worldExtent = 250.f;
+    /// World units per tile edge.
+    float tileSize = 1.0f;
+    /// Number of discrete terrace levels (0..numTiers-1).
+    int numTiers = 6;
+    /// World units of height per terrace level.
+    float tierHeight = 2.0f;
+    /// Tiers <= waterTier are flooded (TileSurface::Water).
+    int waterTier = 0;
+    /// Frequency of the low-frequency Perlin noise used for tier assignment
+    /// (sampled in tile-grid space — halved vs 2.0 tileSize to preserve world-space feature size).
+    float tierNoiseScale = 0.0325f;
 };
 
 class WorldManager {
@@ -43,26 +62,41 @@ public:
     ~WorldManager();
 
     void Generate(const WorldGenConfig& config);
-    
+
     const std::vector<TerrainData>& GetTerrains() const { return m_Terrains; }
     const WorldGenConfig& GetConfig() const { return m_CurrentConfig; }
-    const std::vector<float>& GetHeightmap() const { return m_Heightmap; }
+
+    // --- Terraced tile grid (see docs/WORLDGEN_PLAN.md §2-3) ---
+
+    /// Number of tiles along one edge of the (square) tile grid.
+    int GetGridSize() const { return m_GridSize; }
+
+    /// Flat row-major tile array, size GetGridSize()^2 (index = z * gridSize + x).
+    const std::vector<TerrainTile>& GetTiles() const { return m_Tiles; }
+
+    /// Tile at grid coordinates (tx, tz); out-of-range coordinates are clamped.
+    const TerrainTile& GetTile(int tx, int tz) const;
+
+    /// Converts world-space XZ to tile grid coordinates (clamped to grid bounds).
+    void WorldToTile(float wx, float wz, int& outTx, int& outTz) const;
+
+    /// Converts tile grid coordinates to the world-space XZ centre of the tile.
+    glm::vec2 TileToWorld(int tx, int tz) const;
+
+    /// World-space Y for a given terrace tier.
+    float TierToWorldHeight(int tier) const { return (float)tier * m_CurrentConfig.tierHeight; }
 
     // Helper for visualization
     void UpdateDebugTexture(SDL_GPUDevice* device, class Texture** outTexture);
 
 private:
     void Clear();
-    void GenerateHeightmap();
-    
-    // Biome-specific height generators
-    float GetAntHeight(float x, float y, const jcv_diagram* diagram);
-    float GetTermiteHeight(float x, float y);
-    float GetSpiderHeight(float x, float y);
-    float GetWoodliceHeight(float x, float y);
+    void GenerateTileGrid();
 
     WorldGenConfig m_CurrentConfig;
     std::vector<TerrainData> m_Terrains;
-    std::vector<float> m_Heightmap;
     std::unique_ptr<siv::PerlinNoise> m_Perlin;
+
+    int m_GridSize = 0;
+    std::vector<TerrainTile> m_Tiles;
 };

@@ -17,18 +17,18 @@ GameLayer::GameLayer(PhysicsServer* physics, NetworkManager* network, Renderer* 
 {
     m_World = std::make_unique<World>(m_Physics);
     m_PostProcessor = std::make_unique<PostProcessor>(renderer);
+    m_World->SetPostProcessor(m_PostProcessor.get());
 }
 
 void GameLayer::OnAttach() {
     // Biome-Sounds registration
     auto& sound = SoundSystem::Get();
-    sound.RegisterBiomeSound(BiomeType::Forest, "assets/audio/ambient_forest.wav");
-    sound.RegisterBiomeSound(BiomeType::Desert, "assets/audio/ambient_desert.wav");
-    sound.RegisterBiomeSound(BiomeType::Cave,   "assets/audio/ambient_cave.wav");
-    sound.RegisterBiomeSound(BiomeType::Ocean,  "assets/audio/ambient_ocean.wav");
-    sound.RegisterBiomeSound(BiomeType::Tundra, "assets/audio/ambient_tundra.wav");
+    sound.RegisterBiomeSound(BiomeType::MushroomForest, "src/Assets/audio/ambient_forest.wav");
+    sound.RegisterBiomeSound(BiomeType::Desert,         "src/Assets/audio/ambient_desert.wav");
+    sound.RegisterBiomeSound(BiomeType::Wetland,        "src/Assets/audio/ambient_cave.wav");
+    sound.RegisterBiomeSound(BiomeType::HiveGlade,      "src/Assets/audio/ambient_ocean.wav");
 
-    sound.SetActiveBiome(BiomeType::Forest);
+    sound.SetActiveBiome(BiomeType::MushroomForest);
 }
 
 void GameLayer::OnDetach() {

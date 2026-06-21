@@ -11,6 +11,7 @@
 
 class NetworkManager;
 class Renderer;
+class PostProcessor;
 
 /**
  * @class World
@@ -122,6 +123,8 @@ public:
      */
     PhysicsServer*  GetPhysicsServer()    { return m_Physics; }
 
+    void SetPostProcessor(PostProcessor* pp) { m_PostProcessor = pp; }
+
 private:
     /**
      * @brief Performs a fixed-rate logic update.
@@ -133,6 +136,8 @@ private:
 
     /// Pointer to the physics server.
     PhysicsServer* m_Physics = nullptr;
+    /// Pointer to the post-processor (owned by GameLayer).
+    PostProcessor* m_PostProcessor = nullptr;
     /// Authoritative registry — only populated when hosting.
     entt::registry m_ServerRegistry;
     /// Always active registry — used for local rendering and client state.

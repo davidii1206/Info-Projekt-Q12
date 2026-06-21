@@ -126,11 +126,15 @@ void PostProcessor::EndFrame(Renderer* renderer) {
         ctx.BindFragmentTexture(3, m_GBuffer->GetDepthTarget());   // tDepth
 
         struct PostPC {
-            glm::vec4 resolution; // x, y, 1/x, 1/y
-            glm::vec4 params;     // x: normalEdgeStrength, y: depthEdgeStrength, z: posterizeSteps, w: debugMode
+            glm::vec4 resolution;
+            glm::vec4 params;
+            glm::vec4 fogColor;
+            glm::vec4 fogParams; // x=camNear, y=camFar, z=density, w=fogStart
         } pc;
         pc.resolution = glm::vec4((float)lowW, (float)lowH, 1.0f / (float)lowW, 1.0f / (float)lowH);
         pc.params = glm::vec4(m_NormalThreshold, m_DepthThreshold, m_PosterizeSteps, (float)m_DebugMode);
+        pc.fogColor = glm::vec4(m_FogColor, 1.0f);
+        pc.fogParams = glm::vec4(0.5f, 20000.0f, m_FogDensity, m_FogStart);
 
         ctx.PushFragmentConstants(0, &pc, sizeof(PostPC));
 
@@ -141,6 +145,12 @@ void PostProcessor::EndFrame(Renderer* renderer) {
 /**
  * @brief Renders the ImGui debug UI for controlling post-processing parameters.
  */
+void PostProcessor::SetFog(glm::vec3 color, float density, float start) {
+    m_FogColor   = color;
+    m_FogDensity = density;
+    m_FogStart   = start;
+}
+
 void PostProcessor::OnImGui() {
     ImGui::Begin("Post-Processing Settings");
 
@@ -162,6 +172,12 @@ void PostProcessor::OnImGui() {
     ImGui::SliderFloat("Normal Edge Strength", &m_NormalThreshold, 0.0f, 1.0f);
     ImGui::SliderFloat("Depth Edge Strength", &m_DepthThreshold, 0.0f, 1.0f);
     ImGui::SliderFloat("Posterize Steps", &m_PosterizeSteps, 1.0f, 16.0f);
+
+    ImGui::Separator();
+    ImGui::Text("Fog");
+    ImGui::ColorEdit3("Fog Color", &m_FogColor.x);
+    ImGui::SliderFloat("Fog Density", &m_FogDensity, 0.0f, 0.02f);
+    ImGui::SliderFloat("Fog Start", &m_FogStart, 0.0f, 200.0f);
 
     const char* debugModes[] = { "None", "Normal", "Color", "Light", "Depth", "Depth Indicator", "Normal Indicator" };
     ImGui::Combo("Debug Mode", &m_DebugMode, debugModes, IM_ARRAYSIZE(debugModes));

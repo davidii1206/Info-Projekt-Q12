@@ -3,6 +3,7 @@
 #include "../Networking/NetworkManager.h"
 #include "../Core/Input.h"
 #include "../Graphics/Renderer.h"
+#include "../Core/Biome.h"
 #include <imgui.h>
 
 /**
@@ -89,23 +90,18 @@ void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
 
     // Terrain Generation Debug Window
     ImGui::Begin("World Generation (WorldManager)");
-    ImGui::SliderInt("Terrains", &m_GenConfig.numTerrains, 2, 16);
+    ImGui::SliderInt("Terrains", &m_GenConfig.numTerrains, 4, 64);
     ImGui::SliderInt("Relaxation", &m_GenConfig.relaxationIterations, 0, 10);
-    ImGui::Checkbox("Random Spawn In Territory", &m_GenConfig.randomSpawnInTerrain);
-    
-    ImGui::SeparatorText("Thronefall Style");
-    ImGui::SliderInt("Altitude Levels", &m_GenConfig.numAltitudeLevels, 1, 8);
-    ImGui::DragFloat("Altitude Noise Scale", &m_GenConfig.altitudeNoiseScale, 0.001f, 0.0001f, 0.1f);
-    ImGui::SliderFloat("Altitude Max Height", &m_GenConfig.altitudeMaxHeight, 0.1f, 1.0f);
-    ImGui::SliderFloat("Slope Sharpness", &m_GenConfig.slopeSharpness, 0.01f, 0.49f);
-    ImGui::SliderFloat("Slope Width", &m_GenConfig.slopeWidth, 1.0f, 100.0f);
-    ImGui::Checkbox("Show Heightmap", &m_GenConfig.showHeightmap);
 
-    ImGui::SeparatorText("Noise Parameters");
-    ImGui::DragFloat("Noise Scale", &m_GenConfig.noiseScale, 0.001f, 0.0001f, 1.0f);
-    ImGui::DragInt("Noise Octaves", &m_GenConfig.noiseOctaves, 1, 1, 8);
+    ImGui::SeparatorText("Terraced Terrain");
+    ImGui::SliderInt("Tiers", &m_GenConfig.numTiers, 1, 12);
+    ImGui::SliderFloat("Tier Height", &m_GenConfig.tierHeight, 0.5f, 10.0f);
+    ImGui::SliderInt("Water Tier", &m_GenConfig.waterTier, 0, 4);
+    ImGui::DragFloat("Tier Noise Scale", &m_GenConfig.tierNoiseScale, 0.001f, 0.001f, 0.5f);
+    ImGui::DragFloat("World Extent", &m_GenConfig.worldExtent, 1.0f, 50.0f, 1000.0f);
+    ImGui::DragFloat("Tile Size", &m_GenConfig.tileSize, 0.1f, 0.25f, 8.0f);
     ImGui::DragInt("Seed", &m_GenConfig.seed, 1, 0, 999999);
-    
+
     if (ImGui::Button("Generate")) {
         m_WorldManager->Generate(m_GenConfig);
         m_WorldManager->UpdateDebugTexture(ctx.renderer->GetDevice(), &m_DebugTexture);
@@ -117,8 +113,24 @@ void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
     }
 
     if (ImGui::CollapsingHeader("Spawn Points")) {
-        for (const auto& td : m_WorldManager->GetTerrains()) {
-            ImGui::Text("Base %d: (%.1f, %.1f)", td.id, td.spawnPoint.x, td.spawnPoint.y);
+        if (ImGui::BeginTable("SpawnPointsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("ID");
+            ImGui::TableSetupColumn("Bug Class");
+            ImGui::TableSetupColumn("Position");
+            ImGui::TableHeadersRow();
+
+            for (const auto& td : m_WorldManager->GetTerrains()) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Text("%d", td.id);
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s", BugClassToString(td.bugClass));
+
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Text("(%.0f, %.0f)", td.site.x, td.site.y);
+            }
+            ImGui::EndTable();
         }
     }
     ImGui::End();

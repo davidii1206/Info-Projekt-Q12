@@ -39,7 +39,7 @@ World::~World() {
  * @param renderer Pointer to the renderer instance.
  */
 void World::Update(float dt, NetworkManager& net, Renderer* renderer) {
-    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this, m_PostProcessor};
 
     /**
      * @brief Apply any pending scene transitions.
@@ -72,7 +72,7 @@ void World::Update(float dt) {
  * @param net Reference to the network manager.
  */
 void World::Render(Renderer* renderer, NetworkManager& net) {
-    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this, m_PostProcessor};
     m_SceneManager.Render(ctx, renderer);
 }
 
@@ -80,7 +80,7 @@ void World::Render(Renderer* renderer, NetworkManager& net) {
  * @brief Renders ImGui UI for the current world state.
  */
 void World::OnImGuiRender(float dt, NetworkManager& net, Renderer* renderer) {
-    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this, m_PostProcessor};
     m_SceneManager.UIUpdate(ctx, dt);
 }
 
@@ -151,6 +151,6 @@ void World::ClearPhysicsState() {
  * @brief Performs a fixed-rate logic update.
  */
 void World::FixedUpdate(float dt, NetworkManager& net, Renderer* renderer) {
-    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this};
+    SceneContext ctx{m_ServerRegistry, m_ClientRegistry, net, m_SceneManager, renderer, m_Physics, this, m_PostProcessor};
     m_SceneManager.FixedUpdate(ctx, dt);
 }

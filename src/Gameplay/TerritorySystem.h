@@ -42,7 +42,9 @@
 #include <spdlog/spdlog.h>
 #include <array>
 #include <cstring>
+#include <cstdio>
 #include "Components.h"
+#include "../Core/WorldManager.h"
 
 // ---------------------------------------------------------------------------
 // Team colour palette  (up to 8 teams)
@@ -100,6 +102,7 @@ struct TerritoryComponent
     float    halfD          = 8.f;      ///< Half-depth along Z.
     float    captureTime    = 10.f;     ///< Seconds of dominance needed to capture.
 
+    uint16_t worldTerritoryId = 0xFFFF; ///< Index into WorldManager::GetTerrains(), or 0xFFFF.
     uint32_t ownerTeam      = TEAM_NONE;///< Currently owning team (TEAM_NONE if neutral).
     uint32_t contestedBy    = TEAM_NONE;///< Team currently ahead in capture progress.
     float    captureProgress = 0.f;     ///< 0–captureTime seconds of progress.
@@ -123,40 +126,76 @@ namespace TerritorySystem
     // -----------------------------------------------------------------------
 
     /**
-     * @brief Spawns the default set of territory zones for the current map.
+     * @brief Returns a short display name for the given BugClass faction.
+     */
+    inline const char* FactionName(BugClass bc)
+    {
+        switch (bc) {
+            case BugClass::BeesWasps:        return "Stecher-Allianz";
+            case BugClass::ButterfliesMoths: return "Lepidoptera";
+            case BugClass::Snails:           return "Panzer-Konsortium";
+            case BugClass::Mantis:           return "Assassinen-Orden";
+            case BugClass::Spiders:          return "Seiden-Syndikat";
+            case BugClass::Fireflies:        return "Licht-Kollektiv";
+            case BugClass::Ants:             return "Die Legion";
+            case BugClass::Termites:         return "Baumeister";
+            case BugClass::CentipedesWorms:  return "Unterwelt-Gilde";
+            case BugClass::MosquitosTicks:   return "Die Plage";
+            case BugClass::Woodlice:         return "Die Phalanx";
+            case BugClass::Dragonflies:      return "Apex-Jaeger";
+            case BugClass::Bugs:             return "Chem-Kartell";
+            case BugClass::Roaches:          return "Unsterbliche";
+            case BugClass::Beetles:          return "Gladiatoren";
+            case BugClass::Scorpions:        return "Wuesten-Nomaden";
+            default:                         return "Unbekannt";
+        }
+    }
+
+    /**
+     * @brief Spawns one territory zone per WorldManager territory, derived
+     *        from the tile grid.
      *
-     * Edit the zone list below to match your actual map geometry.
-     * Call once from GameScene::OnEnter() on the server.
+     * Each zone is centered on the territory's pre-computed spawn tile
+     * (the nearest buildable plateau tile to the Voronoi site). Zone size
+     * and capture time are fixed; swap for per-territory values once
+     * gameplay data drives them.
      *
      * @param registry  Authoritative server registry.
+     * @param world     Generated WorldManager (must already have Generate() called).
      */
-    inline void SpawnZones(entt::registry& registry)
+    inline void SpawnZones(entt::registry& registry, const WorldManager& world)
     {
-        struct ZoneDef {
-            const char* name;
-            glm::vec3   center;
-            float       halfW, halfD;
-            float       captureTime;
-        };
+        const auto& terrains = world.GetTerrains();
+        const auto& cfg      = world.GetConfig();
 
-        static const ZoneDef defs[] = {
-            { "Nord-Lager",  { 0.f, 0.f,  20.f}, 8.f, 8.f, 12.f },
-            { "Sued-Lager",  { 0.f, 0.f, -20.f}, 8.f, 8.f, 12.f },
-            { "Mitte",       { 0.f, 0.f,   0.f}, 6.f, 6.f,  8.f },
-            { "Ost-Posten",  {20.f, 0.f,   0.f}, 5.f, 5.f, 10.f },
-            { "West-Posten", {-20.f,0.f,   0.f}, 5.f, 5.f, 10.f },
-        };
+        // Capture zone half-size in world units. Roughly 6% of the world
+        // extent so zones scale naturally with map size.
+        const float halfSize    = cfg.worldExtent * 0.06f;
+        const float captureTime = 15.f;
 
-        for (const auto& d : defs)
+        int spawned = 0;
+        for (const auto& td : terrains)
         {
+            // Verify the spawn tile is actually buildable; skip if not.
+            int tx, tz;
+            world.WorldToTile(td.spawnPoint.x, td.spawnPoint.y, tx, tz);
+            const TerrainTile& tile = world.GetTile(tx, tz);
+            if (!tile.buildable) continue;
+
+            float worldY = world.TierToWorldHeight(tile.tier);
+            glm::vec3 center(td.spawnPoint.x, worldY, td.spawnPoint.y);
+
             auto e = registry.create();
-            registry.emplace<TransformComponent>(e, d.center);
-            registry.emplace<TerritoryComponent>(e,
-                d.name, d.halfW, d.halfD, d.captureTime);
+            registry.emplace<TransformComponent>(e, center);
+
+            TerritoryComponent ter(FactionName(td.bugClass), halfSize, halfSize, captureTime);
+            ter.worldTerritoryId = (uint16_t)td.id;
+            registry.emplace<TerritoryComponent>(e, ter);
+            ++spawned;
         }
 
-        spdlog::info("[TerritorySystem] Spawned {} territory zones.",
-                     std::size(defs));
+        spdlog::info("[TerritorySystem] Spawned {} territory zones (halfSize={:.1f}).",
+                     spawned, halfSize);
     }
 
     // -----------------------------------------------------------------------
@@ -302,8 +341,8 @@ namespace TerritorySystem
     inline void DrawOverlay(entt::registry& registry,
                             ImVec2          mapOriginPx,
                             ImVec2          mapSizePx,
-                            glm::vec2       worldMin = {-50.f, -50.f},
-                            glm::vec2       worldMax = { 50.f,  50.f})
+                            glm::vec2       worldMin = {-250.f, -250.f},
+                            glm::vec2       worldMax = { 250.f,  250.f})
     {
         constexpr ImGuiWindowFlags kFlags =
             ImGuiWindowFlags_NoDecoration      |

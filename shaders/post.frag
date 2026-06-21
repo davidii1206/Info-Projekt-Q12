@@ -11,6 +11,8 @@ layout(set = 2, binding = 3) uniform sampler2D tDepth;
 layout(set = 3, binding = 0) uniform PostPC {
     vec4 resolution; // x, y, 1/x, 1/y
     vec4 params;     // x: normalEdgeStrength, y: depthEdgeStrength, z: posterizeSteps, w: debugMode
+    vec4 fogColor;   // rgb: fog colour, a: unused
+    vec4 fogParams;  // x: camNear, y: camFar, z: density, w: fogStart (world units)
 } pc;
 
 float getDepth(int x, int y) {
@@ -101,6 +103,19 @@ void main() {
     if (mode == 5) { outFinal = vec4(vec3(dei), 1.0); return; }
     if (mode == 6) { outFinal = vec4(vec3(nei), 1.0); return; }
 
-    outFinal = vec4(texel * finalStrength, 1.0);
+    vec3 finalColor = texel * finalStrength;
+
+    // Depth-based exponential fog (reversed-Z: depth=1 near, depth=0 far/sky)
+    float rawDepth = texture(tDepth, vUv).r;
+    if (rawDepth > 0.0001) {
+        float camNear = pc.fogParams.x;
+        float camFar  = pc.fogParams.y;
+        float linDepth = (camNear * camFar) / (rawDepth * (camFar - camNear) + camNear);
+        float fogFactor = 1.0 - exp(-pc.fogParams.z * max(0.0, linDepth - pc.fogParams.w));
+        fogFactor = clamp(fogFactor, 0.0, 1.0);
+        finalColor = mix(finalColor, pc.fogColor.rgb, fogFactor);
+    }
+
+    outFinal = vec4(finalColor, 1.0);
 }
 

@@ -12,6 +12,7 @@ class IScene;
 class SceneManager;
 class PhysicsServer;
 class World;
+class PostProcessor;
 
 /**
  * @struct SceneContext
@@ -32,6 +33,8 @@ struct SceneContext {
     PhysicsServer*  physics;
     /// Pointer to the game world.
     World*          world;
+    /// Pointer to the post-processor (may be null in headless contexts).
+    PostProcessor*  postProcessor = nullptr;
 };
 
 /**

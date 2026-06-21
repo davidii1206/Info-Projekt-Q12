@@ -91,7 +91,25 @@ public:
      * @param filePath Path to the .gltf or .glb file.
      * @return SceneData containing the model and all lights found in the file.
      */
-    static SceneData LoadGLTF(const std::string& filePath);
+    static const SceneData& LoadGLTF(const std::string& filePath);
+
+    /**
+     * @brief Builds a Model from CPU-generated geometry and caches it under a
+     *        synthetic key so it can be referenced by ModelComponent like any
+     *        GLTF-loaded asset (e.g. a procedurally generated terrain mesh).
+     * @param key Synthetic cache key (e.g. "procedural://terrain").
+     * @param vertices CPU-side vertex buffer.
+     * @param indices CPU-side index buffer (triangle list).
+     * @param sections Mesh sections (material groups).
+     * @param materials Materials referenced by the sections.
+     * @return The cached SceneData, ready for ModelComponent lookup.
+     */
+    static const SceneData& RegisterProceduralScene(
+        const std::string& key,
+        std::vector<ModelVertex> vertices,
+        std::vector<uint32_t> indices,
+        const std::vector<MeshSection>& sections,
+        const std::vector<Material>& materials);
 
     /** @brief Returns a simple procedural unit cube. */
     static std::shared_ptr<Model> GetFallbackModel();

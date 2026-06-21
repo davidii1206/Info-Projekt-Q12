@@ -15,6 +15,8 @@
 #include "../Core/AssetManager.h"
 #include "../Core/MeshCollisionBuilder.h"
 #include "../Graphics/Renderer.h"
+#include "../Graphics/TerrainMeshBuilder.h"
+#include "StructurePlacementSystem.h"
 #include "ResourceTypes.h"
 #include "ResourceHUD.h"
 #include "FogOfWar.h"
@@ -25,6 +27,8 @@
 #include "../Graphics/API/Framebuffer.h"
 #include "../Graphics/API/GPUBuffer.h"
 #include "../Graphics/Lights.h"
+#include "PostProcessor.h"
+#include <PerlinNoise.hpp>
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <glm/glm.hpp>
@@ -42,6 +46,65 @@
 GameScene::GameScene() {}
 GameScene::~GameScene() {}
 
+// ---------------------------------------------------------------------------
+// GPU instancing helpers
+// ---------------------------------------------------------------------------
+
+void GameScene::BuildScatterBatches(SceneContext& ctx) {
+    m_ScatterBatches.clear();
+
+    SDL_GPUDevice* device = ctx.renderer->GetDevice();
+
+    // Pass 1: collect entity world matrices per model path.
+    std::unordered_map<std::string, std::vector<glm::mat4>> entityMatsByPath;
+    auto scatterView = ctx.clientRegistry.view<TransformComponent, ModelComponent, ScatterPropComponent>();
+    for (auto entity : scatterView) {
+        auto& tf = scatterView.get<TransformComponent>(entity);
+        auto& mc = scatterView.get<ModelComponent>(entity);
+        glm::mat4 entityMat =
+            glm::translate(glm::mat4(1.f), tf.position) *
+            glm::mat4_cast(glm::quat(glm::radians(tf.rotation))) *
+            glm::scale(glm::mat4(1.f), tf.scale);
+        entityMatsByPath[mc.modelPath].push_back(entityMat);
+    }
+
+    // Pass 2: for each model, build one SSBO per GLTF mesh node.
+    // Each SSBO entry = entityMat * meshNode.transform (full world matrix for that instance).
+    for (auto& [path, entityMats] : entityMatsByPath) {
+        const auto& sceneData = AssetManager::LoadGLTF(path);
+        if (!sceneData.model || sceneData.meshInstances.empty()) continue;
+
+        for (uint32_t meshIdx = 0; meshIdx < (uint32_t)sceneData.meshInstances.size(); ++meshIdx) {
+            const glm::mat4& nodeTransform = sceneData.meshInstances[meshIdx].transform;
+
+            std::vector<glm::mat4> transforms;
+            transforms.reserve(entityMats.size());
+            for (const auto& em : entityMats)
+                transforms.push_back(em * nodeTransform);
+
+            uint32_t bufSize = (uint32_t)(transforms.size() * sizeof(glm::mat4));
+            auto buf = std::make_unique<GPUBuffer>(device, BufferUsage::Uniform, bufSize);
+            buf->Upload(transforms.data(), bufSize);
+
+            ScatterBatch batch;
+            batch.modelPath      = path;
+            batch.meshInstanceIdx = meshIdx;
+            batch.instanceCount  = (uint32_t)transforms.size();
+            batch.instanceBuffer = std::move(buf);
+            m_ScatterBatches.push_back(std::move(batch));
+        }
+    }
+
+    // Identity instance buffer: single mat4(1) used for all non-scatter draw calls
+    // so that the instance SSBO slot in the shader is always bound.
+    glm::mat4 identity(1.f);
+    m_IdentityInstanceBuffer = std::make_unique<GPUBuffer>(device, BufferUsage::Uniform, sizeof(glm::mat4));
+    m_IdentityInstanceBuffer->Upload(&identity, sizeof(glm::mat4));
+
+    spdlog::info("GameScene: built {} scatter batches ({} unique models × mesh nodes)",
+                 m_ScatterBatches.size(), entityMatsByPath.size());
+}
+
 /**
  * @brief Initializes the camera and spawns a test asset if hosting.
  * @param ctx The scene context.
@@ -57,17 +120,121 @@ void GameScene::OnEnter(SceneContext& ctx) {
         m_Camera->UpdateVectors();
     }
 
+    // ------------------------------------------------------------------
+    // Procedural terrain (terraced tile grid, see docs/WORLDGEN_PLAN.md).
+    //
+    // Generated identically on every peer from the shared seed. The CPU
+    // mesh is used both for rendering (registered with AssetManager under a
+    // synthetic key so the existing ModelComponent render path picks it up)
+    // and, on the host, for static physics collision.
+    // ------------------------------------------------------------------
+    TerrainMeshBuilder::TerrainMeshData terrainMesh;
+    {
+        WorldGenConfig genCfg;
+        genCfg.seed        = m_WorldSeed;
+        genCfg.worldExtent = 375.f; // 750×750 tile map (1.5× the original 500×500)
+        genCfg.numTiers       = 12;
+        genCfg.tierHeight     = 1.2f;   // 1.2 m per tier → 13.2 m max range
+        genCfg.tierNoiseScale = 0.010f; // low freq → broad hills, large flat areas
+        m_World.Generate(genCfg);
+
+        terrainMesh = TerrainMeshBuilder::Build(m_World);
+
+        // --- World-space UV projection with domain warp ---------------------------
+        // Horizontal faces get UVs from world XZ. A low-frequency Perlin warp
+        // displaces each UV point so the texture doesn't repeat in a visible grid
+        // — adjacent regions sample different parts of the texture non-uniformly.
+        constexpr float kTerrainUVScale = 10.0f;  // base tile size in world units
+        constexpr float kWarpFreq  = 0.011f;      // warp feature size ~90 world units
+        constexpr float kWarpAmp   = 0.65f;       // ±6.5 world-unit UV displacement
+        siv::PerlinNoise uvWarpNoise(m_WorldSeed + 31u);
+        for (auto& v : terrainMesh.vertices) {
+            if (v.normal.y > 0.5f) {
+                // Two independent warp channels so X and Z shift independently
+                float wx = (float)uvWarpNoise.noise2D(
+                    v.position.x * kWarpFreq, v.position.z * kWarpFreq);
+                float wz = (float)uvWarpNoise.noise2D(
+                    v.position.x * kWarpFreq + 47.3, v.position.z * kWarpFreq + 47.3);
+                v.texCoords = {
+                    v.position.x / kTerrainUVScale + wx * kWarpAmp,
+                    v.position.z / kTerrainUVScale + wz * kWarpAmp
+                };
+            }
+        }
+
+        // --- Procedural ground detail texture ---------------------------------
+        // Multi-octave Perlin noise baked into a tileable 128x128 RGBA texture.
+        // Values ∈ [0.72, 1.08] → neutral overlay that multiplies biome vertex
+        // colour without shifting the average brightness much (~0.9 mean).
+        auto terrainDetailTex = [&]() {
+            constexpr int kSz = 128;
+            siv::PerlinNoise pn(m_WorldSeed + 77u);
+            std::vector<uint8_t> pix(kSz * kSz * 4);
+            for (int py = 0; py < kSz; ++py) {
+                for (int px = 0; px < kSz; ++px) {
+                    double u = px / (double)kSz;
+                    double v = py / (double)kSz;
+                    // Medium-frequency grain (patch clusters) + fine detail layer.
+                    // Together they produce a patchy, blade-like variation that reads
+                    // as grass when tinted by the green vertex colours.
+                    float n1 = (float)pn.octave2D_01(u * 9.0,        v * 9.0,        5, 0.55);
+                    float n2 = (float)pn.octave2D_01(u * 26.0 + 5.3, v * 26.0 + 5.3, 2, 0.50);
+                    // Wide contrast range [0.68, 1.24] for visible light/dark patches
+                    float b  = 0.68f + n1 * 0.50f + n2 * 0.06f;
+                    if (b > 1.f) b = 1.f;
+                    // Slightly green-neutral tint — vertex colour provides the actual hue
+                    float r  = b * 0.90f; if (r > 1.f) r = 1.f;
+                    float g  = b * 1.05f; if (g > 1.f) g = 1.f;
+                    float bl = b * 0.80f;
+                    int idx  = (py * kSz + px) * 4;
+                    pix[idx+0] = (uint8_t)(r  * 255);
+                    pix[idx+1] = (uint8_t)(g  * 255);
+                    pix[idx+2] = (uint8_t)(bl * 255);
+                    pix[idx+3] = 255;
+                }
+            }
+            return AssetManager::LoadTexture("terrain_detail_noise",
+                                             pix.data(), kSz, kSz);
+        }();
+
+        Material terrainMat{"Terrain"};
+        terrainMat.baseColorTexture = terrainDetailTex;
+
+        std::vector<MeshSection> sections = {
+            { 0, (uint32_t)terrainMesh.indices.size(), 0 }
+        };
+        std::vector<Material> materials = { terrainMat };
+        AssetManager::RegisterProceduralScene("procedural://terrain",
+                                               terrainMesh.vertices,
+                                               terrainMesh.indices,
+                                               sections, materials);
+
+        auto terrainEntity = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(terrainEntity);
+        ctx.clientRegistry.emplace<ModelComponent>(terrainEntity, "procedural://terrain");
+
+        spdlog::info("GameScene: built terrain mesh ({} vertices, {} indices)",
+                      terrainMesh.vertices.size(), terrainMesh.indices.size());
+    }
+
     if (ctx.network.IsHosting()) {
         /**
-         * @brief Load the scene's mesh geometry as static physics collision.
+         * @brief Register the generated terrain mesh as static physics collision.
          *
-         * This replaces the flat AddStaticFloor() placeholder with accurate
-         * per-triangle collision derived from the actual GLTF scene mesh.
-         * The same asset path used for visual rendering is reused here —
-         * AssetManager returns cached CPU-side vertices/indices at no extra
-         * file-IO cost.
+         * Replaces the old flat AddStaticFloor() / test_scene_pixelation.glb
+         * placeholder with collision matching the terraced terrain mesh.
          */
-        LoadSceneMeshCollision(ctx, "assets/test_scene_pixelation.glb");
+        JPH::Shape::ShapeResult terrainShape = MeshCollisionBuilder::Build(
+            terrainMesh.vertices, terrainMesh.indices, glm::mat4(1.f));
+        if (terrainShape.IsValid()) {
+            PhysicsBodyHandle handle = ctx.physics->AddStaticMesh(
+                terrainShape.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity());
+            if (handle.IsValid()) m_MeshCollisionBodies.push_back(handle);
+            else spdlog::error("GameScene: AddStaticMesh failed for terrain mesh");
+        } else {
+            spdlog::error("GameScene: terrain MeshShape creation failed: {}",
+                           terrainShape.GetError().c_str());
+        }
 
         // Initialize resource system
         m_ResourceManager.Init();
@@ -83,12 +250,12 @@ void GameScene::OnEnter(SceneContext& ctx) {
         SyncResourceSpawns(ctx);
 
         // Fog of War – initialise grid to match the map extents
-        m_Fog.Init(glm::vec3{-50.f, 0.f, -50.f},
-                   glm::vec3{ 50.f, 0.f,  50.f},
+        m_Fog.Init(glm::vec3{-375.f, 0.f, -375.f},
+                   glm::vec3{ 375.f, 0.f,  375.f},
                    /*cellSize=*/2.f);
 
-        // Territory zones
-        TerritorySystem::SpawnZones(ctx.serverRegistry);
+        // Territory zones — derived from the tile grid
+        TerritorySystem::SpawnZones(ctx.serverRegistry, m_World);
 
         // HUD-Texturen laden (Pixel-Art-Icons des HUD-Designers)
         HUDTextures::Load(ctx.renderer->GetDevice());
@@ -137,6 +304,70 @@ void GameScene::OnEnter(SceneContext& ctx) {
          */
         SpawnPhysicsCube(ctx, glm::vec3{0.f, 10.f, 0.f});
     }
+
+    // ------------------------------------------------------------------
+    // Decorative prop scatter (grass, rocks, twigs, …)
+    //
+    // Runs on EVERY peer, not just the host: scatter props are derived
+    // deterministically from the world seed, so each client generates an
+    // identical field locally and nothing has to be sent over the network.
+    // They live in the client registry alongside other renderable entities.
+    // ------------------------------------------------------------------
+    {
+        ScatterConfig scatterCfg = ScatterConfig::Default(m_WorldSeed);
+        // Align the scatter footprint with the Fog/Territory map extents (±250).
+        scatterCfg.worldMin = {-375.f, -375.f};
+        scatterCfg.worldMax = { 375.f,  375.f};
+        // Props sit on the terraced terrain mesh: TierToWorldHeight() already
+        // returns world-space Y, so no extra scaling is needed.
+        scatterCfg.heightWorldScale = 1.0f;
+        // GPU instancing batches all props of the same model into a single
+        // draw call, so we can afford a dense candidate grid.
+        scatterCfg.spacing = 7.0f;
+
+        ScatterSystem::Populate(ctx.clientRegistry, m_World, scatterCfg);
+    }
+
+    // Dense grass pass — separate grid so grass doesn't compete with trees.
+    // Spacing=5 gives ~100x100=10k candidates; maxProps caps draw calls until
+    // instancing is added.
+    {
+        ScatterConfig grassCfg = ScatterConfig::Default(m_WorldSeed + 99u);
+        grassCfg.worldMin        = {-375.f, -375.f};
+        grassCfg.worldMax        = { 375.f,  375.f};
+        grassCfg.heightWorldScale = 1.0f;
+        grassCfg.spacing         = 8.0f;
+        grassCfg.maxProps        = 1500;
+        // Keep only the grass layers from the default config.
+        std::vector<ScatterLayer> grassOnly;
+        for (auto& l : grassCfg.layers)
+            if (l.name.rfind("grass_", 0) == 0)
+                grassOnly.push_back(l);
+        grassCfg.layers = std::move(grassOnly);
+
+        ScatterSystem::Populate(ctx.clientRegistry, m_World, grassCfg);
+    }
+
+    // Build GPU instance buffers for all scatter entities. Done once here;
+    // every frame the render pass binds these SSBOs instead of issuing
+    // one draw call per entity.
+    BuildScatterBatches(ctx);
+
+    // ------------------------------------------------------------------
+    // Structure placement (faction bases + neutral resource nodes).
+    //
+    // Like scatter, runs identically on every peer from the shared seed.
+    // Faction bases are placed at each territory's pre-computed spawn tile;
+    // neutral nodes fill remaining buildable tiles. Both use placeholder
+    // primitive models until real structure assets exist.
+    // ------------------------------------------------------------------
+    {
+        StructurePlacementConfig structCfg;
+        structCfg.seed           = m_WorldSeed;
+        structCfg.maxNeutralNodes = 16;
+        structCfg.nodeMinSpacing  = 15.0f;
+        StructurePlacementSystem::Place(ctx.clientRegistry, m_World, structCfg);
+    }
 }
 
 /**
@@ -166,6 +397,14 @@ void GameScene::OnExit(SceneContext& ctx) {
         m_MeshCollisionBodies.clear();
     }
 
+    // Release GPU instance buffers before clearing ECS entities.
+    m_ScatterBatches.clear();
+    m_IdentityInstanceBuffer.reset();
+
+    // Drop decorative scatter props and structures before clearing the rest.
+    ScatterSystem::Clear(ctx.clientRegistry);
+    StructurePlacementSystem::Clear(ctx.clientRegistry);
+
     ctx.serverRegistry.clear();
     ctx.clientRegistry.clear();
     m_ServerNetMap.clear();
@@ -194,6 +433,12 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_TerritorySnapAccum = 0.f;
     m_FogSnapAccum       = 0.f;
     m_ResourceNetMap.clear();
+
+    // HUD-Texturen freigeben
+    HUDTextures::Unload();
+
+    // Reset fog grid for next session
+    m_Fog.Reset();
 
     // HUD-Texturen freigeben
     HUDTextures::Unload();
@@ -229,8 +474,8 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     // 1. Lazy-init graphics pipelines
     // ------------------------------------------------------------------
     if (!m_ModelPipeline) {
-        ShaderResourceLayout vertLayout = {0, 0, 1, 1}; 
-        ShaderResourceLayout fragLayout = {2, 0, 2, 1}; 
+        ShaderResourceLayout vertLayout = {0, 0, 2, 1}; // 2 SSBOs: GlobalUniforms + InstanceTransforms
+        ShaderResourceLayout fragLayout = {2, 0, 2, 1};
 
         m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert.spv", ShaderStage::Vertex, vertLayout);
         m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag.spv", ShaderStage::Fragment, fragLayout);
@@ -293,7 +538,7 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         m_LastShadowBiasConstant = m_ShadowBiasConstant;
         m_LastShadowBiasSlope    = m_ShadowBiasSlope;
 
-        ShaderResourceLayout shadowVertLayout = {0, 0, 0, 2};
+        ShaderResourceLayout shadowVertLayout = {0, 0, 1, 2}; // 1 SSBO: InstanceTransforms; 2 uniforms: ShadowPC + ShadowVP
         ShaderResourceLayout shadowFragLayout = {0, 0, 0, 0};
 
         m_ShadowVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.vert.spv", ShaderStage::Vertex, shadowVertLayout);
@@ -393,14 +638,14 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         }
     }
 
-    // 5b. Lights embedded inside models
+    // 5b. Lights embedded inside models (scatter props never have lights — skip them)
     {
-        auto modelView = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        auto modelView = ctx.clientRegistry.view<TransformComponent, ModelComponent>(entt::exclude<ScatterPropComponent>);
         for (auto entity : modelView) {
             if (totalLightCount >= 16) break;
             auto& transform = modelView.get<TransformComponent>(entity);
             auto& modelComp = modelView.get<ModelComponent>(entity);
-            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
+            const auto& sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
             if (!sceneData.model) continue;
 
             glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
@@ -438,21 +683,22 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
     glm::mat4 sunVP = globals.sunVP;
     renderer->AddPass("ShadowPass", m_ShadowMap.get(), [this, ctx, renderer, sunVP](RenderContext& renderCtx) {
-        if (!m_ShadowPipeline) return;
+        if (!m_ShadowPipeline || !m_IdentityInstanceBuffer) return;
         renderCtx.BindPipeline(m_ShadowPipeline);
         renderCtx.PushVertexConstants(1, &sunVP, sizeof(glm::mat4));
 
-        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        // --- Non-scatter entities: one draw per mesh instance (unchanged behavior) ---
+        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>(entt::exclude<ScatterPropComponent>);
         for (auto entity : view) {
             if (ctx.clientRegistry.any_of<GhostComponent>(entity)) continue;
             auto& transform = view.get<TransformComponent>(entity);
             auto& modelComp = view.get<ModelComponent>(entity);
-
-            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
+            const auto& sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
             if (!sceneData.model) continue;
 
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
             renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
+            renderCtx.BindVertexStorageBuffer(0, m_IdentityInstanceBuffer.get());
 
             for (const auto& instance : sceneData.meshInstances) {
                 struct ShadowPC { glm::mat4 model; } spc;
@@ -469,6 +715,30 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                 }
             }
         }
+
+        // --- Scatter entities: one draw per model×section, instanceCount = N ---
+        {
+            struct ShadowPC { glm::mat4 model; } spc;
+            spc.model = glm::mat4(1.0f); // instance SSBO carries the full world transforms
+            renderCtx.PushVertexConstants(0, &spc, sizeof(ShadowPC));
+
+            for (const auto& batch : m_ScatterBatches) {
+                const auto& sceneData = AssetManager::LoadGLTF(batch.modelPath);
+                if (!sceneData.model) continue;
+                if (batch.meshInstanceIdx >= (uint32_t)sceneData.meshInstances.size()) continue;
+
+                renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
+                renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
+                renderCtx.BindVertexStorageBuffer(0, batch.instanceBuffer.get());
+
+                const auto& meshInst   = sceneData.meshInstances[batch.meshInstanceIdx];
+                const auto& allSections = sceneData.model->GetSections();
+                for (uint32_t i = 0; i < meshInst.sectionCount; ++i) {
+                    const auto& section = allSections[meshInst.firstSection + i];
+                    renderCtx.DrawIndexed(section.indexCount, batch.instanceCount, section.firstIndex);
+                }
+            }
+        }
     }, true, nullptr, 1.0f);
 
     // ------------------------------------------------------------------
@@ -478,6 +748,7 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     if (!gbuffer) return;
 
     renderer->AddPass("GameRenderPass", gbuffer, [this, ctx, renderer](RenderContext& renderCtx) {
+        if (!m_IdentityInstanceBuffer) return;
         renderCtx.BindPipeline(m_ModelPipeline);
         renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
         renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
@@ -485,23 +756,23 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         if (m_ShadowMap && m_ShadowMap->GetDepthTarget())
             renderCtx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
 
-        // --- Render opaque entities ---
-        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>();
+        // --- Non-scatter entities: per-entity draw (player, terrain, cubes, …) ---
+        auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>(entt::exclude<ScatterPropComponent>);
         for (auto entity : view) {
             if (ctx.clientRegistry.any_of<GhostComponent>(entity)) continue;
             auto& transform = view.get<TransformComponent>(entity);
             auto& modelComp = view.get<ModelComponent>(entity);
-
-            auto sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
+            const auto& sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
             if (!sceneData.model) continue;
 
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
             renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
+            renderCtx.BindVertexStorageBuffer(1, m_IdentityInstanceBuffer.get());
 
             if (sceneData.model->GetMaterialBuffer())
                 renderCtx.BindFragmentStorageBuffer(1, sceneData.model->GetMaterialBuffer());
 
-            const auto& allSections = sceneData.model->GetSections();
+            const auto& allSections  = sceneData.model->GetSections();
             const auto& allMaterials = sceneData.model->GetMaterials();
 
             for (const auto& instance : sceneData.meshInstances) {
@@ -578,6 +849,46 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                             renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
                         }
                     }
+                }
+            }
+        }
+
+        // --- Scatter entities: one draw per model×section, instanceCount = N ---
+        {
+            struct ModelPC { glm::mat4 model; } modelPC;
+            modelPC.model = glm::mat4(1.0f); // instance SSBO carries the full world transforms
+            renderCtx.PushVertexConstants(0, &modelPC, sizeof(ModelPC));
+
+            for (const auto& batch : m_ScatterBatches) {
+                const auto& sceneData = AssetManager::LoadGLTF(batch.modelPath);
+                if (!sceneData.model) continue;
+                if (batch.meshInstanceIdx >= (uint32_t)sceneData.meshInstances.size()) continue;
+
+                renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
+                renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
+                renderCtx.BindVertexStorageBuffer(1, batch.instanceBuffer.get());
+
+                if (sceneData.model->GetMaterialBuffer())
+                    renderCtx.BindFragmentStorageBuffer(1, sceneData.model->GetMaterialBuffer());
+
+                const auto& meshInst    = sceneData.meshInstances[batch.meshInstanceIdx];
+                const auto& allSections  = sceneData.model->GetSections();
+                const auto& allMaterials = sceneData.model->GetMaterials();
+
+                for (uint32_t i = 0; i < meshInst.sectionCount; ++i) {
+                    const auto& section = allSections[meshInst.firstSection + i];
+                    struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; uint32_t pad; } fpc;
+                    fpc.matIdx = (uint32_t)section.materialIndex;
+                    fpc.objID  = 0;
+                    fpc.alpha  = 1.0f;
+                    renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
+
+                    if (section.materialIndex < allMaterials.size()) {
+                        auto tex = allMaterials[section.materialIndex].baseColorTexture;
+                        if (!tex) tex = AssetManager::GetFallbackTexture();
+                        renderCtx.BindFragmentTexture(0, tex.get());
+                    }
+                    renderCtx.DrawIndexed(section.indexCount, batch.instanceCount, section.firstIndex);
                 }
             }
         }
@@ -839,6 +1150,40 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
     }
 
     m_Camera->Update(dt);
+
+    // Per-biome fog: sample camera tile, pick fog colour for that biome.
+    if (ctx.postProcessor && m_World.GetGridSize() > 0) {
+        int tx, tz;
+        m_World.WorldToTile(m_Camera->m_Position.x, m_Camera->m_Position.z, tx, tz);
+        const TerrainTile& tile = m_World.GetTile(tx, tz);
+        BugClass biome = (tile.territoryId < m_World.GetTerrains().size())
+            ? m_World.GetTerrains()[tile.territoryId].bugClass
+            : BugClass::None;
+
+        glm::vec3 fogCol;
+        float fogDensity = 0.003f;
+        switch (biome) {
+            case BugClass::Ants:             fogCol = {0.85f, 0.78f, 0.55f}; fogDensity = 0.002f; break; // sandy haze
+            case BugClass::Termites:         fogCol = {0.52f, 0.42f, 0.28f}; fogDensity = 0.003f; break;
+            case BugClass::Spiders:          fogCol = {0.18f, 0.14f, 0.22f}; fogDensity = 0.005f; break; // dark moody
+            case BugClass::Woodlice:         fogCol = {0.58f, 0.60f, 0.65f}; fogDensity = 0.003f; break; // grey mist
+            case BugClass::BeesWasps:        fogCol = {0.80f, 0.78f, 0.50f}; fogDensity = 0.002f; break; // golden
+            case BugClass::ButterfliesMoths: fogCol = {0.70f, 0.62f, 0.80f}; fogDensity = 0.003f; break; // lavender
+            case BugClass::Snails:           fogCol = {0.30f, 0.52f, 0.40f}; fogDensity = 0.004f; break; // wet moss
+            case BugClass::Mantis:           fogCol = {0.15f, 0.30f, 0.18f}; fogDensity = 0.005f; break; // deep forest
+            case BugClass::Fireflies:        fogCol = {0.10f, 0.18f, 0.32f}; fogDensity = 0.006f; break; // twilight
+            case BugClass::CentipedesWorms:  fogCol = {0.20f, 0.16f, 0.12f}; fogDensity = 0.006f; break; // underground
+            case BugClass::MosquitosTicks:   fogCol = {0.28f, 0.42f, 0.22f}; fogDensity = 0.005f; break; // swamp
+            case BugClass::Dragonflies:      fogCol = {0.18f, 0.42f, 0.52f}; fogDensity = 0.004f; break; // teal pond
+            case BugClass::Bugs:             fogCol = {0.50f, 0.62f, 0.15f}; fogDensity = 0.004f; break; // toxic
+            case BugClass::Roaches:          fogCol = {0.32f, 0.26f, 0.20f}; fogDensity = 0.005f; break; // decay
+            case BugClass::Beetles:          fogCol = {0.22f, 0.20f, 0.25f}; fogDensity = 0.005f; break; // charcoal
+            case BugClass::Scorpions:        fogCol = {0.88f, 0.80f, 0.55f}; fogDensity = 0.002f; break; // desert
+            default:                         fogCol = {0.65f, 0.72f, 0.80f}; fogDensity = 0.003f; break;
+        }
+        ctx.postProcessor->SetFog(fogCol, fogDensity, 30.0f);
+    }
+
     m_TotalTime += dt;
     m_FrameCount++;
 }
@@ -937,7 +1282,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     }
     ImGui::End();
 
-    // Resource stockpile HUD
+    // Resource stockpile HUD (top-right overlay) – always visible on host.
     if (ctx.network.IsHosting()) {
         ResourceHUD::Draw(ctx.serverRegistry, /*teamId=*/0);
     }
@@ -949,6 +1294,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             m_ShowMapOverlay = !m_ShowMapOverlay;
         ImGui::End();
 
+        // Keyboard shortcut M
         if (ImGui::IsKeyPressed(ImGuiKey_M))
             m_ShowMapOverlay = !m_ShowMapOverlay;
 
@@ -967,7 +1313,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             // Draw territory overlay (server registry or synced packet data)
             if (ctx.network.IsHosting()) {
                 TerritorySystem::DrawOverlay(ctx.serverRegistry, mapOrigin, mapSize,
-                    glm::vec2{-50.f, -50.f}, glm::vec2{50.f, 50.f});
+                    glm::vec2{-375.f, -375.f}, glm::vec2{375.f, 375.f});
             } else if (m_HasTerritoryData) {
                 // Draw from client-side territory data using a minimal inline overlay
                 DrawClientTerritoryOverlay(mapOrigin, mapSize);
