@@ -1,0 +1,62 @@
+# Doxyfile for the teacher-friendly slim Bugmin docs.
+# Run from repo root:  doxygen tools/Doxyfile
+# Output:              docs/generated/html/
+
+PROJECT_NAME           = "Bugmin"
+PROJECT_NUMBER         = 1.0
+PROJECT_BRIEF          = "Pikmin-inspirierter LAN-Multiplayer-RTS (C++ / SDL3 / Jolt / EnTT)"
+OUTPUT_DIRECTORY       = docs/generated
+HTML_OUTPUT            = html
+
+INPUT                  = src docs/mainpage.md
+RECURSIVE              = YES
+USE_MDFILE_AS_MAINPAGE = docs/mainpage.md
+
+# Exclude noisy sub-trees that aren't useful for understanding the game itself.
+# (Internal GPU plumbing, generated networking wrapper, large vendor headers.)
+EXCLUDE_PATTERNS       = */Graphics/API/* \
+                         */Networking/NetworkWrapper.h \
+                         */Networking/enet_implementation.cpp \
+                         */Core/tiny_gltf_implementation.cpp \
+                         */Window/* \
+                         */Audio/SoundEvents.h
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HAVE_DOT               = NO
+
+# --- Be strict about what shows up -------------------------------------------
+# Only show things the team actually documented; hide private/static helpers
+# and undocumented internals, so the teacher gets a tour of the public API
+# instead of every helper struct.
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+EXTRACT_LOCAL_CLASSES  = NO
+EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_CLASSES     = YES
+HIDE_UNDOC_MEMBERS     = YES
+INTERNAL_DOCS          = NO
+
+# --- Slim down the HTML output -----------------------------------------------
+# Search engine ships ~270 .js shards — kill it, the tree view is enough.
+SEARCHENGINE           = NO
+DISABLE_INDEX          = NO
+# No left-side tree view — the curated landing page is the navigation.
+GENERATE_TREEVIEW      = NO
+# Drop the per-class "Files that include this header" lists.
+SHOW_USED_FILES        = NO
+# Drop the per-page footer link to its source file.
+REFERENCES_LINK_SOURCE = NO
+SOURCE_BROWSER         = NO
+VERBATIM_HEADERS       = NO
+# Hide the standalone file list — `mainpage.md` already routes the reader.
+SHOW_FILES             = NO
+
+# --- Niceties ----------------------------------------------------------------
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+JAVADOC_AUTOBRIEF      = YES
+QUIET                  = YES
+WARN_LOGFILE           = docs/generated/warnings.log
