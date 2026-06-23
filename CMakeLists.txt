@@ -73,6 +73,11 @@ target_include_directories(Bugmin PRIVATE
 
 if(WIN32)
     target_compile_definitions(Bugmin PRIVATE AL_LIBTYPE_STATIC)
+    # Force stack realignment to 32 bytes — the MinGW CRT only guarantees 16-byte
+    # alignment, but the compiler may emit aligned AVX stores (vmovdqa) that
+    # require 32-byte alignment. Without this flag the program will crash on
+    # startup under Wine and potentially on real Windows too.
+    target_compile_options(Bugmin PRIVATE -mstackrealign)
 endif()
 
 # Shader Compilation
@@ -116,6 +121,53 @@ if(GLSLANG_VALIDATOR)
     add_custom_target(compile_shaders ALL DEPENDS ${SPIRV_SHADERS})
     add_dependencies(Bugmin compile_shaders)
 
+    # DXBC Shader Compilation (for DirectX 12 backend)
+    find_program(SPIRV_CROSS spirv-cross)
+    find_program(DXC dxc)
+    if(SPIRV_CROSS AND DXC)
+        message(STATUS "Found spirv-cross: ${SPIRV_CROSS}")
+        message(STATUS "Found dxc: ${DXC}")
+
+        set(DXBC_SHADERS)
+        foreach(SPIRV_SHADER ${SPIRV_SHADERS})
+            get_filename_component(SHADER_NAME ${SPIRV_SHADER} NAME)
+            # Strip .spv to get e.g. "model.vert" from "model.vert.spv"
+            string(REGEX REPLACE "\\.spv$" "" SHADER_STEM ${SHADER_NAME})
+
+            # Determine HLSL profile from shader stage in the stem
+            if(SHADER_STEM MATCHES "\\.vert$")
+                set(HLSL_PROFILE "vs_5_1")
+            elseif(SHADER_STEM MATCHES "\\.frag$")
+                set(HLSL_PROFILE "ps_5_1")
+            else()
+                set(HLSL_PROFILE "")
+            endif()
+
+            if(HLSL_PROFILE)
+                set(HLSL_OUT "${SHADER_BINARY_DIR}/${SHADER_STEM}.hlsl")
+                set(DXBC_OUT "${SHADER_BINARY_DIR}/${SHADER_STEM}.dxbc")
+
+                add_custom_command(
+                    OUTPUT ${DXBC_OUT}
+                    COMMAND ${SPIRV_CROSS} ${SPIRV_SHADER} --hlsl --shader-model 51 --output ${HLSL_OUT}
+                    COMMAND ${DXC} -E main -T ${HLSL_PROFILE} ${HLSL_OUT} -Fo ${DXBC_OUT}
+                    DEPENDS ${SPIRV_SHADER}
+                    COMMENT "Compiling DXBC shader ${SHADER_STEM}"
+                    VERBATIM
+                )
+                list(APPEND DXBC_SHADERS ${DXBC_OUT})
+            endif()
+        endforeach()
+
+        if(DXBC_SHADERS)
+            add_custom_target(compile_dxbc_shaders ALL DEPENDS ${DXBC_SHADERS})
+            add_dependencies(compile_dxbc_shaders compile_shaders)
+            add_dependencies(Bugmin compile_dxbc_shaders)
+        endif()
+    else()
+        message(WARNING "spirv-cross or dxc not found! DXBC shaders will not be compiled.")
+    endif()
+
     # Copy shaders to executable directory on build
     add_custom_command(TARGET Bugmin POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -153,5 +205,7 @@ else()
 endif()
 
 if(WIN32)
+    # Statically link all runtime libraries (libgcc, libstdc++, winpthread, UCRT)
+    # so the exe is fully standalone with no VC redist or other DLL dependencies.
     target_link_options(Bugmin PRIVATE -static)
 endif()

@@ -518,8 +518,8 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         ShaderResourceLayout vertLayout = {0, 0, 2, 1}; // 2 SSBOs: GlobalUniforms + InstanceTransforms
         ShaderResourceLayout fragLayout = {2, 0, 2, 1};
 
-        m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert.spv", ShaderStage::Vertex, vertLayout);
-        m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag.spv", ShaderStage::Fragment, fragLayout);
+        m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert", ShaderStage::Vertex, vertLayout);
+        m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag", ShaderStage::Fragment, fragLayout);
 
         PipelineConfig config;
         config.vertexShader = m_VertShader.get();
@@ -582,8 +582,8 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         ShaderResourceLayout shadowVertLayout = {0, 0, 1, 2}; // 1 SSBO: InstanceTransforms; 2 uniforms: ShadowPC + ShadowVP
         ShaderResourceLayout shadowFragLayout = {0, 0, 0, 0};
 
-        m_ShadowVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.vert.spv", ShaderStage::Vertex, shadowVertLayout);
-        m_ShadowFragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.frag.spv", ShaderStage::Fragment, shadowFragLayout);
+        m_ShadowVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.vert", ShaderStage::Vertex, shadowVertLayout);
+        m_ShadowFragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/shadow.frag", ShaderStage::Fragment, shadowFragLayout);
 
         PipelineConfig shadowCfg;
         shadowCfg.vertexShader = m_ShadowVertShader.get();

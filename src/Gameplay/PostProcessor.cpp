@@ -43,8 +43,8 @@ void PostProcessor::InitPipelines(Renderer* renderer) {
     ShaderResourceLayout postVertLayout = {0, 0, 0, 0}; // Fullscreen triangle
     ShaderResourceLayout postFragLayout = {4, 0, 0, 2}; // 4 Samplers, 2 PC slots
 
-    m_PostVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/post.vert.spv", ShaderStage::Vertex, postVertLayout);
-    m_PostFragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/post.frag.spv", ShaderStage::Fragment, postFragLayout);
+    m_PostVertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/post.vert", ShaderStage::Vertex, postVertLayout);
+    m_PostFragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/post.frag", ShaderStage::Fragment, postFragLayout);
 
     PipelineConfig postConfig;
     postConfig.vertexShader = m_PostVertShader.get();

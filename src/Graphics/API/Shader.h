@@ -41,8 +41,11 @@ class Shader {
 public:
     /**
      * @brief Loads and creates a shader from a binary file.
+     *        The correct file extension (.spv / .dxbc / .dxil / .msl) is
+     *        appended automatically based on the device's shader format.
      * @param device Pointer to the active SDL_GPUDevice.
-     * @param filePath Path to the binary shader file.
+     * @param filePath Path to the shader file without format extension
+     *        (e.g. "shaders/model.vert" loads "model.vert.spv" on Vulkan).
      * @param stage Whether this is a vertex or fragment shader.
      * @param layout Description of the resources this shader uses.
      */
