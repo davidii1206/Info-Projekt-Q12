@@ -24,6 +24,7 @@
 #include <vector>
 #include <cstdint>
 #include <memory>
+#include <limits>
 
 class Shader;
 class GraphicsPipeline;
@@ -400,6 +401,10 @@ private:
     uint32_t     m_FogCoverVersion = 0;
     bool         m_FogCoverDirty   = true;
     float        m_FogCoverTimer   = 0.f;
+    /// XZ position the fog cover mesh was last built around — used to trigger
+    /// rebuilds when the camera has moved enough that the cull box no longer
+    /// covers the visible area.
+    glm::vec3    m_FogCoverLastPos { std::numeric_limits<float>::infinity() };
 
     bool         m_ScatterBatchesDirty = false;
 

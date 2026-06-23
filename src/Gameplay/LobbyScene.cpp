@@ -19,8 +19,14 @@ void LobbyScene::OnEnter(SceneContext& ctx) {
     m_GameStarting = false;
     m_LobbyPlayers.clear();
 
-    // Check if we already have player entities (returning from GameScene)
+    // Check if we already have player entities (returning from GameScene).
+    // Rebuild m_ServerNetMap, m_PeerToNetId and the netId/playerId counters
+    // so the next CONNECT event doesn't reuse already-assigned IDs and
+    // existing peers still match incoming LOBBY_UPDATE packets.
     bool hasExistingPlayers = false;
+    uint32_t maxNetId    = 0;
+    uint32_t maxPlayerId = 0;
+    bool     anyPlayer   = false;
     {
         auto pView = ctx.serverRegistry.view<PlayerComponent>();
         for (auto e : pView) {
@@ -36,6 +42,13 @@ void LobbyScene::OnEnter(SceneContext& ctx) {
 
             // Rebuild net maps if needed
             if (nc) m_ServerNetMap[nc->netId] = e;
+            // Rebuild peer<->net map from persisted peerId (only host stamps it)
+            if (pc.peerId != 0xFFFFFFFFu && nc)
+                m_PeerToNetId[pc.peerId] = nc->netId;
+
+            anyPlayer = true;
+            if (nc && nc->netId > maxNetId)       maxNetId    = nc->netId;
+            if (pc.playerId > maxPlayerId)        maxPlayerId = pc.playerId;
 
             if (pc.isLocal) {
                 m_MyPlayerId = pc.playerId;
@@ -43,6 +56,11 @@ void LobbyScene::OnEnter(SceneContext& ctx) {
                 m_IdAssigned = true;
             }
         }
+    }
+    // Continue assigning fresh IDs above the highest one already in use.
+    if (anyPlayer) {
+        m_NextNetId    = maxNetId + 1;
+        m_NextPlayerId = maxPlayerId + 1;
     }
 
     // If not hosting, try to recover identity from client registry (returning from game)
@@ -265,7 +283,12 @@ void LobbyScene::PollConnectionEvents(SceneContext& ctx) {
             auto entity = ctx.serverRegistry.create();
             ctx.serverRegistry.emplace<TransformComponent>(entity);
             ctx.serverRegistry.emplace<MovementComponent>(entity);
-            ctx.serverRegistry.emplace<PlayerComponent>(entity, newPlayerId, false);
+            // Stamp peerId so the mapping survives scene transitions.
+            PlayerComponent pc{};
+            pc.playerId = newPlayerId;
+            pc.isLocal  = false;
+            pc.peerId   = peerId;
+            ctx.serverRegistry.emplace<PlayerComponent>(entity, pc);
             ctx.serverRegistry.emplace<NetworkedComponent>(entity, newNetId);
             m_ServerNetMap[newNetId] = entity;
             m_PeerToNetId[peerId]    = newNetId;

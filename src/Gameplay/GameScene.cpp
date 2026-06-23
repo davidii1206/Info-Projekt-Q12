@@ -66,6 +66,22 @@ bool IsBuildableAt(const WorldManager& world, float wx, float wz) {
     return world.GetTile(tx, tz).buildable;
 }
 
+/// True if a unit may walk onto the tile at the given world XZ.
+/// Less strict than IsBuildableAt: ramps are allowed (units climb corridor
+/// ramps); only Water and Cliff faces are forbidden. The optional
+/// @p currentTier guards against climbing onto tiles more than one tier
+/// higher (i.e. off-corridor cliff walls).
+bool IsWalkableAt(const WorldManager& world, float wx, float wz, int currentTier = -1) {
+    if (world.GetGridSize() <= 0) return false;
+    int tx, tz;
+    world.WorldToTile(wx, wz, tx, tz);
+    const auto& tile = world.GetTile(tx, tz);
+    if (tile.surface == TileSurface::Water) return false;
+    if (tile.surface == TileSurface::Cliff) return false;
+    if (currentTier >= 0 && (int)tile.tier - currentTier > 1) return false;
+    return true;
+}
+
 /// True if a scatter model path corresponds to a tall asset (tree, cactus,
 /// mushroom, bamboo) that can occlude the isometric view in building mode.
 bool IsTreeModelPath(const std::string& path) {
@@ -159,8 +175,39 @@ void GameScene::BuildFogCoverMesh(SceneContext& ctx) {
     std::vector<ModelVertex> vertices;
     std::vector<uint32_t> indices;
 
-    for (int cz = 0; cz < fog.cellsZ; ++cz) {
-        for (int cx = 0; cx < fog.cellsX; ++cx) {
+    // ------------------------------------------------------------------
+    // View-aligned cull box: only emit fog quads for cells the camera can
+    // actually see. The full grid is 375x375x4=540k cells worst case; with
+    // this we typically emit a few hundred. Box is sized generously per
+    // camera mode + clamped to the grid, and we re-build when the camera
+    // moves out of the safety margin.
+    // ------------------------------------------------------------------
+    float halfW, halfH; // half-extents of visible area in world units (XZ)
+    if (m_CameraMode == CameraMode::Building && m_Camera) {
+        // Orthographic top-down: ortho size is the visible half-height.
+        // Width depends on aspect ratio. Add 30% margin so panning isn't visible.
+        int winW = 1, winH = 1;
+        if (ctx.renderer && ctx.renderer->GetWindow())
+            SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
+        float aspect = (winH > 0) ? (float)winW / (float)winH : 1.f;
+        halfH = m_BuildOrthoSize * 1.30f;
+        halfW = halfH * aspect;
+    } else {
+        // First-person / commander view: cover a circle around the camera that
+        // comfortably exceeds the far visible distance on flat terrain.
+        halfW = halfH = 120.f;
+    }
+
+    glm::vec3 cameraPos = m_Camera ? m_Camera->m_Position : glm::vec3(0.f);
+    int cxMin, czMin, cxMax, czMax;
+    fog.WorldToCell(glm::vec3(cameraPos.x - halfW, 0.f, cameraPos.z - halfH), cxMin, czMin);
+    fog.WorldToCell(glm::vec3(cameraPos.x + halfW, 0.f, cameraPos.z + halfH), cxMax, czMax);
+    // WorldToCell clamps to grid bounds, so the loop below is always in-range.
+
+    m_FogCoverLastPos = cameraPos;
+
+    for (int cz = czMin; cz <= czMax; ++cz) {
+        for (int cx = cxMin; cx <= cxMax; ++cx) {
             if (fog.IsRevealed(cx, cz)) continue;
 
             float wx0 = cx * fog.cellSize + fog.worldMin.x;
@@ -289,6 +336,49 @@ void GameScene::GenerateMapTexture(SceneContext& ctx) {
 void GameScene::OnEnter(SceneContext& ctx) {
     spdlog::info("GameScene: entered");
     UpgradeSystem::Reset();
+
+    // ------------------------------------------------------------------
+    // Recover identity from existing PlayerComponents (Lobby→Game).
+    //
+    // Without this, m_MyPlayerId / m_IdAssigned / m_NextNetId / m_NextPlayerId
+    // / m_PeerToNetId all default to fresh values and any peer that's still
+    // connected from the lobby session can't be matched to incoming packets,
+    // and the next CONNECT event re-issues an already-used netId.
+    // ------------------------------------------------------------------
+    {
+        uint32_t maxNetId    = 0;
+        uint32_t maxPlayerId = 0;
+        bool     anyPlayer   = false;
+
+        auto pView = ctx.serverRegistry.view<PlayerComponent>();
+        for (auto e : pView) {
+            const auto& pc = pView.get<PlayerComponent>(e);
+            auto* nc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+            if (nc) m_ServerNetMap[nc->netId] = e;
+            if (pc.peerId != 0xFFFFFFFFu && nc)
+                m_PeerToNetId[pc.peerId] = nc->netId;
+            anyPlayer = true;
+            if (nc && nc->netId > maxNetId)  maxNetId    = nc->netId;
+            if (pc.playerId > maxPlayerId)   maxPlayerId = pc.playerId;
+        }
+        if (anyPlayer) {
+            m_NextNetId    = maxNetId + 1;
+            m_NextPlayerId = maxPlayerId + 1;
+        }
+
+        // Mirror client-registry rebuild and recover local identity.
+        auto cView = ctx.clientRegistry.view<PlayerComponent>();
+        for (auto e : cView) {
+            const auto& pc = cView.get<PlayerComponent>(e);
+            auto* nc = ctx.clientRegistry.try_get<NetworkedComponent>(e);
+            if (nc) m_ClientNetMap[nc->netId] = e;
+            if (pc.isLocal) {
+                m_MyPlayerId = pc.playerId;
+                m_MyNetId    = nc ? nc->netId : 0;
+                m_IdAssigned = true;
+            }
+        }
+    }
 
     if (!m_Camera) {
         m_Camera = std::make_unique<Camera>();
@@ -1798,6 +1888,14 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
 
     // Throttled fog-cover + scatter-batch rebuild (host and client, at most 0.5 Hz)
     m_FogCoverTimer += dt;
+    // Also rebuild when the camera has moved far enough that the previous
+    // cull box no longer safely covers the visible area. The 30% margin in
+    // BuildFogCoverMesh means re-building every ~25 world units is plenty.
+    if (m_Camera) {
+        glm::vec3 d = m_Camera->m_Position - m_FogCoverLastPos;
+        float distSq = d.x * d.x + d.z * d.z;
+        if (distSq > 25.f * 25.f) m_FogCoverDirty = true;
+    }
     if (m_FogCoverDirty && m_FogCoverTimer >= 0.5f) {
         BuildFogCoverMesh(ctx);
         m_FogCoverTimer = 0.f;
@@ -1898,7 +1996,12 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
             auto entity = ctx.serverRegistry.create();
             ctx.serverRegistry.emplace<TransformComponent>(entity);
             ctx.serverRegistry.emplace<MovementComponent>(entity);
-            ctx.serverRegistry.emplace<PlayerComponent>(entity, newPlayerId, false);
+            // Stamp peerId so the mapping survives scene transitions.
+            PlayerComponent pc{};
+            pc.playerId = newPlayerId;
+            pc.isLocal  = false;
+            pc.peerId   = peerId;
+            ctx.serverRegistry.emplace<PlayerComponent>(entity, pc);
             ctx.serverRegistry.emplace<NetworkedComponent>(entity, newNetId);
             m_ServerNetMap[newNetId] = entity;
             m_PeerToNetId[peerId]    = newNetId;
@@ -2583,6 +2686,38 @@ glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
  */
 void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 {
+    // Collect building obstacles once per tick. Units treat every alive
+    // building as a circular obstacle of radius kBuildingRadius around its
+    // transform position; small enough to fit between adjacent placements,
+    // big enough that units don't visibly clip the building model.
+    constexpr float kBuildingRadius = 1.6f;
+    constexpr float kUnitRadius     = 0.5f;
+    constexpr float kAvoidDist      = kBuildingRadius + kUnitRadius;
+    constexpr float kAvoidDistSq    = kAvoidDist * kAvoidDist;
+
+    struct Obstacle { glm::vec2 pos; };
+    std::vector<Obstacle> obstacles;
+    {
+        auto bldView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+        obstacles.reserve(64);
+        for (auto be : bldView) {
+            const auto& bc = bldView.get<BuildingComponent>(be);
+            if (bc.destroyed) continue;
+            const auto& btf = bldView.get<TransformComponent>(be);
+            obstacles.push_back({ glm::vec2(btf.position.x, btf.position.z) });
+        }
+    }
+
+    // True if the candidate XZ position is free of buildings (with margin)
+    // AND on a walkable terrain tile reachable from @p currentTier.
+    auto canStand = [&](glm::vec2 np, int currentTier) -> bool {
+        for (const auto& ob : obstacles) {
+            glm::vec2 d = ob.pos - np;
+            if (d.x * d.x + d.y * d.y < kAvoidDistSq) return false;
+        }
+        return IsWalkableAt(m_World, np.x, np.y, currentTier);
+    };
+
     auto view = ctx.serverRegistry.view<TransformComponent, MovementComponent,
                                         MovementOrderComponent, UnitComponent>();
     for (auto e : view) {
@@ -2592,18 +2727,45 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
         if (!mo.active) { mv.velocity = {0.f, 0.f, 0.f}; continue; }
 
-        glm::vec3 dir = mo.destination - tf.position;
-        dir.y = 0.f; // stay on ground
-        float dist = glm::length(dir);
-        if (dist < 1.f) {
-            mo.active    = false;
-            mv.velocity  = {0.f, 0.f, 0.f};
-        } else {
-            dir = glm::normalize(dir);
-            mv.velocity  = dir * mv.speed;
-            tf.position += mv.velocity * dt;
-            tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.z));
+        glm::vec3 toDest = mo.destination - tf.position;
+        toDest.y = 0.f;
+        float distToDest = glm::length(toDest);
+        if (distToDest < 1.f) {
+            mo.active   = false;
+            mv.velocity = {0.f, 0.f, 0.f};
+            // Snap to terrain on arrival too.
+            tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+            continue;
         }
+
+        glm::vec3 dir       = toDest / distToDest;
+        glm::vec2 step      = glm::vec2(dir.x, dir.z) * (mv.speed * dt);
+        glm::vec2 curXZ     = glm::vec2(tf.position.x, tf.position.z);
+
+        int curTx, curTz;
+        m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
+        int currentTier = (int)m_World.GetTile(curTx, curTz).tier;
+
+        // Try full step → slide along X → slide along Z. If all blocked, hold.
+        glm::vec2 chosen{0.f};
+        if      (canStand(curXZ + step,                       currentTier)) chosen = step;
+        else if (canStand(curXZ + glm::vec2(step.x, 0.f),     currentTier)) chosen = {step.x, 0.f};
+        else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier)) chosen = {0.f,    step.y};
+        else                                                                chosen = {0.f, 0.f};
+
+        if (chosen.x == 0.f && chosen.y == 0.f) {
+            // Fully blocked this tick — pause velocity but keep the order so
+            // the unit retries next tick (obstacles may move / be destroyed).
+            mv.velocity = {0.f, 0.f, 0.f};
+            continue;
+        }
+
+        tf.position.x += chosen.x;
+        tf.position.z += chosen.y;
+        // Snap to the terrace surface so units don't float over tier changes.
+        tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+        mv.velocity   = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+        tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.z));
     }
 }
 

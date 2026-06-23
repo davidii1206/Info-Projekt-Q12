@@ -53,6 +53,11 @@ struct PlayerComponent {
     bool     isLocal  = false; /**< Whether this is the local player. */
     CameraMode cameraMode = CameraMode::Commander; /**< Current camera mode. */
     BugClass bugClass = BugClass::None; /**< The faction/class of the player. */
+    /// Network peer id this player is connected on (server-side bookkeeping).
+    /// 0xFFFFFFFF means "not yet associated with a peer" (e.g. client-registry
+    /// copies). Persisted on the entity so scene transitions can rebuild
+    /// peer<->player maps without re-handshaking the network.
+    uint32_t peerId   = 0xFFFFFFFFu;
 };
 
 /**
