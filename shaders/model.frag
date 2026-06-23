@@ -60,11 +60,16 @@ layout(set = 2, binding = 3, std430) readonly buffer MaterialBuffer {
     GPUMaterial materials[];
 } matBuffer;
 
-// Fragment push constants: material index, object ID, alpha (transparency)
+// Fragment push constants: material index, object ID, alpha, blocksView flag,
+// ghost position (for tree fade), and tint colour.
+// vec4 used throughout so std140 alignment is 1:1 with the C++ FragPC struct.
 layout(set = 3, binding = 0) uniform MaterialIndex {
     uint  materialIndex;
     uint  objectID;
     float alpha;
+    float blocksView;     // >0 = apply distance-based transparency near ghostPos
+    vec4  ghostPos;       // xyz = fade centre when blocksView > 0, w unused
+    vec4  tintColor;      // rgb = per-object colour tint (1 = no tint), w unused
 } pc;
 
 // ---------------------------------------------------------------------------
@@ -164,6 +169,19 @@ void main() {
     vec4 texColor   = texture(baseColorTexture, vTexCoords);
     vec4 albedo     = mat.baseColorFactor * vColor * texColor;
     albedo.a *= pc.alpha;
+
+    // Distance-based tree fade: when blocksView > 0, tall assets near the
+    // cursor position fade out so the player can see the placement area.
+    // smoothstep(5, 35, dist) gives full transparency within ~5 units of the
+    // cursor, fully opaque beyond ~35 units, with a smooth falloff between.
+    if (pc.blocksView > 0.5) {
+        float dist = length(vPos.xz - pc.ghostPos.xz);
+        float fade = smoothstep(5.0, 35.0, dist);
+        albedo.a *= fade;
+    }
+
+    albedo.rgb *= pc.tintColor.rgb;
+
     if (albedo.a < 0.01) discard;
 
     vec3 N = normalize(vNormal);

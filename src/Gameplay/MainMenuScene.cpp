@@ -1,5 +1,5 @@
 #include "MainMenuScene.h"
-#include "GameScene.h"
+#include "LobbyScene.h"
 #include "../Networking/NetworkManager.h"
 #include "../Core/Input.h"
 #include "../Graphics/Renderer.h"
@@ -45,27 +45,10 @@ void MainMenuScene::OnExit(SceneContext& ctx) {
  * @brief Called every frame to update scene logic.
  */
 void MainMenuScene::LogicUpdate(SceneContext& ctx, float dt) {
-    if (ctx.network.IsConnected()) {
-        ctx.scenes.RequestTransition(new GameScene());
-    }
-
-    if (Input::IsRelativeMouseMode()) {
-        glm::vec2 delta = Input::GetMouseDelta();
-        m_Camera->Rotate(delta.x, delta.y);
-
-        if (Input::IsKeyDown(SDLK_W)) m_Camera->MoveForward(dt);
-        if (Input::IsKeyDown(SDLK_S)) m_Camera->MoveBackward(dt);
-        if (Input::IsKeyDown(SDLK_A)) m_Camera->MoveLeft(dt);
-        if (Input::IsKeyDown(SDLK_D)) m_Camera->MoveRight(dt);
-        if (Input::IsKeyDown(SDLK_SPACE)) m_Camera->MoveUp(dt);
-        if (Input::IsKeyDown(SDLK_LSHIFT)) m_Camera->MoveDown(dt);
+    if (ctx.network.IsHosting()) {
+        ctx.scenes.RequestTransition(new LobbyScene());
     }
     m_Camera->Update(dt);
-
-    if (Input::IsKeyPressed(SDLK_F1)) {
-        bool newState = !Input::IsRelativeMouseMode();
-        Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
-    }
 }
 
 /**
@@ -74,13 +57,23 @@ void MainMenuScene::LogicUpdate(SceneContext& ctx, float dt) {
 void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
     ImGui::Begin("Main Menu");
     ImGui::Text("Bugmin Engine - Main Menu");
-    ImGui::Text("F1 to toggle Free-Fly Camera");
     if (ImGui::Button("Host Game")) {
         if (ctx.network.StartHost()) {
             spdlog::info("Hosting game on port 25565");
         }
     }
-    ImGui::SameLine();
+    ImGui::InputText("IP", m_ConnectIP, sizeof(m_ConnectIP));
+    if (ImGui::Button("Connect") && !ctx.network.IsConnected()) {
+        if (ctx.network.Connect(m_ConnectIP)) {
+            spdlog::info("Connecting to {}", m_ConnectIP);
+        }
+    }
+    if (ctx.network.IsConnected()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Open Lobby")) {
+            ctx.scenes.RequestTransition(new LobbyScene());
+        }
+    }
     if (ImGui::Button("Quit")) {
         SDL_Event quitEvent;
         quitEvent.type = SDL_EVENT_QUIT;

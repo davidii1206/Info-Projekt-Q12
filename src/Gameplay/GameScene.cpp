@@ -5,6 +5,7 @@
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include "GameScene.h"
+#include "LobbyScene.h"
 #include "MainMenuScene.h"
 #include "World.h"
 #include "Components.h"
@@ -65,6 +66,19 @@ bool IsBuildableAt(const WorldManager& world, float wx, float wz) {
     return world.GetTile(tx, tz).buildable;
 }
 
+/// True if a scatter model path corresponds to a tall asset (tree, cactus,
+/// mushroom, bamboo) that can occlude the isometric view in building mode.
+bool IsTreeModelPath(const std::string& path) {
+    // Trees, willows, pines, birches (live and dead), cacti, mushrooms, bamboo
+    return path.find("Tree")    != std::string::npos ||
+           path.find("Willow")  != std::string::npos ||
+           path.find("Pine")    != std::string::npos ||
+           path.find("Birch")   != std::string::npos ||
+           path.find("Cactus")  != std::string::npos ||
+           path.find("Mushroom")!= std::string::npos ||
+           path.find("Bamboo")  != std::string::npos;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -78,7 +92,7 @@ GameScene::~GameScene() {}
 // GPU instancing helpers
 // ---------------------------------------------------------------------------
 
-void GameScene::BuildScatterBatches(SceneContext& ctx) {
+void GameScene::BuildScatterBatches(SceneContext& ctx, const FogGrid* fog) {
     m_ScatterBatches.clear();
 
     SDL_GPUDevice* device = ctx.renderer->GetDevice();
@@ -89,6 +103,11 @@ void GameScene::BuildScatterBatches(SceneContext& ctx) {
     for (auto entity : scatterView) {
         auto& tf = scatterView.get<TransformComponent>(entity);
         auto& mc = scatterView.get<ModelComponent>(entity);
+
+        // Fog of war culling: skip scatters in unrevealed cells
+        if (fog && fog->IsInitialised() && !fog->IsWorldPosRevealed(tf.position))
+            continue;
+
         glm::mat4 entityMat =
             glm::translate(glm::mat4(1.f), tf.position) *
             glm::mat4_cast(glm::quat(glm::radians(tf.rotation))) *
@@ -133,6 +152,136 @@ void GameScene::BuildScatterBatches(SceneContext& ctx) {
                  m_ScatterBatches.size(), entityMatsByPath.size());
 }
 
+void GameScene::BuildFogCoverMesh(SceneContext& ctx) {
+    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+    if (!fog.IsInitialised()) return;
+
+    std::vector<ModelVertex> vertices;
+    std::vector<uint32_t> indices;
+
+    for (int cz = 0; cz < fog.cellsZ; ++cz) {
+        for (int cx = 0; cx < fog.cellsX; ++cx) {
+            if (fog.IsRevealed(cx, cz)) continue;
+
+            float wx0 = cx * fog.cellSize + fog.worldMin.x;
+            float wz0 = cz * fog.cellSize + fog.worldMin.z;
+            float wx1 = wx0 + fog.cellSize;
+            float wz1 = wz0 + fog.cellSize;
+            float wxCenter = (wx0 + wx1) * 0.5f;
+            float wzCenter = (wz0 + wz1) * 0.5f;
+
+            // Sample terrain height at cell center + small offset to avoid z-fighting
+            int tx, tz;
+            m_World.WorldToTile(wxCenter, wzCenter, tx, tz);
+            const auto& tile = m_World.GetTile(tx, tz);
+            float y = m_World.TierToWorldHeight(tile.tier) + 0.15f;
+
+            uint32_t base = (uint32_t)vertices.size();
+            vertices.push_back({{wx0, y, wz0}, {0,1,0}, {0,0}, {0,0,0,1}});
+            vertices.push_back({{wx1, y, wz0}, {0,1,0}, {1,0}, {0,0,0,1}});
+            vertices.push_back({{wx1, y, wz1}, {0,1,0}, {1,1}, {0,0,0,1}});
+            vertices.push_back({{wx0, y, wz1}, {0,1,0}, {1,1}, {0,0,0,1}});
+            indices.push_back(base);
+            indices.push_back(base + 1);
+            indices.push_back(base + 2);
+            indices.push_back(base);
+            indices.push_back(base + 2);
+            indices.push_back(base + 3);
+        }
+    }
+
+    if (vertices.empty()) {
+        if (m_FogCoverEntity != entt::null && ctx.clientRegistry.valid(m_FogCoverEntity)) {
+            ctx.clientRegistry.destroy(m_FogCoverEntity);
+            m_FogCoverEntity = entt::null;
+        }
+        m_FogCoverDirty = false;
+        return;
+    }
+
+    std::string key = "procedural://fogcover/" + std::to_string(m_FogCoverVersion++);
+    Material fogMat{"FogCover"};
+    fogMat.baseColorFactor = {0, 0, 0, 1};
+    std::vector<MeshSection> sections = {{0, (uint32_t)indices.size(), 0}};
+    std::vector<Material> materials = {fogMat};
+
+    AssetManager::RegisterProceduralScene(key, vertices, indices, sections, materials);
+
+    if (m_FogCoverEntity == entt::null || !ctx.clientRegistry.valid(m_FogCoverEntity)) {
+        m_FogCoverEntity = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(m_FogCoverEntity);
+        ctx.clientRegistry.emplace<FogCoverComponent>(m_FogCoverEntity);
+    }
+    ctx.clientRegistry.emplace_or_replace<ModelComponent>(m_FogCoverEntity, key);
+    m_FogCoverDirty = false;
+}
+
+void GameScene::GenerateMapTexture(SceneContext& ctx) {
+    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+    if (!fog.IsInitialised()) return;
+
+    constexpr int TEX_SIZE = 512;
+    const float worldMin = fog.worldMin.x; // -375
+    const float worldMax = fog.worldMax.x; // +375
+    const float worldSpan = worldMax - worldMin; // 750
+
+    std::vector<uint8_t> pixels(TEX_SIZE * TEX_SIZE * 4, 0);
+
+    // Pre-fetch territories for fast color lookup
+    const auto& terrains = m_World.GetTerrains();
+
+    for (int py = 0; py < TEX_SIZE; ++py) {
+        for (int px = 0; px < TEX_SIZE; ++px) {
+            // World position of this pixel (center of pixel area)
+            float wx = worldMin + (px + 0.5f) / TEX_SIZE * worldSpan;
+            float wz = worldMin + (py + 0.5f) / TEX_SIZE * worldSpan;
+
+            // Fog check
+            int fcx, fcz;
+            fog.WorldToCell(glm::vec3(wx, 0, wz), fcx, fcz);
+            if (!fog.IsRevealed(fcx, fcz)) {
+                // Unexplored → black
+                int idx = (py * TEX_SIZE + px) * 4;
+                pixels[idx + 0] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+                pixels[idx + 3] = 255;
+                continue;
+            }
+
+            // Terrain tile lookup
+            int tx, tz;
+            m_World.WorldToTile(wx, wz, tx, tz);
+            const auto& tile = m_World.GetTile(tx, tz);
+
+            // Base color from territory or generic terrain
+            float r = 0.3f, g = 0.5f, b = 0.2f; // default green
+            if (tile.surface == TileSurface::Water) {
+                r = 0.1f; g = 0.2f; b = 0.6f; // blue
+            } else if (tile.territoryId < terrains.size()) {
+                const auto& terr = terrains[tile.territoryId];
+                r = terr.color.r;
+                g = terr.color.g;
+                b = terr.color.b;
+            }
+
+            // Height-based shading (higher = brighter)
+            float heightFrac = (float)tile.tier / (float)m_World.GetConfig().numTiers;
+            float shade = 0.6f + heightFrac * 0.4f;
+
+            int idx = (py * TEX_SIZE + px) * 4;
+            pixels[idx + 0] = (uint8_t)(std::min(r * shade, 1.0f) * 255);
+            pixels[idx + 1] = (uint8_t)(std::min(g * shade, 1.0f) * 255);
+            pixels[idx + 2] = (uint8_t)(std::min(b * shade, 1.0f) * 255);
+            pixels[idx + 3] = 255;
+        }
+    }
+
+    // Upload as GPU texture directly (bypass AssetManager cache since we regenerate)
+    m_MapTexture = std::make_unique<Texture>(ctx.renderer->GetDevice(), pixels.data(), TEX_SIZE, TEX_SIZE);
+    m_MapTextureDirty = false;
+}
+
 /**
  * @brief Initializes the camera and spawns a test asset if hosting.
  * @param ctx The scene context.
@@ -143,9 +292,12 @@ void GameScene::OnEnter(SceneContext& ctx) {
 
     if (!m_Camera) {
         m_Camera = std::make_unique<Camera>();
-        m_Camera->m_Position = {0, 2, 10};
-        m_Camera->m_Yaw = -90.0f;
-        m_Camera->m_Pitch = 0.0f;
+        m_CameraMode = CameraMode::Building;
+        m_Camera->SetProjectionMode(ProjectionMode::Orthographic);
+        m_Camera->m_OrthoSize = m_BuildOrthoSize;
+        m_Camera->m_Pitch = -55.f;
+        m_Camera->m_Yaw   = m_BuildYaw;
+        m_Camera->m_Position = glm::vec3(0.f, m_TopDownHeight, 0.f);
         m_Camera->UpdateVectors();
     }
 
@@ -241,6 +393,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
         auto terrainEntity = ctx.clientRegistry.create();
         ctx.clientRegistry.emplace<TransformComponent>(terrainEntity);
         ctx.clientRegistry.emplace<ModelComponent>(terrainEntity, "procedural://terrain");
+        ctx.clientRegistry.emplace<NoFogCullComponent>(terrainEntity);
 
         spdlog::info("GameScene: built terrain mesh ({} vertices, {} indices)",
                       terrainMesh.vertices.size(), terrainMesh.indices.size());
@@ -269,12 +422,6 @@ void GameScene::OnEnter(SceneContext& ctx) {
         m_ResourceManager.Init();
         m_ResourceManager.SpawnPermanentResources(ctx.serverRegistry);
 
-        // Demo: spawn a Fleisch drop that disappears after 15 s
-        m_ResourceManager.SpawnMeatDrop(ctx.serverRegistry,
-                                        glm::vec3{0.f, 0.f, 3.f},
-                                        /*amount=*/2,
-                                        /*dropLifetime=*/15.f);
-
         // Assign netIds to all permanent resources and broadcast to clients
         SyncResourceSpawns(ctx);
 
@@ -290,60 +437,67 @@ void GameScene::OnEnter(SceneContext& ctx) {
         HUDTextures::Load(ctx.renderer->GetDevice());
 
         // -----------------------------------------------------------------
-        // Demo team bases + units, anchored to two real territory spawn
-        // points so they land on buildable plateau ground (not random
-        // cliffs/water). SpawnBuilding / SpawnUnit snap Y to the terrain.
+        // Spawn MainBase at a unique territory for each connected player.
+        // Each player gets their own teamId (= playerId) for FFA.
+        // Skips BossArena territories.
         // -----------------------------------------------------------------
         {
             const auto& terr = m_World.GetTerrains();
-            std::vector<glm::vec2> teamSpawns;
+            std::vector<glm::vec2> availableSpawns;
             for (const auto& td : terr) {
                 if (td.bugClass == BugClass::BossArena) continue;
-                teamSpawns.push_back(td.spawnPoint);
-                if (teamSpawns.size() == 2) break;
+                availableSpawns.push_back(td.spawnPoint);
             }
-            while (teamSpawns.size() < 2) teamSpawns.push_back(glm::vec2(0.f));
 
-            const glm::vec2 base0 = teamSpawns[0];
-            const glm::vec2 base1 = teamSpawns[1];
+            auto pView = ctx.serverRegistry.view<PlayerComponent, NetworkedComponent>();
+            uint32_t spawnIdx = 0;
+            for (auto pe : pView) {
+                auto& pc = pView.get<PlayerComponent>(pe);
+                auto& nc = pView.get<NetworkedComponent>(pe);
 
-            SpawnBuilding(ctx, BuildingType::Main,    0, glm::vec3{base0.x,        0.f, base0.y});
-            SpawnBuilding(ctx, BuildingType::Main,    1, glm::vec3{base1.x,        0.f, base1.y});
-            SpawnBuilding(ctx, BuildingType::Attack,  0, glm::vec3{base0.x + 4.f,  0.f, base0.y});
-            SpawnBuilding(ctx, BuildingType::Defense, 1, glm::vec3{base1.x + 4.f,  0.f, base1.y});
+                if (spawnIdx >= (uint32_t)availableSpawns.size()) {
+                    spdlog::warn("GameScene: ran out of territories for player {}", pc.playerId);
+                    break;
+                }
 
-            for (int i = 0; i < 3; i++) {
-                SpawnUnit(ctx, 0, glm::vec3{base0.x + (float)i * 3.f, 0.f, base0.y + 3.f});
-                SpawnUnit(ctx, 1, glm::vec3{base1.x - (float)i * 3.f, 0.f, base1.y - 3.f});
+                const glm::vec2 sp = availableSpawns[spawnIdx];
+                uint32_t teamId = pc.playerId;
+                SpawnBuilding(ctx, BuildingType::Main, teamId,
+                              glm::vec3{sp.x, 0.f, sp.y}, 1, "assets/cube.glb");
+
+                spdlog::info("GameScene: spawned MainBase for player {} team {} at ({:.1f}, {:.1f})",
+                             pc.playerId, teamId, sp.x, sp.y);
+                ++spawnIdx;
             }
         }
 
-        /**
-         * @brief Spawn a networked asset for testing purposes.
-         */
-        const uint32_t assetNetId = m_NextNetId++;
-        
-        // Authoritative server entity
-        auto sEntity = ctx.serverRegistry.create();
-        ctx.serverRegistry.emplace<TransformComponent>(sEntity, glm::vec3{2.f, 0.f, 2.f});
-        ctx.serverRegistry.emplace<MovementComponent>(sEntity);
-        ctx.serverRegistry.emplace<NetworkedComponent>(sEntity, assetNetId);
-        ctx.serverRegistry.emplace<ModelComponent>(sEntity, "assets/test_scene_pixelation.glb");
-        m_ServerNetMap[assetNetId] = sEntity;
+        // Initial fog reveal around every Main Base so players can see their spawn
+        {
+            auto bView = ctx.serverRegistry.view<BuildingComponent, TransformComponent>();
+            for (auto e : bView) {
+                auto& bc = bView.get<BuildingComponent>(e);
+                auto& tf = bView.get<TransformComponent>(e);
+                if (bc.type == BuildingType::Main)
+                    m_Fog.Reveal(tf.position, 40.f);
+            }
+        }
 
-        // Tell all clients (including ourselves) to spawn it visually
-        AssetJoinedPacket pkt;
-        pkt.netId = assetNetId;
-        std::strncpy(pkt.modelPath, "assets/test_scene_pixelation.glb", sizeof(pkt.modelPath)-1);
-        pkt.x = 2.f; pkt.y = 0.f; pkt.z = 2.f;
-        ctx.network.BroadcastToAll(pkt);
-        
-        spdlog::info("GameScene: spawned test asset netId={}", assetNetId);
+        // Build the fog-cover mesh from the initial fog state
+        BuildFogCoverMesh(ctx);
 
-        /**
-         * @brief Spawn an initial physics-driven cube.
-         */
-        SpawnPhysicsCube(ctx, glm::vec3{0.f, 10.f, 0.f});
+        // Position camera above local player's Main Base
+        {
+            auto bView = ctx.serverRegistry.view<BuildingComponent, TransformComponent>();
+            for (auto e : bView) {
+                auto& bc = bView.get<BuildingComponent>(e);
+                auto& tf = bView.get<TransformComponent>(e);
+                if (bc.type == BuildingType::Main && bc.teamId == m_MyPlayerId) {
+                    m_Camera->m_Position = glm::vec3(tf.position.x, m_TopDownHeight, tf.position.z);
+                    m_Camera->UpdateVectors();
+                    break;
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -392,7 +546,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
     // Build GPU instance buffers for all scatter entities. Done once here;
     // every frame the render pass binds these SSBOs instead of issuing
     // one draw call per entity.
-    BuildScatterBatches(ctx);
+    BuildScatterBatches(ctx, ctx.network.IsHosting() ? &m_Fog : nullptr);
 
     // ------------------------------------------------------------------
     // Structure placement (faction bases + neutral resource nodes).
@@ -446,31 +600,80 @@ void GameScene::OnExit(SceneContext& ctx) {
     ScatterSystem::Clear(ctx.clientRegistry);
     StructurePlacementSystem::Clear(ctx.clientRegistry);
 
-    ctx.serverRegistry.clear();
-    ctx.clientRegistry.clear();
-    m_ServerNetMap.clear();
-    m_PeerToNetId.clear();
-    m_ClientNetMap.clear();
-    m_NextNetId     = 1;
-    m_NextPlayerId  = 0;
-    m_MyPlayerId    = 0;
-    m_MyNetId       = 0;
-    m_IdAssigned    = false;
+    if (ctx.network.IsConnected()) {
+        // Returning to Lobby: keep player entities, clear everything else.
+        // Destroy non-player entities from server registry.
+        {
+            std::vector<entt::entity> toDestroy;
+            auto view = ctx.serverRegistry.view<entt::entity>(entt::exclude<PlayerComponent>);
+            for (auto e : view) toDestroy.push_back(e);
+            for (auto e : toDestroy) ctx.serverRegistry.destroy(e);
+        }
+        // Destroy non-player entities from client registry.
+        {
+            std::vector<entt::entity> toDestroy;
+            auto view = ctx.clientRegistry.view<entt::entity>(entt::exclude<PlayerComponent>);
+            for (auto e : view) toDestroy.push_back(e);
+            for (auto e : toDestroy) ctx.clientRegistry.destroy(e);
+        }
+        // Clear CPU-side maps but keep serverNetMap entries for player entities
+        {
+            std::unordered_map<uint32_t, entt::entity> playerMap;
+            for (auto& [netId, e] : m_ServerNetMap) {
+                if (ctx.serverRegistry.valid(e) &&
+                    ctx.serverRegistry.any_of<PlayerComponent>(e))
+                    playerMap[netId] = e;
+            }
+            m_ServerNetMap = std::move(playerMap);
+        }
+        {
+            std::unordered_map<uint32_t, entt::entity> playerMap;
+            for (auto& [netId, e] : m_ClientNetMap) {
+                if (ctx.clientRegistry.valid(e) &&
+                    ctx.clientRegistry.any_of<PlayerComponent>(e))
+                    playerMap[netId] = e;
+            }
+            m_ClientNetMap = std::move(playerMap);
+        }
+    } else {
+        ctx.serverRegistry.clear();
+        ctx.clientRegistry.clear();
+        m_ServerNetMap.clear();
+        m_PeerToNetId.clear();
+        m_ClientNetMap.clear();
+        m_NextNetId     = 1;
+        m_NextPlayerId  = 0;
+        m_MyPlayerId    = 0;
+        m_MyNetId       = 0;
+        m_IdAssigned    = false;
+    }
     m_SnapAccum     = 0.f;
     m_SelectedUnits.clear();
     m_GameOver      = false;
     m_WinnerTeam    = 0xFFFFFFFFu;
-    m_CameraMode    = CameraMode::Exploring;
-    m_Camera->SetProjectionMode(ProjectionMode::Perspective);
+    m_CameraMode    = CameraMode::Building;
+    m_Camera->SetProjectionMode(ProjectionMode::Orthographic);
 
     // Reset fog grid for next session
     m_Fog.Reset();
+
+    // Reset fog cover state
+    m_FogCoverEntity  = entt::null;
+    m_FogCoverVersion = 0;
+    m_FogCoverDirty   = true;
+    m_FogCoverTimer   = 0.f;
+
+    // Mark scatter batches for rebuild on next session
+    m_ScatterBatchesDirty = true;
+
+    // Release map texture
+    m_MapTexture.reset();
+    m_MapTextureDirty = true;
 
     // Reset client-side synced state
     m_ClientFog.Reset();
     m_HasFogData         = false;
     m_ClientTerritories.clear();
-    m_HasTerritoryData   = false;
     m_TerritorySnapAccum = 0.f;
     m_FogSnapAccum       = 0.f;
     m_ResourceNetMap.clear();
@@ -497,6 +700,9 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_ShadowPipeline = nullptr;
     m_ShadowMap.reset();
     m_ShadowUBO.reset();
+
+    // Drop all cached pipelines so stale shader handles don't dangle.
+    ctx.renderer->GetPipelines()->Clear();
 
     spdlog::info("GameScene: exited, registries cleared");
 }
@@ -737,6 +943,17 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             const auto& sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
             if (!sceneData.model) continue;
 
+            // Fog of war culling: skip entities in unrevealed cells (except special exclusions)
+            if (!ctx.clientRegistry.any_of<FogCoverComponent, NoFogCullComponent>(entity)) {
+                bool hiddenByFog = false;
+                if (m_HasFogData || ctx.network.IsHosting()) {
+                    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+                    if (fog.IsInitialised() && !fog.IsWorldPosRevealed(transform.position))
+                        hiddenByFog = true;
+                }
+                if (hiddenByFog) continue;
+            }
+
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
             renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
             renderCtx.BindVertexStorageBuffer(0, m_IdentityInstanceBuffer.get());
@@ -806,6 +1023,17 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             const auto& sceneData = AssetManager::LoadGLTF(modelComp.modelPath);
             if (!sceneData.model) continue;
 
+            // Fog of war culling: skip entities in unrevealed cells (except special exclusions)
+            if (!ctx.clientRegistry.any_of<FogCoverComponent, NoFogCullComponent>(entity)) {
+                bool hiddenByFog = false;
+                if (m_HasFogData || ctx.network.IsHosting()) {
+                    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+                    if (fog.IsInitialised() && !fog.IsWorldPosRevealed(transform.position))
+                        hiddenByFog = true;
+                }
+                if (hiddenByFog) continue;
+            }
+
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
             renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
             renderCtx.BindVertexStorageBuffer(1, m_IdentityInstanceBuffer.get());
@@ -826,10 +1054,13 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
                 for (uint32_t i = 0; i < instance.sectionCount; ++i) {
                     const auto& section = allSections[instance.firstSection + i];
-                    struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; uint32_t pad; } fpc;
+                    struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; float blocksView; glm::vec4 ghostPos; glm::vec4 tintColor; } fpc;
                     fpc.matIdx = (uint32_t)section.materialIndex;
                     fpc.objID  = 0;
                     fpc.alpha  = 1.0f;
+                    fpc.blocksView = 0.f;
+                    fpc.ghostPos   = glm::vec4(0.f);
+                    fpc.tintColor  = glm::vec4(1.f);
                     renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
 
                     if (section.materialIndex < allMaterials.size()) {
@@ -876,10 +1107,13 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
                         for (uint32_t i = 0; i < instance.sectionCount; ++i) {
                             const auto& section = gSections[instance.firstSection + i];
-                            struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; uint32_t pad; } gfpc;
+                            struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; float blocksView; glm::vec4 ghostPos; glm::vec4 tintColor; } gfpc;
                             gfpc.matIdx = (uint32_t)section.materialIndex;
                             gfpc.objID  = 0;
                             gfpc.alpha  = 0.35f;
+                            gfpc.blocksView = 0.f;
+                            gfpc.ghostPos   = glm::vec4(0.f);
+                            gfpc.tintColor  = m_PlacementValid ? glm::vec4(1.f) : glm::vec4(1.f, 0.f, 0.f, 1.f);
                             renderCtx.PushFragmentConstants(0, &gfpc, sizeof(FragPC));
 
                             if (section.materialIndex < gMaterials.size()) {
@@ -905,6 +1139,11 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                 if (!sceneData.model) continue;
                 if (batch.meshInstanceIdx >= (uint32_t)sceneData.meshInstances.size()) continue;
 
+                // In building mode, tall assets (trees, cacti, etc.) that can
+                // occlude the isometric view are faded out near the ghost.
+                bool blocksView = (m_CameraMode == CameraMode::Building) &&
+                                  IsTreeModelPath(batch.modelPath);
+
                 renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
                 renderCtx.BindIndexBuffer(sceneData.model->GetIndexBuffer());
                 renderCtx.BindVertexStorageBuffer(1, batch.instanceBuffer.get());
@@ -918,10 +1157,13 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
                 for (uint32_t i = 0; i < meshInst.sectionCount; ++i) {
                     const auto& section = allSections[meshInst.firstSection + i];
-                    struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; uint32_t pad; } fpc;
+                    struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; float blocksView; glm::vec4 ghostPos; glm::vec4 tintColor; } fpc;
                     fpc.matIdx = (uint32_t)section.materialIndex;
                     fpc.objID  = 0;
                     fpc.alpha  = 1.0f;
+                    fpc.blocksView = blocksView ? 1.f : 0.f;
+                    fpc.ghostPos   = blocksView ? glm::vec4(m_FadeCenter, 0.f) : glm::vec4(0.f);
+                    fpc.tintColor  = glm::vec4(1.f);
                     renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
 
                     if (section.materialIndex < allMaterials.size()) {
@@ -947,139 +1189,81 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
     }
 
     // ------------------------------------------------------------------
-    // TAB: cycle Exploring (1st-person) → Commander (top-down perspective)
-    //       → Building (top-down orthographic) → Exploring
+    // TAB: cycle Commander (top-down perspective) ↔ Building (top-down orthographic)
     // ------------------------------------------------------------------
     if (Input::IsKeyPressed(SDLK_TAB)) {
         switch (m_CameraMode) {
-        case CameraMode::Exploring:
-            // Save 1st-person state before switching away
-            m_SavedExplorePos   = m_Camera->m_Position;
-            m_SavedExploreYaw   = m_Camera->m_Yaw;
-            m_SavedExplorePitch = m_Camera->m_Pitch;
-            // Enter Commander
-            m_CameraMode = CameraMode::Commander;
-            m_Camera->SetProjectionMode(ProjectionMode::Perspective);
-            m_Camera->m_Pitch = -89.f;
-            m_Camera->m_Yaw   = -90.f;
-            m_Camera->m_Position = glm::vec3(m_SavedExplorePos.x, m_TopDownHeight, m_SavedExplorePos.z);
-            m_Camera->UpdateVectors();
-            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, false);
-            spdlog::info("GameScene: switched to Commander mode");
-            break;
-
         case CameraMode::Commander:
             // Save Commander position before switching to Building
             m_SavedCommanderPos = m_Camera->m_Position;
-            // Enter Building
+            // Enter Building (isometric orthographic view)
             m_CameraMode = CameraMode::Building;
             m_Camera->SetProjectionMode(ProjectionMode::Orthographic);
             m_Camera->m_OrthoSize = m_BuildOrthoSize;
+            m_Camera->m_Pitch = -55.f;
+            m_Camera->m_Yaw   = m_BuildYaw;
             // Keep same XZ position but reset to building height
             m_Camera->m_Position.y = m_TopDownHeight;
             m_Camera->UpdateVectors();
-            spdlog::info("GameScene: switched to Building mode (orthographic)");
+            spdlog::info("GameScene: switched to Building mode (isometric orthographic)");
             break;
 
         case CameraMode::Building:
             CancelPlacement(ctx);
-            // Return to Exploring – restore 1st-person state
-            m_CameraMode = CameraMode::Exploring;
+            // Return to Commander
+            m_SavedCommanderPos   = m_Camera->m_Position;
+            m_CameraMode = CameraMode::Commander;
             m_Camera->SetProjectionMode(ProjectionMode::Perspective);
-            m_Camera->m_Position = m_SavedExplorePos;
-            m_Camera->m_Yaw      = m_SavedExploreYaw;
-            m_Camera->m_Pitch    = m_SavedExplorePitch;
+            m_Camera->m_Pitch = -89.f;
+            m_Camera->m_Yaw   = -90.f;
+            m_Camera->m_Position = glm::vec3(m_SavedCommanderPos.x, m_TopDownHeight, m_SavedCommanderPos.z);
             m_Camera->UpdateVectors();
-            spdlog::info("GameScene: switched to Exploring mode");
+            spdlog::info("GameScene: switched to Commander mode");
             break;
         }
     }
 
-    if (m_CameraMode == CameraMode::Exploring) {
-        // ------------------------------------------------------------------
-        // Exploring / 1st-Person mode
-        // ------------------------------------------------------------------
-        if (Input::IsKeyPressed(SDLK_F1)) {
-            m_FreeFly = !m_FreeFly;
-            spdlog::info("Control Mode: {}", m_FreeFly ? "Free Fly" : "Player");
-            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, true);
-        }
-
-        if (Input::IsKeyPressed(SDLK_F2)) {
-            bool newState = !Input::IsRelativeMouseMode();
-            Input::SetRelativeMouseMode(ctx.renderer->GetWindow()->handle, newState);
-            spdlog::info("Mouse Capture: {}", newState ? "On" : "Off");
-        }
-
-        if (Input::IsRelativeMouseMode()) {
-            glm::vec2 delta = Input::GetMouseDelta();
-            m_Camera->Rotate(delta.x, delta.y);
-
-            if (m_FreeFly) {
-                if (Input::IsKeyDown(SDLK_W)) m_Camera->MoveForward(dt);
-                if (Input::IsKeyDown(SDLK_S)) m_Camera->MoveBackward(dt);
-                if (Input::IsKeyDown(SDLK_A)) m_Camera->MoveLeft(dt);
-                if (Input::IsKeyDown(SDLK_D)) m_Camera->MoveRight(dt);
-                if (Input::IsKeyDown(SDLK_SPACE)) m_Camera->MoveUp(dt);
-                if (Input::IsKeyDown(SDLK_LSHIFT)) m_Camera->MoveDown(dt);
-            } else {
-                if (m_IdAssigned) {
-                    auto view = ctx.clientRegistry.view<PlayerComponent, TransformComponent, MovementComponent>();
-                    for (auto entity : view) {
-                        auto& p = view.get<PlayerComponent>(entity);
-                        if (p.isLocal) {
-                            auto& tf = view.get<TransformComponent>(entity);
-                            auto& mv = view.get<MovementComponent>(entity);
-
-                            glm::vec3 forward = m_Camera->m_Front;
-                            forward.y = 0.f;
-                            if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
-                            glm::vec3 right = m_Camera->m_Right;
-                            right.y = 0.f;
-                            if (glm::length(right) > 0.0001f) right = glm::normalize(right);
-
-                            glm::vec3 moveDir{0.f};
-                            if (Input::IsKeyDown(SDLK_W)) moveDir += forward;
-                            if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
-                            if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
-                            if (Input::IsKeyDown(SDLK_D)) moveDir += right;
-
-                            if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
-                            if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
-
-                            if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
-                            mv.velocity = moveDir * mv.speed;
-                            tf.position += mv.velocity * dt;
-
-                            m_Camera->m_Position = tf.position + glm::vec3(0, 2, 0);
-
-                            tf.rotation.y = m_Camera->m_Yaw;
-                            tf.rotation.x = m_Camera->m_Pitch;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    } else if (m_CameraMode == CameraMode::Commander || m_CameraMode == CameraMode::Building) {
+    if (m_CameraMode == CameraMode::Commander || m_CameraMode == CameraMode::Building) {
         // ------------------------------------------------------------------
         // Top-down modes – Commander (perspective) and Building (orthographic)
         // ------------------------------------------------------------------
         int winW, winH;
         SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
 
-        // WASD pans the camera on XZ plane
         constexpr float TOPDOWN_PAN_SPEED = 25.f;
-        glm::vec3 pan{0.f};
-        if (Input::IsKeyDown(SDLK_W)) pan.z -= TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_S)) pan.z += TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_A)) pan.x -= TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_D)) pan.x += TOPDOWN_PAN_SPEED * dt;
-        m_Camera->m_Position += pan;
-        // Keep camera looking straight down
-        m_Camera->m_Pitch = -89.f;
-        m_Camera->m_Yaw   = -90.f;
-        m_Camera->UpdateVectors();
+
+        // Camera orientation depends on mode
+        if (m_CameraMode == CameraMode::Commander) {
+            m_Camera->m_Pitch = -89.f;
+            m_Camera->m_Yaw   = -90.f;
+            m_Camera->UpdateVectors();
+
+            // Commander: WASD pans in world space (N/S/E/W)
+            glm::vec3 pan{0.f};
+            if (Input::IsKeyDown(SDLK_W)) pan.z -= TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_S)) pan.z += TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_A)) pan.x -= TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_D)) pan.x += TOPDOWN_PAN_SPEED * dt;
+            m_Camera->m_Position += pan;
+        } else {
+            // Building: isometric view, arrow keys rotate the diagonal
+            constexpr float BUILD_ROTATE_SPEED = 60.f;
+            if (Input::IsKeyDown(SDLK_LEFT))  m_BuildYaw += BUILD_ROTATE_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_RIGHT)) m_BuildYaw -= BUILD_ROTATE_SPEED * dt;
+            m_Camera->m_Pitch = -55.f;
+            m_Camera->m_Yaw   = m_BuildYaw;
+            m_Camera->UpdateVectors();
+
+            // Building: WASD pans relative to the isometric camera view
+            glm::vec3 forward = glm::normalize(glm::vec3(m_Camera->m_Front.x, 0.f, m_Camera->m_Front.z));
+            glm::vec3 right   = m_Camera->m_Right;
+            glm::vec3 pan{0.f};
+            if (Input::IsKeyDown(SDLK_W)) pan += forward * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
+            m_Camera->m_Position += pan;
+        }
 
         // Building mode: scroll to zoom (adjust ortho size)
         if (m_CameraMode == CameraMode::Building) {
@@ -1090,11 +1274,16 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 spdlog::debug("Building zoom: orthoSize={:.1f}", m_BuildOrthoSize);
             }
 
+            // Cursor world position — used for both tree fade (always active)
+            // and building-placement ghost (only when placement active).
+            glm::vec2 mpos  = Input::GetMousePosition();
+            glm::vec3 rawCursor = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+            m_FadeCenter = rawCursor; // always updates — trees follow cursor even without a building selected
+
             // Placement ghost follow cursor
             if (m_PlacementActive && m_GhostEntity != entt::null &&
                 ctx.clientRegistry.valid(m_GhostEntity)) {
-                glm::vec2 mpos = Input::GetMousePosition();
-                glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+                glm::vec3 worldPos = rawCursor;
                 // Snap to the worldgen tile grid and sit on the terrace surface.
                 int gtx, gtz;
                 m_World.WorldToTile(worldPos.x, worldPos.z, gtx, gtz);
@@ -1102,36 +1291,62 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 worldPos.x = tileCenter.x;
                 worldPos.z = tileCenter.y;
                 worldPos.y = m_World.TierToWorldHeight(m_World.GetTile(gtx, gtz).tier);
-                const bool placeValid = m_World.GetTile(gtx, gtz).buildable;
+                m_GhostPos = worldPos;
+
+                // --- Placement validation ---
+                m_PlacementValid = m_World.GetTile(gtx, gtz).buildable;
+
+                // Check no existing building at this position (both registries)
+                if (m_PlacementValid) {
+                    auto checkBuildings = [&](auto& reg) {
+                        auto bldView = reg.template view<BuildingComponent, TransformComponent>();
+                        for (auto be : bldView) {
+                            auto& btf = bldView.template get<TransformComponent>(be);
+                            auto& bc  = bldView.template get<BuildingComponent>(be);
+                            if (bc.destroyed) continue;
+                            if (glm::distance(btf.position, worldPos) < 1.5f) return false;
+                        }
+                        return true;
+                    };
+                    m_PlacementValid = checkBuildings(ctx.serverRegistry) &&
+                                       checkBuildings(ctx.clientRegistry);
+                }
+
+                // Check no scatter prop at this position
+                if (m_PlacementValid) {
+                    auto scatView = ctx.clientRegistry.view<TransformComponent, ScatterPropComponent>();
+                    for (auto se : scatView) {
+                        auto& stf = scatView.get<TransformComponent>(se);
+                        if (glm::distance(stf.position, worldPos) < 1.5f) {
+                            m_PlacementValid = false;
+                            break;
+                        }
+                    }
+                }
+
+                // Block placement in unrevealed fog cells
+                if (m_PlacementValid && m_Fog.IsInitialised()) {
+                    if (!m_Fog.IsWorldPosRevealed(worldPos))
+                        m_PlacementValid = false;
+                }
+
                 auto* tf = ctx.clientRegistry.try_get<TransformComponent>(m_GhostEntity);
                 if (tf) tf->position = worldPos;
 
-                // Left-click to place (skip if hovering over UI; only on buildable ground)
+                // Left-click to place (skip if hovering over UI; only where valid)
                 if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT) &&
-                    !ImGui::GetIO().WantCaptureMouse && ctx.network.IsHosting()) {
-                    // Check no existing building at this position
-                    bool blocked = false;
-                    auto bldView = ctx.serverRegistry.view<BuildingComponent, TransformComponent>();
-                    for (auto be : bldView) {
-                        auto& btf = bldView.get<TransformComponent>(be);
-                        auto& bc  = bldView.get<BuildingComponent>(be);
-                        if (bc.destroyed) continue;
-                        if (glm::distance(btf.position, worldPos) < 1.5f) { blocked = true; break; }
-                    }
-                    if (!placeValid) {
-                        spdlog::info("Building placement rejected: tile not buildable (cliff/water/edge)");
-                    } else if (!blocked) {
-                        // Team 0 for host, TODO: proper team assignment
-                        uint32_t placeTeam = 0;
-                        if (m_SelectedBuildingType >= 0) {
-                            SpawnBuilding(ctx, static_cast<BuildingType>(m_SelectedBuildingType),
-                                          placeTeam, worldPos);
-                        } else if (m_PlacementActive) {
-                            // Special building
-                            auto info = GetSpecialBuildingInfo(m_SelectedSpecialBuilding);
-                            SpawnBuilding(ctx, BuildingType::Special, placeTeam, worldPos,
-                                          1, "assets/cube.glb", m_SelectedSpecialBuilding);
-                        }
+                    !ImGui::GetIO().WantCaptureMouse && ctx.network.IsHosting() &&
+                    m_PlacementValid) {
+                    // Team 0 for host, TODO: proper team assignment
+                    uint32_t placeTeam = 0;
+                    if (m_SelectedBuildingType >= 0) {
+                        SpawnBuilding(ctx, static_cast<BuildingType>(m_SelectedBuildingType),
+                                      placeTeam, worldPos);
+                    } else if (m_PlacementActive) {
+                        // Special building
+                        auto info = GetSpecialBuildingInfo(m_SelectedSpecialBuilding);
+                        SpawnBuilding(ctx, BuildingType::Special, placeTeam, worldPos,
+                                      1, "assets/cube.glb", m_SelectedSpecialBuilding);
                     }
                 }
 
@@ -1158,7 +1373,7 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                     auto& tf  = view.get<TransformComponent>(entity);
                     auto& nc  = view.get<NetworkedComponent>(entity);
                     auto& uc  = view.get<UnitComponent>(entity);
-                    if (uc.teamId != m_MyPlayerId % 2) continue;
+                    if (uc.teamId != m_MyPlayerId) continue;
                     glm::vec2 d2 = glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z);
                     if (glm::length(d2) <= SELECT_RADIUS) {
                         m_SelectedUnits.push_back(nc.netId);
@@ -1253,15 +1468,24 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                                 ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(400, 180));
         ImGui::Begin("Spielende", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-        if (m_WinnerTeam == m_MyPlayerId % 2)
+        if (m_WinnerTeam == m_MyPlayerId)
             ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "SIEG! Team %u gewinnt!", m_WinnerTeam);
         else if (m_WinnerTeam == 0xFFFFFFFFu)
             ImGui::Text("Unentschieden!");
         else
             ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "NIEDERLAGE! Team %u gewinnt.", m_WinnerTeam);
-        if (ImGui::Button("Zum Hauptmenü")) {
-            ctx.network.Disconnect();
-            ctx.scenes.RequestTransition(new MainMenuScene());
+        if (ctx.network.IsHosting()) {
+            if (ImGui::Button("Play Again (Lobby)")) {
+                ctx.network.BroadcastToAll(ReturnToLobbyPacket{});
+                ctx.scenes.RequestTransition(new LobbyScene());
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Main Menu")) {
+                ctx.network.Disconnect();
+                ctx.scenes.RequestTransition(new MainMenuScene());
+            }
+        } else {
+            ImGui::TextDisabled("Waiting for host...");
         }
         ImGui::End();
         return;
@@ -1270,15 +1494,11 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     ImGui::Begin("Game");
     const char* modeLabel = "Unknown";
     switch (m_CameraMode) {
-        case CameraMode::Exploring: modeLabel = "Exploring (1st-Person)"; break;
         case CameraMode::Commander: modeLabel = "Commander (Top-Down)";   break;
         case CameraMode::Building:  modeLabel = "Building (Ortho)";      break;
     }
     ImGui::Text("Mode: %s | %s", ctx.network.IsHosting() ? "Host" : "Client", modeLabel);
     ImGui::Text("[TAB] wechseln");
-    if (m_CameraMode == CameraMode::Exploring)
-        ImGui::Text("Control: %s (F1)", m_FreeFly ? "Free Fly" : "Player");
-    ImGui::Text("Mouse: %s (F2)", Input::IsRelativeMouseMode() ? "Captured" : "Visible");
     if (m_IdAssigned)
         ImGui::Text("playerId=%u  netId=%u", m_MyPlayerId, m_MyNetId);
     else
@@ -1309,33 +1529,28 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             }
         }
 
-        // --- Generic buildings row ---
+        // --- Placeable buildings (military/defense only) ---
         struct BldBtn {
             const char* name;
             BuildingType type;
         };
-        const BldBtn genericBlds[] = {
-            {"Basis",      BuildingType::Main},
-            {"Speicher",   BuildingType::Storage},
-            {"Brutkammer", BuildingType::Barracks},
-            {"Upgrade",    BuildingType::Upgrade},
-            {"Konversion", BuildingType::Conversion},
+        const BldBtn placeableBlds[] = {
             {"Verteid.",   BuildingType::Defense},
             {"Angriff",    BuildingType::Attack},
             {"Vorposten",  BuildingType::Outpost},
         };
 
         ImGui::Text("Gebaeude platzieren:");
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 3; i++) {
             bool active = (m_PlacementActive &&
-                           m_SelectedBuildingType == static_cast<int>(genericBlds[i].type));
+                           m_SelectedBuildingType == static_cast<int>(placeableBlds[i].type));
             if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
-            if (ImGui::Button(genericBlds[i].name)) {
+            if (ImGui::Button(placeableBlds[i].name)) {
                 if (active) CancelPlacement(ctx);
-                else        EnterPlacementMode(ctx, genericBlds[i].type);
+                else        EnterPlacementMode(ctx, placeableBlds[i].type);
             }
             if (active) ImGui::PopStyleColor();
-            if ((i + 1) % 4 != 0) ImGui::SameLine();
+            if ((i + 1) % 3 != 0) ImGui::SameLine();
         }
 
         // --- Special buildings (tribe-specific) ---
@@ -1376,7 +1591,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
 
         // --- Upgrade section ---
         if (ctx.network.IsHosting()) {
-            uint32_t myTeam = m_MyPlayerId % 2;
+            uint32_t myTeam = m_MyPlayerId;
             auto& ust = UpgradeSystem::GetState(myTeam);
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.3f, 1.f, 0.3f, 1.f), "Upgrades (Basis Level %d)", ust.baseLevel);
@@ -1423,20 +1638,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         }
     }
 
-    if (ctx.network.IsHosting()) {
-        if (ImGui::Button("Spawn Physics Cube")) {
-            SpawnPhysicsCube(ctx, m_Camera->m_Position + m_Camera->m_Front * 5.0f);
-        }
-        if (ImGui::Button("Spawn Unit (Team 0)")) {
-            glm::vec3 sp = RandomSpawnInTerritory(ctx, 0);
-            SpawnUnit(ctx, 0, sp);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Spawn Unit (Team 1)")) {
-            glm::vec3 sp = RandomSpawnInTerritory(ctx, 1);
-            SpawnUnit(ctx, 1, sp);
-        }
-    }
+
 
     if (ImGui::Button("Disconnect")) {
         ctx.network.Disconnect();
@@ -1446,7 +1648,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
 
     // Resource stockpile HUD (top-right overlay) – always visible on host.
     if (ctx.network.IsHosting()) {
-        ResourceHUD::Draw(ctx.serverRegistry, /*teamId=*/0);
+        ResourceHUD::Draw(ctx.serverRegistry, m_MyPlayerId);
     }
 
     // Map overlay (available to all clients with synced data)
@@ -1460,26 +1662,9 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         if (ImGui::IsKeyPressed(ImGuiKey_M))
             m_ShowMapOverlay = !m_ShowMapOverlay;
 
+        // Map overlay disabled for now — ingame 3D fog cover mesh handles visibility
         if (m_ShowMapOverlay) {
-            ImGuiIO& io = ImGui::GetIO();
-            ImVec2 mapOrigin(0.f, 0.f);
-            ImVec2 mapSize(io.DisplaySize.x, io.DisplaySize.y);
-
-            // Draw fog overlay (server's authoritative grid or client's synced copy)
-            if (ctx.network.IsHosting()) {
-                FogOfWarSystem::DrawOverlay(m_Fog, mapOrigin, mapSize);
-            } else if (m_HasFogData) {
-                FogOfWarSystem::DrawOverlay(m_ClientFog, mapOrigin, mapSize);
-            }
-
-            // Draw territory overlay (server registry or synced packet data)
-            if (ctx.network.IsHosting()) {
-                TerritorySystem::DrawOverlay(ctx.serverRegistry, mapOrigin, mapSize,
-                    glm::vec2{-375.f, -375.f}, glm::vec2{375.f, 375.f});
-            } else if (m_HasTerritoryData) {
-                // Draw from client-side territory data using a minimal inline overlay
-                DrawClientTerritoryOverlay(mapOrigin, mapSize);
-            }
+            // no-op; the ImGui per-cell overlay was replaced by the 3D fog cover mesh
         }
     }
 
@@ -1576,7 +1761,10 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         m_ResourceManager.Update(ctx.serverRegistry, dt);
         ResourceSystem::Update(ctx.serverRegistry, m_ResourceManager, dt);
         BuildingSystem::Update(ctx.serverRegistry, dt);
-        FogOfWarSystem::Update(m_Fog, ctx.serverRegistry);
+        if (FogOfWarSystem::Update(m_Fog, ctx.serverRegistry)) {
+            m_FogCoverDirty = true;
+            m_ScatterBatchesDirty = true;
+        }
         TerritorySystem::Update(ctx.serverRegistry, dt);
 
         // Sync resource state changes to clients (new spawns, depletions, respawns)
@@ -1606,6 +1794,19 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
             SendFogSnapshot(ctx);
             m_FogSnapAccum -= FOG_SNAP_RATE;
         }
+    }
+
+    // Throttled fog-cover + scatter-batch rebuild (host and client, at most 0.5 Hz)
+    m_FogCoverTimer += dt;
+    if (m_FogCoverDirty && m_FogCoverTimer >= 0.5f) {
+        BuildFogCoverMesh(ctx);
+        m_FogCoverTimer = 0.f;
+    }
+    if (m_ScatterBatchesDirty && m_FogCoverTimer >= 0.5f) {
+        const FogGrid& f = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+        BuildScatterBatches(ctx, f.IsInitialised() ? &f : nullptr);
+        m_ScatterBatchesDirty = false;
+        m_FogCoverTimer = 0.f;
     }
 }
 
@@ -1673,7 +1874,7 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
 
             // Sync completed upgrades for this player's team to the new client
             {
-                uint32_t teamId = newPlayerId % 2;
+                uint32_t teamId = newPlayerId;
                 auto& state = UpgradeSystem::GetState(teamId);
                 for (auto pid : state.completedPaths) {
                     UpgradeCompletedPacket upkt;
@@ -1884,7 +2085,11 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
     // Fog snapshot
     {
         auto pkt = ctx.network.ReceiveFromServer<FogSnapshotPacket>(PacketType::FOG_SNAPSHOT);
-        if (pkt) HandleFogSnapshot(*pkt);
+        if (pkt) {
+            HandleFogSnapshot(*pkt);
+            m_FogCoverDirty = true;
+            m_ScatterBatchesDirty = true;
+        }
     }
 
     // Resource spawned
@@ -1920,6 +2125,15 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         }
     }
 
+    // Return to lobby (host signal)
+    {
+        auto pkt = ctx.network.ReceiveFromServer<ReturnToLobbyPacket>(PacketType::RETURN_TO_LOBBY);
+        if (pkt) {
+            spdlog::info("GameScene: host returned everyone to lobby");
+            ctx.scenes.RequestTransition(new LobbyScene());
+        }
+    }
+
     // Building spawned
     while (true) {
         auto pkt = ctx.network.ReceiveFromServer<BuildingSpawnedPacket>(PacketType::BUILDING_SPAWNED);
@@ -1944,6 +2158,14 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         auto& hc = ctx.clientRegistry.emplace<HealthComponent>(entity, HealthComponent{pkt->maxHp});
         hc.hp = pkt->hp;
         m_ClientNetMap[pkt->netId] = entity;
+
+        // Position camera at local player's Main Base
+        if (bType == BuildingType::Main && pkt->teamId == m_MyPlayerId) {
+            m_Camera->m_Position = glm::vec3(pkt->x, m_TopDownHeight, pkt->z);
+            m_Camera->UpdateVectors();
+            spdlog::info("GameScene: camera positioned at Main Base ({:.1f}, {:.1f})",
+                         pkt->x, pkt->z);
+        }
     }
 
     // Building destroyed
@@ -2151,7 +2373,7 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
         auto pView = ctx.serverRegistry.view<PlayerComponent>();
         for (auto pe : pView) {
             auto& pc = pView.get<PlayerComponent>(pe);
-            if (pc.playerId % 2 == teamId % 2 && pc.bugClass != BugClass::None) {
+            if (pc.playerId == teamId && pc.bugClass != BugClass::None) {
                 ownerClass = pc.bugClass;
                 break;
             }
@@ -2310,6 +2532,9 @@ void GameScene::CancelPlacement(SceneContext& ctx)
     }
     m_GhostEntity = entt::null;
     m_PlacementActive = false;
+    m_PlacementValid = false;
+    m_GhostPos = glm::vec3(0.f);
+    m_FadeCenter = glm::vec3(0.f);
     m_SelectedBuildingType = -1;
 }
 
@@ -2319,8 +2544,7 @@ void GameScene::CancelPlacement(SceneContext& ctx)
 
 glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
 {
-    // Gather all territory zone centres and pick one that roughly belongs
-    // to the given team (simple parity: even zones → team 0, odd → team 1).
+    // Gather all territory zone centres.
     struct ZoneInfo { glm::vec3 center; float hw, hd; };
     std::vector<ZoneInfo> candidates;
 
@@ -2329,14 +2553,15 @@ glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
     for (auto e : view) {
         const auto& tf  = view.get<TransformComponent>(e);
         const auto& ter = view.get<TerritoryComponent>(e);
-        if (idx % 2 == teamId % 2)
+        // FFA: assign zones round-robin by teamId
+        if (idx % 24 == teamId % 24)
             candidates.push_back({tf.position, ter.halfW, ter.halfD});
         idx++;
     }
 
-    // Fallback: spread by team
+    // Fallback: spread by team (FFA: shift by teamId * 20)
     if (candidates.empty()) {
-        float x = (teamId == 0) ? -20.f : 20.f;
+        float x = -100.f + (float)teamId * 30.f;
         return {x, 0.f, 0.f};
     }
 
@@ -2654,9 +2879,18 @@ glm::vec3 GameScene::ScreenToWorldXZ(float sx, float sy, int winW, int winH)
     glm::vec3 rayOrig{nearPt};
     glm::vec3 rayDir = glm::normalize(glm::vec3(farPt) - rayOrig);
 
-    // Intersect with Y=0 plane
     if (std::abs(rayDir.y) < 1e-6f) return {0.f, 0.f, 0.f};
+
+    // First intersect with Y=0 to get an initial XZ estimate
     float t = -rayOrig.y / rayDir.y;
+    glm::vec3 hit = rayOrig + t * rayDir;
+
+    // Re-intersect with the actual terrain height at the estimated XZ, so the
+    // cursor lands on the correct tile even when the terrain sits above Y=0
+    // (important for orthographic isometric mode where parallel rays magnify
+    // the parallax error between the Y=0 guess and the real ground height).
+    float groundY = GroundHeightAt(m_World, hit.x, hit.z);
+    t = (groundY - rayOrig.y) / rayDir.y;
     return rayOrig + t * rayDir;
 }
 
@@ -2805,7 +3039,7 @@ void GameScene::SendFogSnapshot(SceneContext& ctx)
 
     size_t totalCells = static_cast<size_t>(m_Fog.cellsX) * static_cast<size_t>(m_Fog.cellsZ);
     size_t words = (totalCells + 63) / 64;
-    if (words > 160) words = 160;
+    if (words > 2200) words = 2200;
 
     for (size_t w = 0; w < words; ++w) {
         uint64_t bits = 0;
@@ -2895,23 +3129,22 @@ void GameScene::HandleTerritorySnapshot(const TerritorySnapshotPacket& pkt)
         cz.center          = glm::vec3{src.centerX, src.centerY, src.centerZ};
         m_ClientTerritories.push_back(cz);
     }
-    m_HasTerritoryData = true;
 }
 
 void GameScene::HandleFogSnapshot(const FogSnapshotPacket& pkt)
 {
     if (pkt.cellsX == 0 || pkt.cellsZ == 0) return;
 
-    // Initialise client fog grid with matching dimensions
+    // Initialise client fog grid with extents matching the server
     m_ClientFog.Init(
-        glm::vec3{-50.f, 0.f, -50.f},
-        glm::vec3{ 50.f, 0.f,  50.f},
+        glm::vec3{-375.f, 0.f, -375.f},
+        glm::vec3{ 375.f, 0.f,  375.f},
         /*cellSize=*/2.f
     );
 
     size_t totalCells = static_cast<size_t>(pkt.cellsX) * static_cast<size_t>(pkt.cellsZ);
     size_t words = (totalCells + 63) / 64;
-    if (words > 160) words = 160;
+    if (words > 2200) words = 2200;
 
     for (size_t w = 0; w < words; ++w) {
         for (size_t b = 0; b < 64; ++b) {
@@ -2927,74 +3160,4 @@ void GameScene::HandleFogSnapshot(const FogSnapshotPacket& pkt)
     m_HasFogData = true;
 }
 
-// ---------------------------------------------------------------------------
-// Client-side territory overlay drawing from synced packet data
-// ---------------------------------------------------------------------------
 
-void GameScene::DrawClientTerritoryOverlay(ImVec2 mapOriginPx, ImVec2 mapSizePx)
-{
-    const glm::vec2 worldMin{-50.f, -50.f};
-    const glm::vec2 worldMax{ 50.f,  50.f};
-
-    constexpr ImGuiWindowFlags kFlags =
-        ImGuiWindowFlags_NoDecoration      |
-        ImGuiWindowFlags_NoInputs          |
-        ImGuiWindowFlags_NoNav             |
-        ImGuiWindowFlags_NoMove            |
-        ImGuiWindowFlags_NoSavedSettings   |
-        ImGuiWindowFlags_NoFocusOnAppearing|
-        ImGuiWindowFlags_NoBringToFrontOnFocus;
-
-    ImGui::SetNextWindowPos(mapOriginPx, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(mapSizePx,  ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    ImVec2(0,0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-
-    if (ImGui::Begin("##ClientTerritory", nullptr, kFlags))
-    {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-
-        auto ToScreen = [&](float wx, float wz) -> ImVec2 {
-            float nx = (wx - worldMin.x) / (worldMax.x - worldMin.x);
-            float nz = (wz - worldMin.y) / (worldMax.y - worldMin.y);
-            return ImVec2(mapOriginPx.x + nx * mapSizePx.x,
-                          mapOriginPx.y + nz * mapSizePx.y);
-        };
-
-        for (const auto& cz : m_ClientTerritories)
-        {
-            ImVec2 tl = ToScreen(cz.center.x - cz.halfW, cz.center.z - cz.halfD);
-            ImVec2 br = ToScreen(cz.center.x + cz.halfW, cz.center.z + cz.halfD);
-
-            ImU32 fillCol;
-            if (cz.ownerTeam != 0xFFFF'FFFFu)
-                fillCol = TerritoryColors::ForTeamU32(cz.ownerTeam, 0.35f);
-            else
-                fillCol = IM_COL32(180, 180, 180, 60);
-
-            dl->AddRectFilled(tl, br, fillCol, 4.f);
-
-            if (cz.contestedBy != 0xFFFF'FFFFu && cz.captureTime > 0.f)
-            {
-                float pct = cz.captureProgress / cz.captureTime;
-                ImVec2 barTL(tl.x, br.y - 4.f);
-                ImVec2 barBR(tl.x + (br.x - tl.x) * pct, br.y);
-                dl->AddRectFilled(barTL, barBR,
-                    TerritoryColors::ForTeamU32(cz.contestedBy, 0.9f));
-            }
-
-            ImU32 borderCol = (cz.contestedBy != 0xFFFF'FFFFu)
-                ? TerritoryColors::ForTeamU32(cz.contestedBy, 1.f)
-                : IM_COL32(255, 255, 255, 120);
-            dl->AddRect(tl, br, borderCol, 4.f, 0, 1.5f);
-
-            ImVec2 labelPos(
-                (tl.x + br.x) * 0.5f - ImGui::CalcTextSize(cz.name).x * 0.5f,
-                (tl.y + br.y) * 0.5f - 6.f);
-            dl->AddText(labelPos, IM_COL32(255, 255, 255, 200), cz.name);
-        }
-    }
-    ImGui::End();
-    ImGui::PopStyleVar(2);
-}

@@ -16,23 +16,6 @@
  * -------
  *  TerritorySystem::Update()  – server fixed-tick, recalculates unit counts
  *                                and advances capture progress.
- *  TerritorySystem::DrawOverlay() – client UIUpdate(), draws coloured zone
- *                                    rectangles via ImGui DrawList.
- *
- * Usage
- * -----
- * @code
- *   // OnEnter() – server only
- *   TerritorySystem::SpawnZones(ctx.serverRegistry);
- *
- *   // FixedUpdate() – server only
- *   TerritorySystem::Update(ctx.serverRegistry, dt);
- *
- *   // UIUpdate() – host only (mirror to clients via packets later)
- *   TerritorySystem::DrawOverlay(ctx.serverRegistry,
- *                                mapOriginPx, mapSizePx,
- *                                worldMin, worldMax);
- * @endcode
  */
 
 #pragma once
@@ -228,7 +211,7 @@ namespace TerritorySystem
             for (auto e : view)
                 units.push_back({
                     view.get<TransformComponent>(e).position,
-                    view.get<PlayerComponent>(e).playerId % 2  // 2-team split by parity; replace with TeamComponent later
+                    view.get<PlayerComponent>(e).playerId  // FFA: each player is their own team
                 });
         }
 
@@ -322,102 +305,6 @@ namespace TerritorySystem
                              ter.name, leadTeam);
             }
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // DrawOverlay – ImGui client visualisation
-    // -----------------------------------------------------------------------
-
-    /**
-     * @brief Draws territory zones as coloured rectangles on a minimap overlay.
-     *
-     * Maps world XZ coordinates linearly onto the pixel rectangle defined by
-     * [mapOriginPx, mapOriginPx + mapSizePx].
-     *
-     * @param registry     Registry containing TerritoryComponent entities.
-     * @param mapOriginPx  Top-left pixel of the map area.
-     * @param mapSizePx    Width / height of the map area in pixels.
-     * @param worldMin     World-space XZ minimum that maps to mapOriginPx.
-     * @param worldMax     World-space XZ maximum that maps to mapOriginPx + mapSizePx.
-     */
-    inline void DrawOverlay(entt::registry& registry,
-                            ImVec2          mapOriginPx,
-                            ImVec2          mapSizePx,
-                            glm::vec2       worldMin = {-250.f, -250.f},
-                            glm::vec2       worldMax = { 250.f,  250.f})
-    {
-        constexpr ImGuiWindowFlags kFlags =
-            ImGuiWindowFlags_NoDecoration      |
-            ImGuiWindowFlags_NoInputs          |
-            ImGuiWindowFlags_NoNav             |
-            ImGuiWindowFlags_NoMove            |
-            ImGuiWindowFlags_NoSavedSettings   |
-            ImGuiWindowFlags_NoFocusOnAppearing|
-            ImGuiWindowFlags_NoBringToFrontOnFocus;
-
-        ImGui::SetNextWindowPos(mapOriginPx, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(mapSizePx,  ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,    ImVec2(0,0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-
-        if (ImGui::Begin("##TerritoryOverlay", nullptr, kFlags))
-        {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            // Helper: world XZ → screen pixel
-            auto ToScreen = [&](float wx, float wz) -> ImVec2 {
-                float nx = (wx - worldMin.x) / (worldMax.x - worldMin.x);
-                float nz = (wz - worldMin.y) / (worldMax.y - worldMin.y);
-                return ImVec2(mapOriginPx.x + nx * mapSizePx.x,
-                              mapOriginPx.y + nz * mapSizePx.y);
-            };
-
-            auto zoneView = registry.view<TransformComponent, TerritoryComponent>();
-            for (auto e : zoneView)
-            {
-                const auto& tf  = zoneView.get<TransformComponent>(e);
-                const auto& ter = zoneView.get<TerritoryComponent>(e);
-
-                ImVec2 tl = ToScreen(tf.position.x - ter.halfW,
-                                     tf.position.z - ter.halfD);
-                ImVec2 br = ToScreen(tf.position.x + ter.halfW,
-                                     tf.position.z + ter.halfD);
-
-                // Fill colour: owner colour or grey if neutral
-                ImU32 fillCol;
-                if (ter.ownerTeam != TEAM_NONE)
-                    fillCol = TerritoryColors::ForTeamU32(ter.ownerTeam, 0.35f);
-                else
-                    fillCol = IM_COL32(180, 180, 180, 60);
-
-                dl->AddRectFilled(tl, br, fillCol, 4.f);
-
-                // Contested progress bar along bottom edge of zone rect
-                if (ter.contestedBy != TEAM_NONE && ter.captureTime > 0.f)
-                {
-                    float pct = ter.captureProgress / ter.captureTime;
-                    ImVec2 barTL(tl.x, br.y - 4.f);
-                    ImVec2 barBR(tl.x + (br.x - tl.x) * pct, br.y);
-                    dl->AddRectFilled(barTL, barBR,
-                        TerritoryColors::ForTeamU32(ter.contestedBy, 0.9f));
-                }
-
-                // Border: brighter when contested
-                ImU32 borderCol = (ter.contestedBy != TEAM_NONE)
-                    ? TerritoryColors::ForTeamU32(ter.contestedBy, 1.f)
-                    : IM_COL32(255, 255, 255, 120);
-                dl->AddRect(tl, br, borderCol, 4.f, 0, 1.5f);
-
-                // Zone name label centered
-                ImVec2 labelPos(
-                    (tl.x + br.x) * 0.5f - ImGui::CalcTextSize(ter.name).x * 0.5f,
-                    (tl.y + br.y) * 0.5f - 6.f);
-                dl->AddText(labelPos, IM_COL32(255, 255, 255, 200), ter.name);
-            }
-        }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
     }
 
 } // namespace TerritorySystem

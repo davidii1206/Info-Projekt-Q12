@@ -45,6 +45,11 @@ public:
      */
     GraphicsPipeline* GetPipeline(const std::string& name) const;
 
+    /**
+     * @brief Removes all cached pipelines from the library.
+     */
+    void Clear();
+
 private:
     SDL_GPUDevice* m_Device;                                                /**< Pointer to the SDL GPU device. */
     std::unordered_map<std::string, std::unique_ptr<GraphicsPipeline>> m_Pipelines; /**< Cache of named pipelines. */

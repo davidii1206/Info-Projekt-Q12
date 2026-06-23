@@ -24,6 +24,7 @@ FetchContent_Declare(voronoi GIT_REPOSITORY https://github.com/JCash/voronoi.git
 
 set(LIBTYPE STATIC CACHE STRING "Build OpenAL as static library to avoid DLL dependency")
 set(ALSOFT_BACKEND_PIPEWIRE OFF CACHE BOOL "Disable PipeWire (not available on Windows)")
+set(ALSOFT_EXAMPLES OFF CACHE BOOL "Disable examples to avoid symbol conflicts")
 set(FETCHCONTENT_QUIET OFF)
 
 FetchContent_MakeAvailable(

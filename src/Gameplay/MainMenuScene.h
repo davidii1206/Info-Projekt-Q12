@@ -78,4 +78,7 @@ private:
     WorldGenConfig m_GenConfig;                     ///< Editable world-gen config for the preview.
     Texture* m_DebugTexture = nullptr;              ///< Territory-preview texture (owned).
     std::unique_ptr<WorldManager> m_WorldManager;   ///< World generator used for the menu preview.
+
+    // Connect UI
+    char m_ConnectIP[128] = "127.0.0.1";            ///< IP address for client connection.
 };

@@ -30,7 +30,6 @@
 #include <cmath>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <imgui.h>
 #include "Components.h"
 
 // ---------------------------------------------------------------------------
@@ -91,16 +90,17 @@ struct FogGrid
     }
 
     /// Reveals all cells within `radius` world-units of `center`.
-    void Reveal(const glm::vec3& center, float radius)
+    /// Returns true if at least one cell was newly revealed.
+    bool Reveal(const glm::vec3& center, float radius)
     {
         int cx, cz;
         WorldToCell(center, cx, cz);
 
+        bool changed = false;
         int cellRadius = static_cast<int>(std::ceil(radius / cellSize));
         for (int dz = -cellRadius; dz <= cellRadius; ++dz)
         for (int dx = -cellRadius; dx <= cellRadius; ++dx)
         {
-            // Circle check in world units
             float wx = (cx + dx + 0.5f) * cellSize + worldMin.x;
             float wz = (cz + dz + 0.5f) * cellSize + worldMin.z;
             float dist2 = (wx - center.x) * (wx - center.x)
@@ -109,9 +109,13 @@ struct FogGrid
 
             int nx = cx + dx;
             int nz = cz + dz;
-            if (InBounds(nx, nz))
+            if (InBounds(nx, nz) && !revealed[static_cast<size_t>(nz * cellsX + nx)])
+            {
                 revealed[static_cast<size_t>(nz * cellsX + nx)] = true;
+                changed = true;
+            }
         }
+        return changed;
     }
 
     /// @return True if the cell (cx, cz) has been revealed.
@@ -119,6 +123,14 @@ struct FogGrid
     {
         if (!InBounds(cx, cz)) return false;
         return revealed[static_cast<size_t>(cz * cellsX + cx)];
+    }
+
+    /// @return True if the world position is in a revealed cell.
+    bool IsWorldPosRevealed(const glm::vec3& worldPos) const
+    {
+        int cx, cz;
+        WorldToCell(worldPos, cx, cz);
+        return IsRevealed(cx, cz);
     }
 
     /// Resets all cells to hidden (useful on map restart).
@@ -134,112 +146,69 @@ struct FogGrid
 
 /**
  * @namespace FogOfWarSystem
- * @brief ECS system that updates the FogGrid based on unit positions and
- *        renders the fog overlay via ImGui.
+ * @brief ECS system that updates the FogGrid based on unit positions.
  */
 namespace FogOfWarSystem
 {
-    /// Sichtweite für benutzersteuerbare Einheiten (Welt-Einheiten).
-    constexpr float PLAYER_SIGHT_RADIUS   = 12.f;
+    /// Sichtweite für Kampfeinheiten (Welt-Einheiten).
+    constexpr float COMBAT_SIGHT_RADIUS    = 10.f;
     /// Sichtweite für Sammel- und AI-Einheiten.
     constexpr float COLLECTOR_SIGHT_RADIUS = 8.f;
+    /// Sichtweite für sonstige Einheiten.
+    constexpr float UNIT_SIGHT_RADIUS      = 10.f;
+    /// Sichtweite für Gebäude (Bauauslösung).
+    constexpr float BUILDING_SIGHT_RADIUS  = 8.f;
 
     /**
      * @brief Reveals fog around every unit that has a TransformComponent.
      *
-     * Players use PLAYER_SIGHT_RADIUS, CollectorComponent units use
-     * COLLECTOR_SIGHT_RADIUS.
+     * CombatComponent units use COMBAT_SIGHT_RADIUS, CollectorComponent units use
+     * COLLECTOR_SIGHT_RADIUS, other UnitComponent entities use UNIT_SIGHT_RADIUS,
+     * and buildings use BUILDING_SIGHT_RADIUS.
      *
      * Call every server fixed-tick.
      *
      * @param fog      The grid to update.
      * @param registry Server or client registry.
      */
-    inline void Update(FogGrid& fog, entt::registry& registry)
+    inline bool Update(FogGrid& fog, entt::registry& registry)
     {
-        if (!fog.IsInitialised()) return;
+        if (!fog.IsInitialised()) return false;
 
-        // Players
+        bool changed = false;
+
         {
-            auto view = registry.view<TransformComponent, PlayerComponent>();
-            for (auto e : view) {
-                auto& p = view.get<PlayerComponent>(e);
-                if (p.cameraMode == CameraMode::Commander || p.cameraMode == CameraMode::Building || p.cameraMode == CameraMode::FreeFly)
-                    continue;
-
-                fog.Reveal(view.get<TransformComponent>(e).position,
-                           PLAYER_SIGHT_RADIUS);
-            }
+            auto view = registry.view<TransformComponent, CombatComponent>();
+            for (auto e : view)
+                changed |= fog.Reveal(view.get<TransformComponent>(e).position,
+                                     COMBAT_SIGHT_RADIUS);
         }
 
-        // Collector units
         {
             auto view = registry.view<TransformComponent, CollectorComponent>();
             for (auto e : view)
-                fog.Reveal(view.get<TransformComponent>(e).position,
-                           COLLECTOR_SIGHT_RADIUS);
+                changed |= fog.Reveal(view.get<TransformComponent>(e).position,
+                                     COLLECTOR_SIGHT_RADIUS);
         }
-    }
 
-    /**
-     * @brief Draws the fog of war as a semi-transparent ImGui overlay.
-     *
-     * Renders an ImGui window sized to `mapSizePx` at `mapOriginPx` and
-     * fills unrevealed cells with a dark rectangle.
-     *
-     * Call from UIUpdate().  The overlay is purely visual — no interaction.
-     *
-     * @param fog          The fog grid to visualise.
-     * @param mapOriginPx  Top-left pixel of the minimap / full-screen map in
-     *                     screen space.  Pass {0,0} for a full-screen overlay.
-     * @param mapSizePx    Width and height of the map area in pixels.
-     * @param fogAlpha     Opacity of hidden cells (0 = transparent, 1 = black).
-     */
-    inline void DrawOverlay(const FogGrid& fog,
-                            ImVec2         mapOriginPx,
-                            ImVec2         mapSizePx,
-                            float          fogAlpha = 0.85f)
-    {
-        if (!fog.IsInitialised()) return;
-
-        constexpr ImGuiWindowFlags kFlags =
-            ImGuiWindowFlags_NoDecoration      |
-            ImGuiWindowFlags_NoInputs          |
-            ImGuiWindowFlags_NoNav             |
-            ImGuiWindowFlags_NoMove            |
-            ImGuiWindowFlags_NoSavedSettings   |
-            ImGuiWindowFlags_NoFocusOnAppearing|
-            ImGuiWindowFlags_NoBringToFrontOnFocus;
-
-        ImGui::SetNextWindowPos(mapOriginPx, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(mapSizePx,  ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.f); // transparent window, cells drawn manually
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-
-        if (ImGui::Begin("##FogOfWar", nullptr, kFlags))
         {
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            const ImU32 fogColor = IM_COL32(0, 0, 0,
-                static_cast<int>(fogAlpha * 255.f));
-
-            const float cellW = mapSizePx.x / static_cast<float>(fog.cellsX);
-            const float cellH = mapSizePx.y / static_cast<float>(fog.cellsZ);
-
-            for (int z = 0; z < fog.cellsZ; ++z)
-            for (int x = 0; x < fog.cellsX; ++x)
-            {
-                if (fog.IsRevealed(x, z)) continue;
-
-                ImVec2 tl(mapOriginPx.x + x * cellW,
-                          mapOriginPx.y + z * cellH);
-                ImVec2 br(tl.x + cellW + 1.f,  // +1 prevents hairline gaps
-                          tl.y + cellH + 1.f);
-                dl->AddRectFilled(tl, br, fogColor);
+            auto view = registry.view<TransformComponent, UnitComponent>();
+            for (auto e : view) {
+                if (registry.any_of<CombatComponent>(e) || registry.any_of<CollectorComponent>(e))
+                    continue;
+                changed |= fog.Reveal(view.get<TransformComponent>(e).position,
+                                     UNIT_SIGHT_RADIUS);
             }
         }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
+
+        {
+            auto view = registry.view<TransformComponent, BuildingComponent>();
+            for (auto e : view)
+                changed |= fog.Reveal(view.get<TransformComponent>(e).position,
+                                     BUILDING_SIGHT_RADIUS);
+        }
+
+        return changed;
     }
 
 } // namespace FogOfWarSystem

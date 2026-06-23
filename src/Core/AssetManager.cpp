@@ -350,10 +350,10 @@ const SceneData& AssetManager::RegisterProceduralScene(
         { 0, (uint32_t)sections.size(), glm::mat4(1.0f) }
     };
     SceneData sceneData = { model, {}, meshInstances, std::move(vertices), std::move(indices) };
-    auto [ins, _] = s_Scenes.emplace(key, std::move(sceneData));
+    auto& ins = s_Scenes[key] = std::move(sceneData);
     spdlog::info("AssetManager: registered procedural scene '{}' ({} vertices, {} indices, {} sections)",
-                  key, ins->second.cpuVertices.size(), ins->second.cpuIndices.size(), sections.size());
-    return ins->second;
+                  key, ins.cpuVertices.size(), ins.cpuIndices.size(), sections.size());
+    return ins;
 }
 
 std::shared_ptr<Model> AssetManager::GetFallbackModel() {

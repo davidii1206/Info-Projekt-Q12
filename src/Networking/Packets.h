@@ -43,6 +43,10 @@ enum class PacketType : uint8_t {
     BUILDING_SPAWNED   = 17, /**< A building was spawned. */
     BUILDING_DESTROYED = 18, /**< A building was destroyed. */
     UPGRADE_COMPLETED  = 19, /**< An upgrade path was completed. */
+    LOBBY_UPDATE       = 20, /**< Client→Server: player changed bug class or ready state. */
+    LOBBY_STATE        = 21, /**< Server→Client: full lobby player list with states. */
+    GAME_START         = 22, /**< Server→Client: host started the game. */
+    RETURN_TO_LOBBY   = 23, /**< Server→Client: host is returning everyone to lobby. */
 };
 
 /**
@@ -218,8 +222,8 @@ struct FogSnapshotPacket {
     PacketType type    = PacketType::FOG_SNAPSHOT; /**< Packet type identifier. */
     uint16_t   cellsX  = 0;                         /**< Number of fog cells along X. */
     uint16_t   cellsZ  = 0;                         /**< Number of fog cells along Z. */
-    /// Bit-packed revealed flags; enough for a 100×100 grid (10 000 bits → 157 uint64s).
-    uint64_t   gridData[160]{};
+    /// Bit-packed revealed flags; enough for a 375×375 grid (140 625 bits → 2198 uint64s).
+    uint64_t   gridData[2200]{};
 };
 
 /**
@@ -296,4 +300,49 @@ struct UpgradeCompletedPacket {
     PacketType type   = PacketType::UPGRADE_COMPLETED; /**< Packet type identifier. */
     uint32_t   pathId = 0;    ///< UpgradePathID that was completed.
     uint32_t   teamId = 0;    ///< Which team completed it.
+};
+
+/**
+ * @struct LobbyUpdatePacket
+ * @brief Client → Server: player changed bug class or ready state in lobby.
+ */
+struct LobbyUpdatePacket {
+    PacketType type      = PacketType::LOBBY_UPDATE; /**< Packet type identifier. */
+    uint32_t   playerId  = 0;                        /**< Sender's player ID. */
+    uint8_t    bugClass  = 0;                        /**< BugClass enum value. */
+    uint8_t    ready     = 0;                        /**< 1 = ready, 0 = not ready. */
+};
+
+/**
+ * @struct LobbyStatePacket
+ * @brief Server → Client: full lobby player list with states.
+ */
+struct LobbyStatePacket {
+    static constexpr uint32_t MAX_PLAYERS = 16;
+
+    PacketType type        = PacketType::LOBBY_STATE; /**< Packet type identifier. */
+    uint32_t   playerCount = 0;                       /**< Number of valid entries in players[]. */
+
+    struct PlayerInfo {
+        uint32_t playerId  = 0;  /**< Player ID. */
+        uint32_t netId     = 0;  /**< Player's network entity ID. */
+        uint8_t  bugClass  = 0;  /**< BugClass enum value (0 = None). */
+        uint8_t  ready     = 0;  /**< 1 = ready, 0 = not ready. */
+    } players[MAX_PLAYERS]{};
+};
+
+/**
+ * @struct GameStartPacket
+ * @brief Server → Client: host started the game. Everyone transitions to GameScene.
+ */
+struct GameStartPacket {
+    PacketType type = PacketType::GAME_START; /**< Packet type identifier. */
+};
+
+/**
+ * @struct ReturnToLobbyPacket
+ * @brief Server → Client: host is returning everyone to the lobby.
+ */
+struct ReturnToLobbyPacket {
+    PacketType type = PacketType::RETURN_TO_LOBBY; /**< Packet type identifier. */
 };

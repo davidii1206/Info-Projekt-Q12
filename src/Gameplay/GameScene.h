@@ -203,7 +203,6 @@ private:
     void HandleFogSnapshot(const FogSnapshotPacket& pkt);
 
     /** @brief Client: draw territory overlay from synced packet data (no server registry needed). */
-    void DrawClientTerritoryOverlay(ImVec2 mapOriginPx, ImVec2 mapSizePx);
 
     /** @brief Commander: unproject screen pos to XZ plane in world space. */
     glm::vec3 ScreenToWorldXZ(float sx, float sy, int winW, int winH);
@@ -218,7 +217,13 @@ private:
 
     /// Builds per-model instance transform SSBOs for all scatter entities.
     /// Called once in OnEnter() after scatter population; results are reused every frame.
-    void BuildScatterBatches(SceneContext& ctx);
+    void BuildScatterBatches(SceneContext& ctx, const FogGrid* fog = nullptr);
+
+    /// Builds or rebuilds the flat black fog-cover mesh over unrevealed cells.
+    void BuildFogCoverMesh(SceneContext& ctx);
+
+    /// Generates/re-generates the top-down map texture from world data and fog state.
+    void GenerateMapTexture(SceneContext& ctx);
 
     /** @brief Server: apply an upgrade path for a team and broadcast it. */
     void ApplyUpgrade(SceneContext& ctx, uint32_t teamId, UpgradePathID pathId);
@@ -247,18 +252,16 @@ private:
 
     // --- Camera Modes ---
     /// @brief Active camera/control mode.
-    enum class CameraMode { Exploring, Commander, Building };
-    CameraMode m_CameraMode = CameraMode::Exploring; ///< Current camera mode.
-    /// Saved 1st-person camera state (restored when leaving Commander/Building).
-    glm::vec3 m_SavedExplorePos{0.f};
-    float     m_SavedExploreYaw   = 0.f; ///< Saved 1st-person yaw.
-    float     m_SavedExplorePitch = 0.f; ///< Saved 1st-person pitch.
+    enum class CameraMode { Commander, Building };
+    CameraMode m_CameraMode = CameraMode::Building; ///< Current camera mode.
     /// Saved Commander camera XZ position (restored when switching back from Building).
     glm::vec3 m_SavedCommanderPos{0.f};
     /// Default height above ground for Commander and Building modes.
     float m_TopDownHeight = 40.f;
     /// Orthographic zoom level for Building mode (half-height of frustum).
     float m_BuildOrthoSize = 30.f;
+    /// Yaw angle for isometric building mode (rotated with left/right arrow keys).
+    float m_BuildYaw = -135.f;
 
     /// Client-side entity for building placement ghost (transparent preview).
     entt::entity m_GhostEntity = entt::null;
@@ -268,6 +271,13 @@ private:
     SpecialBuildingType m_SelectedSpecialBuilding = SpecialBuildingType::NectarRefinery;
     /// Whether the player is in placement hover mode.
     bool m_PlacementActive = false;
+    /// Current ghost world position (tile-snapped, updated every frame during placement).
+    glm::vec3 m_GhostPos{0.f};
+    /// Raw cursor world position (unsnapped) — used as tree-fade center so the
+    /// fade follows the mouse smoothly instead of jumping between tile centres.
+    glm::vec3 m_FadeCenter{0.f};
+    /// Whether the current placement target is valid (buildable, not blocked).
+    bool m_PlacementValid = false;
 
     // --- Unit system ---
     /// Network IDs of units currently selected by this client's Commander.
@@ -325,8 +335,7 @@ private:
         uint32_t contestedBy = 0xFFFF'FFFFu;      ///< Team currently contesting, if any.
         glm::vec3 center{0.f};                     ///< Zone centre (world space).
     };
-    std::vector<ClientTerritoryZone> m_ClientTerritories; ///< Synced territory cache for the overlay.
-    bool m_HasTerritoryData = false; ///< True once a territory snapshot has been received.
+    std::vector<ClientTerritoryZone> m_ClientTerritories; ///< Synced territory cache (future use).
 
     // --- Resource networking ---
     /// Tracks resource entities on server for netId assignment and broadcast.
@@ -347,8 +356,7 @@ private:
     float m_TotalTime = 0.0f;
     /// Total number of frames rendered.
     uint32_t m_FrameCount = 0;
-    /// Whether free-fly camera mode is active.
-    bool m_FreeFly = false;
+
 
     // --- Shadow Map ---
     /// Vertex shader for the depth-only shadow pass.
@@ -386,4 +394,16 @@ private:
     std::vector<ScatterBatch>  m_ScatterBatches;
     /// Single identity mat4 SSBO bound for non-scatter draw calls so slot 1 is always valid.
     std::unique_ptr<GPUBuffer> m_IdentityInstanceBuffer;
+
+    // --- 3D Fog Cover (flat black mesh at terrain height for unrevealed cells) ---
+    entt::entity m_FogCoverEntity = entt::null;
+    uint32_t     m_FogCoverVersion = 0;
+    bool         m_FogCoverDirty   = true;
+    float        m_FogCoverTimer   = 0.f;
+
+    bool         m_ScatterBatchesDirty = false;
+
+    // --- Map Texture (top-down view of the world from generator data) ---
+    std::unique_ptr<class Texture> m_MapTexture;
+    bool m_MapTextureDirty = true;
 };

@@ -217,6 +217,18 @@ struct BaseHealthComponent {
 struct GhostComponent {};
 
 /**
+ * @struct FogCoverComponent
+ * @brief Tag for the fog-cover mesh entity (excluded from fog culling).
+ */
+struct FogCoverComponent {};
+
+/**
+ * @struct NoFogCullComponent
+ * @brief Tag for entities that should never be fog-culled (e.g. terrain mesh).
+ */
+struct NoFogCullComponent {};
+
+/**
  * @struct ConstructionComponent
  * @brief Building under construction — slides up from below ground over time.
  */
