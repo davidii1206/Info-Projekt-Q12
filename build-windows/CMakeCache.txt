@@ -225,8 +225,8 @@ CMAKE_ADDR2LINE:FILEPATH=/usr/bin/x86_64-w64-mingw32-addr2line
 //Path to a program.
 CMAKE_AR:FILEPATH=/usr/bin/x86_64-w64-mingw32-ar
 
-//Choose the type of build, options are: None Debug Release RelWithDebInfo
-// MinSizeRel ...
+//Choose the type of build, options are: Debug Release RelWithDebInfo
+// MinSizeRel.
 CMAKE_BUILD_TYPE:STRING=RelWithDebInfo
 
 //Enable/Disable color output during build.
@@ -504,8 +504,8 @@ CMAKE_STRIP:FILEPATH=/usr/bin/x86_64-w64-mingw32-strip
 //Path to a program.
 CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 
-//The CMake toolchain file
-CMAKE_TOOLCHAIN_FILE:FILEPATH=/home/david/Dokumente/coding_projects/bugmin/cmake/mingw-toolchain.cmake
+//No help, variable specified on the command line.
+CMAKE_TOOLCHAIN_FILE:UNINITIALIZED=/home/david/Dokumente/coding_projects/bugmin/cmake/mingw-toolchain.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
@@ -548,6 +548,9 @@ DOXYGEN_DOT_EXECUTABLE:FILEPATH=/usr/bin/dot
 
 //Doxygen documentation generation tool (https://www.doxygen.nl)
 DOXYGEN_EXECUTABLE:FILEPATH=/usr/bin/doxygen
+
+//Path to a program.
+DXC:FILEPATH=/home/david/.local/bin/dxc
 
 //Enable all warnings and warnings as errors
 ENABLE_ALL_WARNINGS:BOOL=ON
@@ -1292,6 +1295,9 @@ SPDLOG_WCHAR_FILENAMES:BOOL=OFF
 
 //Support wchar api
 SPDLOG_WCHAR_SUPPORT:BOOL=OFF
+
+//Path to a program.
+SPIRV_CROSS:FILEPATH=/home/david/.local/bin/spirv-cross
 
 //Build glTF builder example
 TINYGLTF_BUILD_BUILDER_EXAMPLE:BOOL=OFF

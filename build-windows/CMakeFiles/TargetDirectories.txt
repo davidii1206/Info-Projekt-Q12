@@ -1,6 +1,7 @@
 /home/david/Dokumente/coding_projects/bugmin/build-windows/CMakeFiles/imgui_lib.dir
 /home/david/Dokumente/coding_projects/bugmin/build-windows/CMakeFiles/Bugmin.dir
 /home/david/Dokumente/coding_projects/bugmin/build-windows/CMakeFiles/compile_shaders.dir
+/home/david/Dokumente/coding_projects/bugmin/build-windows/CMakeFiles/compile_dxbc_shaders.dir
 /home/david/Dokumente/coding_projects/bugmin/build-windows/CMakeFiles/docs.dir
 /home/david/Dokumente/coding_projects/bugmin/build-windows/CMakeFiles/edit_cache.dir
 /home/david/Dokumente/coding_projects/bugmin/build-windows/CMakeFiles/rebuild_cache.dir
