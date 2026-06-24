@@ -609,31 +609,37 @@ void GameScene::OnEnter(SceneContext& ctx) {
         // -----------------------------------------------------------------
         {
             const auto& terr = m_World.GetTerrains();
-            std::vector<glm::vec2> availableSpawns;
+
+            // Build a lookup from bugClass → territory spawn point
+            std::unordered_map<BugClass, glm::vec2> bugClassToSpawn;
             for (const auto& td : terr) {
                 if (td.bugClass == BugClass::BossArena) continue;
-                availableSpawns.push_back(td.spawnPoint);
+                bugClassToSpawn[td.bugClass] = td.spawnPoint;
             }
 
             auto pView = ctx.serverRegistry.view<PlayerComponent, NetworkedComponent>();
-            uint32_t spawnIdx = 0;
+            std::vector<std::pair<uint32_t, entt::entity>> sortedPlayers;
             for (auto pe : pView) {
                 auto& pc = pView.get<PlayerComponent>(pe);
-                auto& nc = pView.get<NetworkedComponent>(pe);
+                sortedPlayers.emplace_back(pc.playerId, pe);
+            }
+            std::sort(sortedPlayers.begin(), sortedPlayers.end(),
+                      [](const auto& a, const auto& b) { return a.first < b.first; });
 
-                if (spawnIdx >= (uint32_t)availableSpawns.size()) {
-                    spdlog::warn("GameScene: ran out of territories for player {}", pc.playerId);
-                    break;
+            for (auto& [playerId, pe] : sortedPlayers) {
+                auto& pc = pView.get<PlayerComponent>(pe);
+                auto it = bugClassToSpawn.find(pc.bugClass);
+                if (it == bugClassToSpawn.end()) {
+                    spdlog::warn("GameScene: no territory for bugClass {}", (int)pc.bugClass);
+                    continue;
                 }
 
-                const glm::vec2 sp = availableSpawns[spawnIdx];
-                uint32_t teamId = pc.playerId;
-                SpawnBuilding(ctx, BuildingType::Main, teamId,
+                const glm::vec2 sp = it->second;
+                SpawnBuilding(ctx, BuildingType::Main, playerId,
                               glm::vec3{sp.x, 0.f, sp.y}, 1, "assets/cube.glb");
 
-                spdlog::info("GameScene: spawned MainBase for player {} team {} at ({:.1f}, {:.1f})",
-                             pc.playerId, teamId, sp.x, sp.y);
-                ++spawnIdx;
+                spdlog::info("GameScene: spawned MainBase for player {} team {} bugClass {} at ({:.1f}, {:.1f})",
+                             playerId, playerId, (int)pc.bugClass, sp.x, sp.y);
             }
         }
 
@@ -818,7 +824,8 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_GameOver      = false;
     m_WinnerTeam    = 0xFFFFFFFFu;
     m_CameraMode    = CameraMode::Building;
-    m_Camera->SetProjectionMode(ProjectionMode::Orthographic);
+    if (m_Camera)
+        m_Camera->SetProjectionMode(ProjectionMode::Orthographic);
 
     // Reset fog grid for next session
     m_Fog.Reset();
@@ -883,6 +890,7 @@ void GameScene::OnExit(SceneContext& ctx) {
  * @param renderer Pointer to the renderer.
  */
 void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
+    if (!m_Camera) return;
     // ------------------------------------------------------------------
     // 1. Lazy-init graphics pipelines
     // ------------------------------------------------------------------
@@ -1356,6 +1364,8 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         ctx.scenes.RequestTransition(new MainMenuScene());
         return;
     }
+
+    if (!m_Camera) return;
 
     // ------------------------------------------------------------------
     // TAB: cycle Commander (top-down perspective) ↔ Building (top-down orthographic)
@@ -2520,7 +2530,7 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
 }
 
 void GameScene::SendLocalInput(SceneContext& ctx) {
-    if (!ctx.network.IsConnected() || !Input::IsRelativeMouseMode()) return;
+    if (!ctx.network.IsConnected() || !Input::IsRelativeMouseMode() || !m_Camera) return;
     glm::vec3 forward = m_Camera->m_Front;
     forward.y = 0.f;
     if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
@@ -3268,6 +3278,7 @@ void GameScene::CheckWinCondition(SceneContext& ctx)
  */
 glm::vec3 GameScene::ScreenToWorldXZ(float sx, float sy, int winW, int winH)
 {
+    if (!m_Camera) return {0.f, 0.f, 0.f};
     // NDC
     float ndcX = (2.f * sx / (float)winW) - 1.f;
     float ndcY = 1.f - (2.f * sy / (float)winH);
@@ -3312,6 +3323,7 @@ glm::vec3 GameScene::ScreenToWorldXZ(float sx, float sy, int winW, int winH)
  */
 void GameScene::DrawUnitHPBars(SceneContext& ctx)
 {
+    if (!m_Camera) return;
     int winW, winH;
     SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
     if (winW <= 0 || winH <= 0) return;

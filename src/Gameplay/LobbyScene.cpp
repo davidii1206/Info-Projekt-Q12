@@ -317,6 +317,13 @@ void LobbyScene::PollConnectionEvents(SceneContext& ctx) {
             PlayerJoinedPacket broadcastPkt;
             broadcastPkt.netId    = newNetId;
             broadcastPkt.playerId = newPlayerId;
+            {   // Include the player entity's initial position (defaults to 0, but
+                // future code may place the entity at a meaningful starting point)
+                auto& tf = ctx.serverRegistry.get<TransformComponent>(entity);
+                broadcastPkt.x = tf.position.x;
+                broadcastPkt.y = tf.position.y;
+                broadcastPkt.z = tf.position.z;
+            }
             ctx.network.BroadcastToAll(broadcastPkt);
 
             // Add to lobby state

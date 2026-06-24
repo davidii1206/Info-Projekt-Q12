@@ -43,211 +43,247 @@
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Audio/SoundSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Audio/SoundSystem.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Audio/SoundSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Audio/SoundSystem.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Audio/SoundSystem.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Audio/SoundSystem.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/Application.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/Application.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/Application.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/Application.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/Application.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/Application.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/AssetManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/AssetManager.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/AssetManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/AssetManager.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/AssetManager.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/AssetManager.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/Input.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/Input.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/Input.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/Input.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/Input.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/Input.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/LayerStack.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/LayerStack.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/LayerStack.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/LayerStack.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/LayerStack.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/LayerStack.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/MeshCollisionBuilder.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/MeshCollisionBuilder.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/MeshCollisionBuilder.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/MeshCollisionBuilder.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/MeshCollisionBuilder.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/MeshCollisionBuilder.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/PhysicsServer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/PhysicsServer.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/PhysicsServer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/PhysicsServer.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/PhysicsServer.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/PhysicsServer.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/WorldManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/WorldManager.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/WorldManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/WorldManager.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/WorldManager.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/WorldManager.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/tiny_gltf_implementation.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/tiny_gltf_implementation.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Core/tiny_gltf_implementation.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Core/tiny_gltf_implementation.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Core/tiny_gltf_implementation.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Core/tiny_gltf_implementation.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/BuildingSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/BuildingSystem.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/BuildingSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/BuildingSystem.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/BuildingSystem.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/BuildingSystem.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/GameLayer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/GameLayer.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/GameLayer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/GameLayer.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/GameLayer.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/GameLayer.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/GameScene.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/GameScene.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/GameScene.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/GameScene.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/GameScene.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/GameScene.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/MainMenuScene.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/MainMenuScene.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/LobbyScene.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/LobbyScene.cpp",
+  "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/LobbyScene.cpp",
+  "output": "CMakeFiles/Bugmin.dir/src/Gameplay/LobbyScene.cpp.obj"
+},
+{
+  "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/MainMenuScene.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/MainMenuScene.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/MainMenuScene.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/MainMenuScene.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/PostProcessor.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/PostProcessor.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/PostProcessor.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/PostProcessor.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/PostProcessor.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/PostProcessor.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/ResourceManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ResourceManager.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/ResourceManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ResourceManager.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ResourceManager.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/ResourceManager.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/ResourceSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ResourceSystem.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/ResourceSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ResourceSystem.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ResourceSystem.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/ResourceSystem.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/Scene.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/Scene.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/ScatterSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ScatterSystem.cpp",
+  "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/ScatterSystem.cpp",
+  "output": "CMakeFiles/Bugmin.dir/src/Gameplay/ScatterSystem.cpp.obj"
+},
+{
+  "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/Scene.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/Scene.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/Scene.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/Scene.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/Systems.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/Systems.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/StructurePlacementSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/StructurePlacementSystem.cpp",
+  "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/StructurePlacementSystem.cpp",
+  "output": "CMakeFiles/Bugmin.dir/src/Gameplay/StructurePlacementSystem.cpp.obj"
+},
+{
+  "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/Systems.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/Systems.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/Systems.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/Systems.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/World.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/World.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/UpgradeDefs.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/UpgradeDefs.cpp",
+  "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/UpgradeDefs.cpp",
+  "output": "CMakeFiles/Bugmin.dir/src/Gameplay/UpgradeDefs.cpp.obj"
+},
+{
+  "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/UpgradeSystem.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/UpgradeSystem.cpp",
+  "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/UpgradeSystem.cpp",
+  "output": "CMakeFiles/Bugmin.dir/src/Gameplay/UpgradeSystem.cpp.obj"
+},
+{
+  "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Gameplay/World.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Gameplay/World.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Gameplay/World.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Gameplay/World.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/ComputePipeline.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/ComputePipeline.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/ComputePipeline.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/ComputePipeline.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/ComputePipeline.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/ComputePipeline.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/FrameGraph.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/FrameGraph.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/FrameGraph.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/FrameGraph.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/FrameGraph.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/FrameGraph.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/Framebuffer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Framebuffer.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/Framebuffer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Framebuffer.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Framebuffer.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/Framebuffer.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/GPUBuffer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/GPUBuffer.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/GPUBuffer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/GPUBuffer.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/GPUBuffer.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/GPUBuffer.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/GraphicsPipeline.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/GraphicsPipeline.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/GraphicsPipeline.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/GraphicsPipeline.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/GraphicsPipeline.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/GraphicsPipeline.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/PipelineLibrary.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/PipelineLibrary.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/PipelineLibrary.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/PipelineLibrary.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/PipelineLibrary.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/PipelineLibrary.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/RenderContext.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/RenderContext.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/RenderContext.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/RenderContext.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/RenderContext.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/RenderContext.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/Shader.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Shader.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/Shader.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Shader.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Shader.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/Shader.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/Texture.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Texture.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/API/Texture.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Texture.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/API/Texture.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/API/Texture.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/Model.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/Model.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/Model.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/Model.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/Model.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/Model.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/Renderer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/Renderer.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/Renderer.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/Renderer.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/Renderer.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/Renderer.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/ShapeGenerator.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/ShapeGenerator.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/ShapeGenerator.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/ShapeGenerator.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/ShapeGenerator.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Graphics/ShapeGenerator.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Networking/NetworkManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Networking/NetworkManager.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Graphics/TerrainMeshBuilder.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Graphics/TerrainMeshBuilder.cpp",
+  "file": "/home/david/Dokumente/coding_projects/bugmin/src/Graphics/TerrainMeshBuilder.cpp",
+  "output": "CMakeFiles/Bugmin.dir/src/Graphics/TerrainMeshBuilder.cpp.obj"
+},
+{
+  "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Networking/NetworkManager.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Networking/NetworkManager.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Networking/NetworkManager.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Networking/NetworkManager.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Networking/enet_implementation.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Networking/enet_implementation.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Networking/enet_implementation.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Networking/enet_implementation.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Networking/enet_implementation.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Networking/enet_implementation.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Window/Window.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Window/Window.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/Window/Window.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/Window/Window.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/Window/Window.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/Window/Window.cpp.obj"
 },
 {
   "directory": "/home/david/Dokumente/coding_projects/bugmin/build-windows",
-  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/main.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/main.cpp",
+  "command": "/usr/bin/x86_64-w64-mingw32-g++ -DAL_LIBTYPE_STATIC -DGLM_FORCE_DEPTH_ZERO_TO_ONE -DJPH_OBJECT_STREAM -DJPH_USE_AVX -DJPH_USE_AVX2 -DJPH_USE_F16C -DJPH_USE_FMADD -DJPH_USE_LZCNT -DJPH_USE_SSE4_1 -DJPH_USE_SSE4_2 -DJPH_USE_TZCNT -DSPDLOG_COMPILED_LIB @CMakeFiles/Bugmin.dir/includes_CXX.rsp -O2 -g -DNDEBUG -std=gnu++17 -mstackrealign -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse -o CMakeFiles/Bugmin.dir/src/main.cpp.obj -c /home/david/Dokumente/coding_projects/bugmin/src/main.cpp",
   "file": "/home/david/Dokumente/coding_projects/bugmin/src/main.cpp",
   "output": "CMakeFiles/Bugmin.dir/src/main.cpp.obj"
 },
