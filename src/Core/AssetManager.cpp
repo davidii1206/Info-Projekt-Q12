@@ -279,7 +279,7 @@ const SceneData& AssetManager::LoadGLTF(const std::string& filePath) {
     if (ext == ".gltf") ret = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, filePath);
     else if (ext == ".glb") ret = loader.LoadBinaryFromFile(&gltfModel, &err, &warn, filePath);
 
-    if (!ret) { spdlog::error("Failed to load GLTF: {}", filePath); static const SceneData kEmpty; return kEmpty; }
+    if (!ret) { spdlog::trace("Failed to load GLTF: {}", filePath); static const SceneData kEmpty; return kEmpty; }
 
     spdlog::info("GLTF Loaded: {}. Used Extensions:", filePath);
     for (const auto& extName : gltfModel.extensionsUsed) {

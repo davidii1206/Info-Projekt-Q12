@@ -31,6 +31,7 @@
 #include "../Graphics/Lights.h"
 #include "PostProcessor.h"
 #include <PerlinNoise.hpp>
+#include "Pathfinding.h"
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <glm/glm.hpp>
@@ -168,8 +169,18 @@ void GameScene::BuildScatterBatches(SceneContext& ctx, const FogGrid* fog) {
                  m_ScatterBatches.size(), entityMatsByPath.size());
 }
 
+const FogGrid& GameScene::LocalFog(const SceneContext& ctx) const
+{
+    if (ctx.network.IsHosting()) {
+        auto it = m_TeamFogs.find(m_MyPlayerId);
+        if (it != m_TeamFogs.end()) return it->second;
+        if (!m_TeamFogs.empty()) return m_TeamFogs.begin()->second;
+    }
+    return m_ClientFog;
+}
+
 void GameScene::BuildFogCoverMesh(SceneContext& ctx) {
-    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+    const FogGrid& fog = LocalFog(ctx);
     if (!fog.IsInitialised()) return;
 
     std::vector<ModelVertex> vertices;
@@ -339,7 +350,7 @@ void GameScene::BuildFogCoverMesh(SceneContext& ctx) {
 }
 
 void GameScene::GenerateMapTexture(SceneContext& ctx) {
-    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+    const FogGrid& fog = LocalFog(ctx);
     if (!fog.IsInitialised()) return;
 
     constexpr int TEX_SIZE = 512;
@@ -590,10 +601,18 @@ void GameScene::OnEnter(SceneContext& ctx) {
         // Assign netIds to all permanent resources and broadcast to clients
         SyncResourceSpawns(ctx);
 
-        // Fog of War – initialise grid to match the map extents
-        m_Fog.Init(glm::vec3{-375.f, 0.f, -375.f},
-                   glm::vec3{ 375.f, 0.f,  375.f},
-                   /*cellSize=*/2.f);
+        // Per-team Fog of War grids – initialise to match the map extents
+        {
+            auto pView = ctx.serverRegistry.view<PlayerComponent>();
+            for (auto pe : pView) {
+                uint32_t teamId = pView.get<PlayerComponent>(pe).playerId;
+                FogGrid fg;
+                fg.Init(glm::vec3{-375.f, 0.f, -375.f},
+                        glm::vec3{ 375.f, 0.f,  375.f},
+                        /*cellSize=*/2.f);
+                m_TeamFogs[teamId] = std::move(fg);
+            }
+        }
 
         // Territory zones — derived from the tile grid
         TerritorySystem::SpawnZones(ctx.serverRegistry, m_World);
@@ -642,14 +661,17 @@ void GameScene::OnEnter(SceneContext& ctx) {
             }
         }
 
-        // Initial fog reveal around every Main Base so players can see their spawn
+        // Initial fog reveal around every Main Base for the owning team
         {
             auto bView = ctx.serverRegistry.view<BuildingComponent, TransformComponent>();
             for (auto e : bView) {
                 auto& bc = bView.get<BuildingComponent>(e);
                 auto& tf = bView.get<TransformComponent>(e);
-                if (bc.type == BuildingType::Main)
-                    m_Fog.Reveal(tf.position, 40.f);
+                if (bc.type == BuildingType::Main) {
+                    auto it = m_TeamFogs.find(bc.teamId);
+                    if (it != m_TeamFogs.end())
+                        it->second.Reveal(tf.position, 40.f);
+                }
             }
         }
 
@@ -717,7 +739,9 @@ void GameScene::OnEnter(SceneContext& ctx) {
     // Build GPU instance buffers for all scatter entities. Done once here;
     // every frame the render pass binds these SSBOs instead of issuing
     // one draw call per entity.
-    BuildScatterBatches(ctx, ctx.network.IsHosting() ? &m_Fog : nullptr);
+    // Build scatter batches without fog filter initially (fog cover handles culling).
+    // Scatter batches will be rebuilt once the first fog data arrives.
+    BuildScatterBatches(ctx, nullptr);
 
     // ------------------------------------------------------------------
     // Structure placement (faction bases + neutral resource nodes).
@@ -826,8 +850,8 @@ void GameScene::OnExit(SceneContext& ctx) {
     if (m_Camera)
         m_Camera->SetProjectionMode(ProjectionMode::Orthographic);
 
-    // Reset fog grid for next session
-    m_Fog.Reset();
+    // Reset all team fog grids for next session
+    for (auto& [tid, fg] : m_TeamFogs) fg.Reset();
 
     // Reset fog cover state
     m_FogCoverEntity  = entt::null;
@@ -852,9 +876,6 @@ void GameScene::OnExit(SceneContext& ctx) {
 
     // HUD-Texturen freigeben
     HUDTextures::Unload();
-
-    // Reset fog grid for next session
-    m_Fog.Reset();
 
     // HUD-Texturen freigeben
     HUDTextures::Unload();
@@ -1120,7 +1141,7 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             if (!ctx.clientRegistry.any_of<FogCoverComponent, NoFogCullComponent>(entity)) {
                 bool hiddenByFog = false;
                 if (m_HasFogData || ctx.network.IsHosting()) {
-                    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+                    const FogGrid& fog = LocalFog(ctx);
                     if (fog.IsInitialised() && !fog.IsWorldPosRevealed(transform.position))
                         hiddenByFog = true;
                 }
@@ -1200,7 +1221,7 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             if (!ctx.clientRegistry.any_of<FogCoverComponent, NoFogCullComponent>(entity)) {
                 bool hiddenByFog = false;
                 if (m_HasFogData || ctx.network.IsHosting()) {
-                    const FogGrid& fog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+                    const FogGrid& fog = LocalFog(ctx);
                     if (fog.IsInitialised() && !fog.IsWorldPosRevealed(transform.position))
                         hiddenByFog = true;
                 }
@@ -1411,7 +1432,7 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         // terrain — stops the player from sliding the view into unexplored
         // areas. If the fog grid isn't initialised yet (e.g. client briefly
         // before first FogSnapshot), allow the pan unconditionally.
-        const FogGrid& panFog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+        const FogGrid& panFog = LocalFog(ctx);
         auto applyPan = [&](const glm::vec3& pan) {
             glm::vec3 next = m_Camera->m_Position + pan;
             if (!panFog.IsInitialised()) { m_Camera->m_Position = next; return; }
@@ -1526,9 +1547,12 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 }
 
                 // Block placement in unrevealed fog cells
-                if (m_PlacementValid && m_Fog.IsInitialised()) {
-                    if (!m_Fog.IsWorldPosRevealed(worldPos))
-                        m_PlacementValid = false;
+                {
+                    const FogGrid& pfog = LocalFog(ctx);
+                    if (m_PlacementValid && pfog.IsInitialised()) {
+                        if (!pfog.IsWorldPosRevealed(worldPos))
+                            m_PlacementValid = false;
+                    }
                 }
 
                 auto* tf = ctx.clientRegistry.try_get<TransformComponent>(m_GhostEntity);
@@ -1567,7 +1591,9 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
                 constexpr float SELECT_RADIUS = 5.f;
 
-                m_SelectedUnits.clear();
+                bool shiftHeld = Input::IsKeyDown(SDLK_LSHIFT) || Input::IsKeyDown(SDLK_RSHIFT);
+                if (!shiftHeld)
+                    m_SelectedUnits.clear();
 
                 auto view = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, UnitComponent>();
                 for (auto entity : view) {
@@ -1577,9 +1603,21 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                     if (uc.teamId != m_MyPlayerId) continue;
                     glm::vec2 d2 = glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z);
                     if (glm::length(d2) <= SELECT_RADIUS) {
-                        m_SelectedUnits.push_back(nc.netId);
-                        uc.selected = true;
-                    } else {
+                        if (shiftHeld) {
+                            // Toggle the clicked unit in/out of the selection.
+                            auto it = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId);
+                            if (it != m_SelectedUnits.end()) {
+                                m_SelectedUnits.erase(it);
+                                uc.selected = false;
+                            } else {
+                                m_SelectedUnits.push_back(nc.netId);
+                                uc.selected = true;
+                            }
+                        } else {
+                            m_SelectedUnits.push_back(nc.netId);
+                            uc.selected = true;
+                        }
+                    } else if (!shiftHeld) {
                         uc.selected = false;
                     }
                 }
@@ -2051,9 +2089,17 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                 barr.completedSpawns = 0;
             }
         }
-        if (FogOfWarSystem::Update(m_Fog, ctx.serverRegistry)) {
-            m_FogCoverDirty = true;
-            m_ScatterBatchesDirty = true;
+        // Update fog for each team separately (units reveal only for their own team)
+        {
+            bool anyChanged = false;
+            for (auto& [teamId, fg] : m_TeamFogs) {
+                if (FogOfWarSystem::UpdateForTeam(fg, ctx.serverRegistry, teamId))
+                    anyChanged = true;
+            }
+            if (anyChanged) {
+                m_FogCoverDirty = true;
+                m_ScatterBatchesDirty = true;
+            }
         }
         TerritorySystem::Update(ctx.serverRegistry, dt);
 
@@ -2086,7 +2132,7 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         }
     }
 
-    // Throttled fog-cover + scatter-batch rebuild (host and client, at most 0.5 Hz)
+    // Throttled fog-cover rebuild (host and client)
     m_FogCoverTimer += dt;
     // Also rebuild when the camera moves, zooms, or rotates enough that the
     // previous rotated cull rect no longer safely covers the visible area.
@@ -2096,9 +2142,7 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         if (distSq > 15.f * 15.f) m_FogCoverDirty = true;
         if (std::abs(m_BuildOrthoSize - m_FogCoverLastOrtho) > 2.f)
             m_FogCoverDirty = true;
-        // Yaw rotation swings the whole rotated rect — must rebuild.
         float dy = std::abs(m_Camera->m_Yaw - m_FogCoverLastYaw);
-        // Normalise to [0, 180] so wrap-around at 360 doesn't false-trigger.
         while (dy > 360.f) dy -= 360.f;
         if (dy > 180.f) dy = 360.f - dy;
         if (dy > 5.f) m_FogCoverDirty = true;
@@ -2107,11 +2151,18 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         BuildFogCoverMesh(ctx);
         m_FogCoverTimer = 0.f;
     }
-    if (m_ScatterBatchesDirty && m_FogCoverTimer >= 0.5f) {
-        const FogGrid& f = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
-        BuildScatterBatches(ctx, f.IsInitialised() ? &f : nullptr);
-        m_ScatterBatchesDirty = false;
-        m_FogCoverTimer = 0.f;
+
+    // Separate throttle for scatter batch rebuilds (delayed, less frequent)
+    if (m_ScatterBatchesDirty) {
+        m_ScatterBatchTimer += dt;
+        if (m_ScatterBatchTimer >= SCATTER_BATCH_REBUILD_DELAY) {
+            const FogGrid& f = LocalFog(ctx);
+            BuildScatterBatches(ctx, f.IsInitialised() ? &f : nullptr);
+            m_ScatterBatchesDirty = false;
+            m_ScatterBatchTimer = 0.f;
+        }
+    } else {
+        m_ScatterBatchTimer = 0.f;
     }
 }
 
@@ -2189,9 +2240,39 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
                 }
             }
 
-            // Send initial territory + fog snapshots to the new client
+            // Ensure a fog grid exists for the new player's team
+            if (m_TeamFogs.find(newPlayerId) == m_TeamFogs.end()) {
+                FogGrid fg;
+                fg.Init(glm::vec3{-375.f, 0.f, -375.f},
+                        glm::vec3{ 375.f, 0.f,  375.f},
+                        /*cellSize=*/2.f);
+                m_TeamFogs[newPlayerId] = std::move(fg);
+            }
+
+            // Send initial territory + fog snapshots to the new client.
+            // Use a full snapshot (not delta) so the client initializes its fog state.
             SendTerritorySnapshot(ctx);
-            SendFogSnapshot(ctx);
+            {
+                auto& fg = m_TeamFogs[newPlayerId];
+                if (fg.IsInitialised()) {
+                    FogSnapshotPacket fpkt;
+                    fpkt.cellsX = static_cast<uint16_t>(fg.cellsX);
+                    fpkt.cellsZ = static_cast<uint16_t>(fg.cellsZ);
+                    size_t total = static_cast<size_t>(fg.cellsX) * fg.cellsZ;
+                    size_t words = (total + 63) / 64;
+                    if (words > 2200) words = 2200;
+                    for (size_t w = 0; w < words; ++w) {
+                        uint64_t bits = 0;
+                        for (size_t b = 0; b < 64; ++b) {
+                            size_t idx = w * 64 + b;
+                            if (idx < total && fg.revealed[idx])
+                                bits |= (uint64_t(1) << b);
+                        }
+                        fpkt.gridData[w] = bits;
+                    }
+                    ctx.network.SendToClient(peerId, fpkt);
+                }
+            }
 
             // Tell the new client their identity
             PlayerIdAssignPacket idPkt;
@@ -2314,7 +2395,6 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (!pkt) break;
         auto it = m_ClientNetMap.find(pkt->netId);
         if (it == m_ClientNetMap.end()) continue;
-        if (ctx.network.IsHosting()) continue;
 
         auto* t = ctx.clientRegistry.try_get<TransformComponent>(it->second);
         auto* m = ctx.clientRegistry.try_get<MovementComponent>(it->second);
@@ -2392,7 +2472,27 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (pkt) HandleTerritorySnapshot(*pkt);
     }
 
-    // Fog snapshot
+    // Fog delta (incremental updates)
+    {
+        while (true) {
+            auto pkt = ctx.network.ReceiveFromServer<FogDeltaPacket>(PacketType::FOG_DELTA);
+            if (!pkt) break;
+            if (!m_HasFogData) {
+                // Initialise client fog grid with extents matching the server
+                m_ClientFog.Init(
+                    glm::vec3{-375.f, 0.f, -375.f},
+                    glm::vec3{ 375.f, 0.f,  375.f},
+                    /*cellSize=*/2.f
+                );
+                m_HasFogData = true;
+            }
+            if (m_ClientFog.ApplyDelta(pkt->cells, pkt->count)) {
+                m_FogCoverDirty = true;
+                m_ScatterBatchesDirty = true;
+            }
+        }
+    }
+    // Full fog snapshot (initial sync or fallback)
     {
         auto pkt = ctx.network.ReceiveFromServer<FogSnapshotPacket>(PacketType::FOG_SNAPSHOT);
         if (pkt) {
@@ -2909,10 +3009,7 @@ glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
  */
 void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 {
-    // Collect building obstacles once per tick. Units treat every alive
-    // building as a circular obstacle of radius kBuildingRadius around its
-    // transform position; small enough to fit between adjacent placements,
-    // big enough that units don't visibly clip the building model.
+    // Collect building obstacles once per tick.
     constexpr float kBuildingRadius = 1.6f;
     constexpr float kUnitRadius     = 0.5f;
     constexpr float kAvoidDist      = kBuildingRadius + kUnitRadius;
@@ -2931,8 +3028,6 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         }
     }
 
-    // True if the candidate XZ position is free of buildings (with margin)
-    // AND on a walkable terrain tile reachable from @p currentTier.
     auto canStand = [&](glm::vec2 np, int currentTier) -> bool {
         for (const auto& ob : obstacles) {
             glm::vec2 d = ob.pos - np;
@@ -2948,28 +3043,91 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         auto& mv = view.get<MovementComponent>(e);
         auto& mo = view.get<MovementOrderComponent>(e);
 
-        if (!mo.active) { mv.velocity = {0.f, 0.f, 0.f}; continue; }
-
-        glm::vec3 toDest = mo.destination - tf.position;
-        toDest.y = 0.f;
-        float distToDest = glm::length(toDest);
-        if (distToDest < 1.f) {
-            mo.active   = false;
+        if (!mo.active) {
             mv.velocity = {0.f, 0.f, 0.f};
-            // Snap to terrain on arrival too.
-            tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
             continue;
         }
 
-        glm::vec3 dir       = toDest / distToDest;
-        glm::vec2 step      = glm::vec2(dir.x, dir.z) * (mv.speed * dt);
-        glm::vec2 curXZ     = glm::vec2(tf.position.x, tf.position.z);
+        // Ensure a PathComponent exists.
+        auto& path = ctx.serverRegistry.get_or_emplace<PathComponent>(e);
+
+        // When a new order arrives (destination changed), compute a fresh path.
+        if (path.waypoints.empty() || path.dirty) {
+            // Use the unit's team fog grid for pathfinding
+            auto& uc = view.get<UnitComponent>(e);
+            auto fit = m_TeamFogs.find(uc.teamId);
+            const FogGrid* fog = (fit != m_TeamFogs.end() && fit->second.IsInitialised())
+                                 ? &fit->second : nullptr;
+            path.waypoints = Pathfinding::FindPath(
+                m_World,
+                glm::vec2(tf.position.x, tf.position.z),
+                glm::vec2(mo.destination.x, mo.destination.z),
+                fog,
+                1);
+            path.current   = 0;
+            path.dirty     = false;
+            path.recalcTimer = 0.f;
+
+            if (path.waypoints.empty()) {
+                spdlog::debug("Pathfinding: no path for entity {}, stopping", (uint32_t)e);
+                mo.active   = false;
+                mv.velocity = {0.f, 0.f, 0.f};
+                continue;
+            }
+        }
+
+        // Periodic recalculation so the path adapts to newly discovered fog
+        // tiles or changes in building placement.
+        path.recalcTimer += dt;
+        if (path.recalcTimer >= PathComponent::RECALC_INTERVAL) {
+            auto& uc = view.get<UnitComponent>(e);
+            auto fit = m_TeamFogs.find(uc.teamId);
+            const FogGrid* fog = (fit != m_TeamFogs.end() && fit->second.IsInitialised())
+                                 ? &fit->second : nullptr;
+            path.waypoints = Pathfinding::FindPath(
+                m_World,
+                glm::vec2(tf.position.x, tf.position.z),
+                glm::vec2(mo.destination.x, mo.destination.z),
+                fog,
+                1);
+            path.current   = 0;
+            path.recalcTimer = 0.f;
+            if (path.waypoints.empty()) {
+                mo.active   = false;
+                mv.velocity = {0.f, 0.f, 0.f};
+                continue;
+            }
+        }
+
+        // Advance to the next waypoint if we're close enough.
+        glm::vec2 targetWp = path.waypoints[path.current];
+        glm::vec2 curXZ    = glm::vec2(tf.position.x, tf.position.z);
+        glm::vec2 toWp     = targetWp - curXZ;
+        float distToWp     = glm::length(toWp);
+
+        if (distToWp < 0.5f) {
+            ++path.current;
+            if (path.current >= (int)path.waypoints.size()) {
+                // All waypoints reached — order complete.
+                mo.active   = false;
+                mv.velocity = {0.f, 0.f, 0.f};
+                tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+                path.waypoints.clear();
+                continue;
+            }
+            targetWp = path.waypoints[path.current];
+            toWp     = targetWp - curXZ;
+            distToWp = glm::length(toWp);
+        }
+
+        glm::vec2 dir = distToWp > 0.001f ? toWp / distToWp : glm::vec2(0.f);
+        glm::vec2 step = dir * (mv.speed * dt);
 
         int curTx, curTz;
         m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
         int currentTier = (int)m_World.GetTile(curTx, curTz).tier;
 
-        // Try full step → slide along X → slide along Z. If all blocked, hold.
+        // Slide along X / Z if the full step is blocked.
         glm::vec2 chosen{0.f};
         if      (canStand(curXZ + step,                       currentTier)) chosen = step;
         else if (canStand(curXZ + glm::vec2(step.x, 0.f),     currentTier)) chosen = {step.x, 0.f};
@@ -2977,18 +3135,17 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         else                                                                chosen = {0.f, 0.f};
 
         if (chosen.x == 0.f && chosen.y == 0.f) {
-            // Fully blocked this tick — pause velocity but keep the order so
-            // the unit retries next tick (obstacles may move / be destroyed).
             mv.velocity = {0.f, 0.f, 0.f};
             continue;
         }
 
         tf.position.x += chosen.x;
         tf.position.z += chosen.y;
-        // Snap to the terrace surface so units don't float over tier changes.
-        tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
-        mv.velocity   = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
-        tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.z));
+        tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+        mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+
+        if (distToWp > 0.001f)
+            tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.y));
     }
 }
 
@@ -3418,27 +3575,45 @@ void GameScene::SendTerritorySnapshot(SceneContext& ctx)
 
 void GameScene::SendFogSnapshot(SceneContext& ctx)
 {
-    if (!ctx.network.IsHosting() || !m_Fog.IsInitialised()) return;
+    if (!ctx.network.IsHosting()) return;
 
-    FogSnapshotPacket pkt;
-    pkt.cellsX = static_cast<uint16_t>(m_Fog.cellsX);
-    pkt.cellsZ = static_cast<uint16_t>(m_Fog.cellsZ);
+    // Build a reverse-map: netId → peerId
+    std::unordered_map<uint32_t, uint32_t> netIdToPeer;
+    for (auto& [pid, nid] : m_PeerToNetId)
+        netIdToPeer[nid] = pid;
 
-    size_t totalCells = static_cast<size_t>(m_Fog.cellsX) * static_cast<size_t>(m_Fog.cellsZ);
-    size_t words = (totalCells + 63) / 64;
-    if (words > 2200) words = 2200;
+    // Send per-team fog deltas to each connected player
+    for (auto& [pid, nid] : m_PeerToNetId) {
+        uint32_t peerId = pid;
+        uint32_t playerNetId = nid;
 
-    for (size_t w = 0; w < words; ++w) {
-        uint64_t bits = 0;
-        for (size_t b = 0; b < 64; ++b) {
-            size_t idx = w * 64 + b;
-            if (idx < totalCells && m_Fog.revealed[idx])
-                bits |= (uint64_t(1) << b);
+        auto eit = m_ServerNetMap.find(playerNetId);
+        if (eit == m_ServerNetMap.end()) continue;
+        auto* pc = ctx.serverRegistry.try_get<PlayerComponent>(eit->second);
+        if (!pc) continue;
+
+        uint32_t teamId = pc->playerId; // FFA: playerId == teamId
+
+        auto fit = m_TeamFogs.find(teamId);
+        if (fit == m_TeamFogs.end() || !fit->second.IsInitialised()) continue;
+
+        // Drain dirty cells into a delta packet
+        std::vector<uint32_t> dirtyCells;
+        fit->second.ConsumeDirty(dirtyCells);
+        if (dirtyCells.empty()) continue;
+
+        // Send in batches of 512 cells
+        size_t sent = 0;
+        while (sent < dirtyCells.size()) {
+            FogDeltaPacket dpkt;
+            size_t chunk = std::min<size_t>(512, dirtyCells.size() - sent);
+            dpkt.count = static_cast<uint16_t>(chunk);
+            for (size_t i = 0; i < chunk; ++i)
+                dpkt.cells[i] = dirtyCells[sent + i];
+            ctx.network.SendToClient(peerId, dpkt);
+            sent += chunk;
         }
-        pkt.gridData[w] = bits;
     }
-
-    ctx.network.BroadcastToAll(pkt);
 }
 
 // ---------------------------------------------------------------------------

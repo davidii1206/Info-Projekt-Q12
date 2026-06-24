@@ -15,6 +15,7 @@
 #include "ResourceHUD.h"
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
+#include <unordered_set>
 #include "ScatterSystem.h"
 #include "HUDTextureRegistry.h"
 #include "../Core/WorldManager.h"
@@ -220,6 +221,9 @@ private:
     /// Called once in OnEnter() after scatter population; results are reused every frame.
     void BuildScatterBatches(SceneContext& ctx, const FogGrid* fog = nullptr);
 
+    /// Returns the fog grid for the local player (host: playerId's grid, client: m_ClientFog).
+    const FogGrid& LocalFog(const SceneContext& ctx) const;
+
     /// Builds or rebuilds the flat black fog-cover mesh over unrevealed cells.
     void BuildFogCoverMesh(SceneContext& ctx);
 
@@ -236,8 +240,8 @@ private:
     /// Server-side resource manager: owns spawn points, depletion, respawn.
     ResourceManager m_ResourceManager;
 
-    /// Fog of War grid – tracks which map cells have been explored.
-    FogGrid m_Fog;
+    /// Per-team fog grids on the server. Keyed by teamId (= playerId in FFA).
+    std::unordered_map<uint32_t, FogGrid> m_TeamFogs;
 
     /// Procedural world data (heightmap + biomes) used to drive decorative
     /// prop scattering. Generated locally on every peer from the shared seed.
@@ -316,9 +320,9 @@ private:
     float m_TerritorySnapAccum = 0.f;
     static constexpr float TERRITORY_SNAP_RATE = 1.f / 2.f; ///< Territory snapshot rate (2 Hz).
 
-    /// Accumulator for fog snapshot broadcasting (2 Hz).
+    /// Accumulator for fog delta broadcasting (now used for FOG_DELTA packets).
     float m_FogSnapAccum = 0.f;
-    static constexpr float FOG_SNAP_RATE = 1.f / 2.f; ///< Fog snapshot rate (2 Hz).
+    static constexpr float FOG_SNAP_RATE = 1.f / 4.f; ///< Fog delta rate (4 Hz).
 
     // --- Client-side synced state ---
     /// Client-side fog grid copy (updated from server snapshot).
@@ -413,6 +417,9 @@ private:
     float        m_FogCoverLastYaw = std::numeric_limits<float>::infinity();
 
     bool         m_ScatterBatchesDirty = false;
+    /// Separate timer for scatter batch rebuilds (avoids sharing with fog cover).
+    float        m_ScatterBatchTimer = 0.f;
+    static constexpr float SCATTER_BATCH_REBUILD_DELAY = 2.f; ///< Wait 2s after fog change before rebuilding.
 
     // --- Map Texture (top-down view of the world from generator data) ---
     std::unique_ptr<class Texture> m_MapTexture;
