@@ -250,6 +250,19 @@ struct FogCoverComponent {};
 struct NoFogCullComponent {};
 
 /**
+ * @struct TerrainChunkComponent
+ * @brief Tags a per-tile-chunk terrain entity. Stores chunk coordinates for
+ *        frustum and fog-of-war culling in the render loop.
+ */
+struct TerrainChunkComponent {
+    int chunkX = 0; ///< Chunk index along the X axis.
+    int chunkZ = 0; ///< Chunk index along the Z axis.
+
+    TerrainChunkComponent() = default;
+    TerrainChunkComponent(int x, int z) : chunkX(x), chunkZ(z) {}
+};
+
+/**
  * @struct ConstructionComponent
  * @brief Building under construction — slides up from below ground over time.
  */

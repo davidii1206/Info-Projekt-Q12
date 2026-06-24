@@ -96,6 +96,53 @@ bool IsTreeModelPath(const std::string& path) {
            path.find("Bamboo")  != std::string::npos;
 }
 
+// ---------------------------------------------------------------------------
+// Frustum culling helpers
+// ---------------------------------------------------------------------------
+
+/// One frustum plane in Hessian normal form (normal · point + distance = 0).
+struct FrustumPlane {
+    glm::vec3 normal{0.f};
+    float     distance = 0.f;
+};
+
+/// Extracts 6 frustum planes from a view-projection matrix (Gribb-Hartmann).
+/// Planes order: Left, Right, Bottom, Top, Near, Far.
+/// Normals point inward (inside the frustum).
+static void ExtractFrustumPlanes(const glm::mat4& vp, FrustumPlane* outPlanes) {
+    for (int i = 0; i < 6; ++i) {
+        int r = i >> 1;           // 0,0,1,1,2,2
+        int s = (i & 1) ? 1 : -1; // -1,+1,-1,+1,-1,+1
+        outPlanes[i].normal = glm::vec3(
+            vp[0][3] + (float)s * vp[0][r],
+            vp[1][3] + (float)s * vp[1][r],
+            vp[2][3] + (float)s * vp[2][r]
+        );
+        outPlanes[i].distance = vp[3][3] + (float)s * vp[3][r];
+        float len = glm::length(outPlanes[i].normal);
+        if (len > 1e-8f) {
+            outPlanes[i].normal   /= len;
+            outPlanes[i].distance /= len;
+        }
+    }
+}
+
+/// Tests an AABB against the 6 frustum planes (p-vertex test).
+/// Returns false if the box is completely outside (culled).
+static bool IsAABBVisible(const glm::vec3& aabbMin, const glm::vec3& aabbMax,
+                          const FrustumPlane* planes) {
+    for (int i = 0; i < 6; ++i) {
+        const auto& p = planes[i];
+        glm::vec3 pos = aabbMin;
+        if (p.normal.x >= 0.f) pos.x = aabbMax.x;
+        if (p.normal.y >= 0.f) pos.y = aabbMax.y;
+        if (p.normal.z >= 0.f) pos.z = aabbMax.z;
+        if (glm::dot(pos, p.normal) + p.distance < 0.f)
+            return false;
+    }
+    return true;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -179,174 +226,25 @@ const FogGrid& GameScene::LocalFog(const SceneContext& ctx) const
     return m_ClientFog;
 }
 
-void GameScene::BuildFogCoverMesh(SceneContext& ctx) {
-    const FogGrid& fog = LocalFog(ctx);
-    if (!fog.IsInitialised()) return;
+bool GameScene::IsChunkRevealed(const FogGrid& fog, int chunkX, int chunkZ) const
+{
+    int txStart = chunkX * m_ChunkSize;
+    int tzStart = chunkZ * m_ChunkSize;
+    int txEnd = std::min(txStart + m_ChunkSize, m_World.GetGridSize());
+    int tzEnd = std::min(tzStart + m_ChunkSize, m_World.GetGridSize());
 
-    std::vector<ModelVertex> vertices;
-    std::vector<uint32_t> indices;
-
-    // ------------------------------------------------------------------
-    // View-aligned cull rectangle on the ground.
-    //
-    // Full grid is 375×375 cells worst case; this drops it to the few
-    // hundred actually visible. Building mode uses a yaw-rotated rect that
-    // matches the tilted ortho's visible footprint (extends ~orthoSize /
-    // sin(pitch) ahead of the camera). Commander / fallback uses a flat
-    // 180u radius centred on the camera since the near-straight-down view
-    // makes rotation almost irrelevant. We iterate the AABB of the rect
-    // and per-cell test rotated-rect inclusion.
-    // ------------------------------------------------------------------
-    glm::vec3 cameraPos = m_Camera ? m_Camera->m_Position : glm::vec3(0.f);
-
-    // Defaults = Commander / fallback (axis-aligned around camera).
-    glm::vec2 rectCenter(cameraPos.x, cameraPos.z);
-    glm::vec2 rightDir   (1.f, 0.f);
-    glm::vec2 forwardDir (0.f, 1.f);
-    float halfR = 180.f;
-    float halfF = 180.f;
-
-    if (m_CameraMode == CameraMode::Building && m_Camera) {
-        int winW = 1, winH = 1;
-        if (ctx.renderer && ctx.renderer->GetWindow())
-            SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
-        float aspect = (winH > 0) ? (float)winW / (float)winH : 1.f;
-
-        // Horizontal projections of camera axes. Right is 90° from forward
-        // in XZ; sign mismatch is harmless since the rect is symmetric.
-        glm::vec2 fwd(m_Camera->m_Front.x, m_Camera->m_Front.z);
-        float fwdLen = glm::length(fwd);
-        if (fwdLen > 1e-4f) fwd /= fwdLen;
-        forwardDir = fwd;
-        rightDir   = glm::vec2(fwd.y, -fwd.x);
-
-        // Bias cameraY down by a typical ground height so the cull centre
-        // sits where the camera actually looks, not where it would on a Y=0
-        // plane (terrain sits on tiers, avg ~5u, max ~14u).
-        constexpr float kTypicalGroundY = 6.f;
-        float pitchRad   = glm::radians(std::abs(m_Camera->m_Pitch));
-        float effectiveY = std::max(5.f, cameraPos.y - kTypicalGroundY);
-        float fwdOffset  = (std::tan(pitchRad) > 1e-3f)
-                           ? effectiveY / std::tan(pitchRad) : 0.f;
-        rectCenter += forwardDir * glm::clamp(fwdOffset, 0.f, 200.f);
-
-        // 1.4× margin + 30u absolute soaks up terrain-height variability
-        // and rebuild-cadence jitter so edges never leak.
-        constexpr float kMargin = 1.4f;
-        halfR = m_BuildOrthoSize * aspect * kMargin + 30.f;
-        halfF = (m_BuildOrthoSize / std::max(0.1f, std::sin(pitchRad))) * kMargin + 30.f;
-    }
-
-    // AABB of the rotated rect on the ground.
-    float aabbHalfX = std::abs(rightDir.x) * halfR + std::abs(forwardDir.x) * halfF;
-    float aabbHalfZ = std::abs(rightDir.y) * halfR + std::abs(forwardDir.y) * halfF;
-
-    int cxMin, czMin, cxMax, czMax;
-    fog.WorldToCell(glm::vec3(rectCenter.x - aabbHalfX, 0.f, rectCenter.y - aabbHalfZ), cxMin, czMin);
-    fog.WorldToCell(glm::vec3(rectCenter.x + aabbHalfX, 0.f, rectCenter.y + aabbHalfZ), cxMax, czMax);
-
-    // Per-cell rotated-rect inclusion threshold; +cellSize so cells whose
-    // *edges* clip the rect are still emitted (otherwise their interior is
-    // visible but the cell is culled).
-    const float incR = halfR + fog.cellSize;
-    const float incF = halfF + fog.cellSize;
-
-    m_FogCoverLastPos   = cameraPos;
-    m_FogCoverLastOrtho = m_BuildOrthoSize;
-    m_FogCoverLastYaw   = m_Camera ? m_Camera->m_Yaw : 0.f;
-
-    // Vertical fog floor — covers cliff faces and ramps below the cell's
-    // top quad. Pulled well below the lowest terrain tier (water is at
-    // tier 0..1 in world units 0..1.2) so skirts always reach past the
-    // ground, even when the camera is below world Y=0.
-    constexpr float kFogFloorY = -50.0f;
-    // Lift the top quad clearly above any plateau micro-jitter (±0.12u in
-    // TerrainMeshBuilder) so the fog wins the depth test without z-fighting.
-    constexpr float kFogTopLift = 0.35f;
-
-    // Global ceiling — y for every fog top quad. Per-cell neighbour-max
-    // sampling missed isolated tall peaks more than ~2 tiles from the
-    // fog cell, leaving the peak poking through. Using the world's
-    // highest possible tier as a flat ceiling guarantees coverage; the
-    // skirts handle vertical sides below.
-    const float fogTopY = m_World.TierToWorldHeight(m_World.GetConfig().numTiers - 1) + kFogTopLift;
-
-    // Helper that pushes one quad with a given normal.
-    auto pushQuad = [&](const glm::vec3& v0, const glm::vec3& v1,
-                        const glm::vec3& v2, const glm::vec3& v3,
-                        const glm::vec3& n) {
-        uint32_t base = (uint32_t)vertices.size();
-        vertices.push_back({v0, n, {0,0}, {0,0,0,1}});
-        vertices.push_back({v1, n, {1,0}, {0,0,0,1}});
-        vertices.push_back({v2, n, {1,1}, {0,0,0,1}});
-        vertices.push_back({v3, n, {0,1}, {0,0,0,1}});
-        indices.push_back(base); indices.push_back(base + 1); indices.push_back(base + 2);
-        indices.push_back(base); indices.push_back(base + 2); indices.push_back(base + 3);
-    };
-
-    for (int cz = czMin; cz <= czMax; ++cz) {
-        for (int cx = cxMin; cx <= cxMax; ++cx) {
-            if (fog.IsRevealed(cx, cz)) continue;
-
-            float wx0 = cx * fog.cellSize + fog.worldMin.x;
-            float wz0 = cz * fog.cellSize + fog.worldMin.z;
-            float wx1 = wx0 + fog.cellSize;
-            float wz1 = wz0 + fog.cellSize;
-            float wxCenter = (wx0 + wx1) * 0.5f;
-            float wzCenter = (wz0 + wz1) * 0.5f;
-
-            // Rotated-rect inclusion test on the cell centre.
-            glm::vec2 delta(wxCenter - rectCenter.x, wzCenter - rectCenter.y);
-            float u = delta.x * rightDir.x   + delta.y * rightDir.y;
-            float v = delta.x * forwardDir.x + delta.y * forwardDir.y;
-            if (std::abs(u) > incR || std::abs(v) > incF) continue;
-
-            // Top quad at the global fogTopY ceiling + 4 side skirts down to
-            // kFogFloorY. Top covers anything below (no peak pokes through),
-            // skirts cover all vertical cliff faces between adjacent cells.
-            const float y = fogTopY;
-            // Top
-            pushQuad({wx0, y, wz0}, {wx1, y, wz0},
-                     {wx1, y, wz1}, {wx0, y, wz1}, {0, 1, 0});
-            // West (-X)
-            pushQuad({wx0, y,          wz1}, {wx0, y,          wz0},
-                     {wx0, kFogFloorY, wz0}, {wx0, kFogFloorY, wz1}, {-1, 0, 0});
-            // East (+X)
-            pushQuad({wx1, y,          wz0}, {wx1, y,          wz1},
-                     {wx1, kFogFloorY, wz1}, {wx1, kFogFloorY, wz0}, {1, 0, 0});
-            // North (-Z)
-            pushQuad({wx0, y,          wz0}, {wx1, y,          wz0},
-                     {wx1, kFogFloorY, wz0}, {wx0, kFogFloorY, wz0}, {0, 0, -1});
-            // South (+Z)
-            pushQuad({wx1, y,          wz1}, {wx0, y,          wz1},
-                     {wx0, kFogFloorY, wz1}, {wx1, kFogFloorY, wz1}, {0, 0, 1});
+    // Check a sparse grid of sample points across the chunk.
+    // Step by 4 tiles to keep the check fast; this is conservative
+    // (may over-cull at the fog edge by one row of tiles).
+    constexpr int kStep = 4;
+    for (int tz = tzStart; tz < tzEnd; tz += kStep) {
+        for (int tx = txStart; tx < txEnd; tx += kStep) {
+            glm::vec2 worldPos = m_World.TileToWorld(tx, tz);
+            if (fog.IsWorldPosRevealed(glm::vec3(worldPos.x, 0.f, worldPos.y)))
+                return true;
         }
     }
-
-    if (vertices.empty()) {
-        if (m_FogCoverEntity != entt::null && ctx.clientRegistry.valid(m_FogCoverEntity)) {
-            ctx.clientRegistry.destroy(m_FogCoverEntity);
-            m_FogCoverEntity = entt::null;
-        }
-        m_FogCoverDirty = false;
-        return;
-    }
-
-    std::string key = "procedural://fogcover/" + std::to_string(m_FogCoverVersion++);
-    Material fogMat{"FogCover"};
-    fogMat.baseColorFactor = {0, 0, 0, 1};
-    std::vector<MeshSection> sections = {{0, (uint32_t)indices.size(), 0}};
-    std::vector<Material> materials = {fogMat};
-
-    AssetManager::RegisterProceduralScene(key, vertices, indices, sections, materials);
-
-    if (m_FogCoverEntity == entt::null || !ctx.clientRegistry.valid(m_FogCoverEntity)) {
-        m_FogCoverEntity = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(m_FogCoverEntity);
-        ctx.clientRegistry.emplace<FogCoverComponent>(m_FogCoverEntity);
-    }
-    ctx.clientRegistry.emplace_or_replace<ModelComponent>(m_FogCoverEntity, key);
-    m_FogCoverDirty = false;
+    return false;
 }
 
 void GameScene::GenerateMapTexture(SceneContext& ctx) {
@@ -489,40 +387,13 @@ void GameScene::OnEnter(SceneContext& ctx) {
     {
         WorldGenConfig genCfg;
         genCfg.seed        = m_WorldSeed;
-        genCfg.worldExtent = 375.f; // 750×750 tile map (1.5× the original 500×500)
+        genCfg.worldExtent = 375.f;
         genCfg.numTiers       = 12;
-        genCfg.tierHeight     = 1.2f;   // 1.2 m per tier → 13.2 m max range
-        genCfg.tierNoiseScale = 0.010f; // low freq → broad hills, large flat areas
+        genCfg.tierHeight     = 1.2f;
+        genCfg.tierNoiseScale = 0.010f;
         m_World.Generate(genCfg);
 
-        terrainMesh = TerrainMeshBuilder::Build(m_World);
-
-        // --- World-space UV projection with domain warp ---------------------------
-        // Horizontal faces get UVs from world XZ. A low-frequency Perlin warp
-        // displaces each UV point so the texture doesn't repeat in a visible grid
-        // — adjacent regions sample different parts of the texture non-uniformly.
-        constexpr float kTerrainUVScale = 10.0f;  // base tile size in world units
-        constexpr float kWarpFreq  = 0.011f;      // warp feature size ~90 world units
-        constexpr float kWarpAmp   = 0.65f;       // ±6.5 world-unit UV displacement
-        siv::PerlinNoise uvWarpNoise(m_WorldSeed + 31u);
-        for (auto& v : terrainMesh.vertices) {
-            if (v.normal.y > 0.5f) {
-                // Two independent warp channels so X and Z shift independently
-                float wx = (float)uvWarpNoise.noise2D(
-                    v.position.x * kWarpFreq, v.position.z * kWarpFreq);
-                float wz = (float)uvWarpNoise.noise2D(
-                    v.position.x * kWarpFreq + 47.3, v.position.z * kWarpFreq + 47.3);
-                v.texCoords = {
-                    v.position.x / kTerrainUVScale + wx * kWarpAmp,
-                    v.position.z / kTerrainUVScale + wz * kWarpAmp
-                };
-            }
-        }
-
-        // --- Procedural ground detail texture ---------------------------------
-        // Multi-octave Perlin noise baked into a tileable 128x128 RGBA texture.
-        // Values ∈ [0.72, 1.08] → neutral overlay that multiplies biome vertex
-        // colour without shifting the average brightness much (~0.9 mean).
+        // --- Procedural ground detail texture (shared by all chunk scenes) -----
         auto terrainDetailTex = [&]() {
             constexpr int kSz = 128;
             siv::PerlinNoise pn(m_WorldSeed + 77u);
@@ -531,15 +402,10 @@ void GameScene::OnEnter(SceneContext& ctx) {
                 for (int px = 0; px < kSz; ++px) {
                     double u = px / (double)kSz;
                     double v = py / (double)kSz;
-                    // Medium-frequency grain (patch clusters) + fine detail layer.
-                    // Together they produce a patchy, blade-like variation that reads
-                    // as grass when tinted by the green vertex colours.
                     float n1 = (float)pn.octave2D_01(u * 9.0,        v * 9.0,        5, 0.55);
                     float n2 = (float)pn.octave2D_01(u * 26.0 + 5.3, v * 26.0 + 5.3, 2, 0.50);
-                    // Wide contrast range [0.68, 1.24] for visible light/dark patches
                     float b  = 0.68f + n1 * 0.50f + n2 * 0.06f;
                     if (b > 1.f) b = 1.f;
-                    // Slightly green-neutral tint — vertex colour provides the actual hue
                     float r  = b * 0.90f; if (r > 1.f) r = 1.f;
                     float g  = b * 1.05f; if (g > 1.f) g = 1.f;
                     float bl = b * 0.80f;
@@ -557,22 +423,57 @@ void GameScene::OnEnter(SceneContext& ctx) {
         Material terrainMat{"Terrain"};
         terrainMat.baseColorTexture = terrainDetailTex;
 
-        std::vector<MeshSection> sections = {
-            { 0, (uint32_t)terrainMesh.indices.size(), 0 }
-        };
-        std::vector<Material> materials = { terrainMat };
-        AssetManager::RegisterProceduralScene("procedural://terrain",
-                                               terrainMesh.vertices,
-                                               terrainMesh.indices,
-                                               sections, materials);
+        // --- Per-chunk terrain meshes for rendering with fog/frustum culling ---
+        constexpr float kTerrainUVScale = 10.0f;
+        constexpr float kWarpFreq  = 0.011f;
+        constexpr float kWarpAmp   = 0.65f;
+        siv::PerlinNoise uvWarpNoise(m_WorldSeed + 31u);
+        TerrainMeshBuilder::ChunkBuildResult chunkRes = TerrainMeshBuilder::BuildChunks(m_World);
+        m_ChunkSize     = chunkRes.chunkSize;
+        m_ChunksPerAxis = chunkRes.chunksPerAxis;
 
-        auto terrainEntity = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(terrainEntity);
-        ctx.clientRegistry.emplace<ModelComponent>(terrainEntity, "procedural://terrain");
-        ctx.clientRegistry.emplace<NoFogCullComponent>(terrainEntity);
+        spdlog::info("GameScene: generating {} terrain chunks...", chunkRes.chunks.size());
+        for (int cz = 0; cz < chunkRes.chunksPerAxis; ++cz) {
+            for (int cx = 0; cx < chunkRes.chunksPerAxis; ++cx) {
+                int idx = cz * chunkRes.chunksPerAxis + cx;
+                TerrainMeshBuilder::TerrainMeshData& chunk = chunkRes.chunks[idx];
 
-        spdlog::info("GameScene: built terrain mesh ({} vertices, {} indices)",
-                      terrainMesh.vertices.size(), terrainMesh.indices.size());
+                // World-space UV projection with domain warp
+                for (auto& v : chunk.vertices) {
+                    if (v.normal.y > 0.5f) {
+                        float wx = (float)uvWarpNoise.noise2D(
+                            v.position.x * kWarpFreq, v.position.z * kWarpFreq);
+                        float wz = (float)uvWarpNoise.noise2D(
+                            v.position.x * kWarpFreq + 47.3, v.position.z * kWarpFreq + 47.3);
+                        v.texCoords = {
+                            v.position.x / kTerrainUVScale + wx * kWarpAmp,
+                            v.position.z / kTerrainUVScale + wz * kWarpAmp
+                        };
+                    }
+                }
+
+                std::string key = "procedural://terrain/chunk_" + std::to_string(cx) + "_" + std::to_string(cz);
+                std::vector<MeshSection> sections = {
+                    { 0, (uint32_t)chunk.indices.size(), 0 }
+                };
+                std::vector<Material> materials = { terrainMat };
+                AssetManager::RegisterProceduralScene(key, chunk.vertices, chunk.indices,
+                                                       sections, materials);
+
+                auto chunkEntity = ctx.clientRegistry.create();
+                ctx.clientRegistry.emplace<TransformComponent>(chunkEntity);
+                ctx.clientRegistry.emplace<ModelComponent>(chunkEntity, key);
+                ctx.clientRegistry.emplace<NoFogCullComponent>(chunkEntity);
+                ctx.clientRegistry.emplace<TerrainChunkComponent>(chunkEntity, cx, cz);
+            }
+        }
+
+        // Also build the full merged mesh for physics collision
+        terrainMesh = TerrainMeshBuilder::Build(m_World);
+
+        spdlog::info("GameScene: built {} terrain chunks ({}x{}) total {} tiles",
+                      chunkRes.chunks.size(), chunkRes.chunksPerAxis, chunkRes.chunksPerAxis,
+                      m_World.GetGridSize());
     }
 
     if (ctx.network.IsHosting()) {
@@ -609,7 +510,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
                 FogGrid fg;
                 fg.Init(glm::vec3{-375.f, 0.f, -375.f},
                         glm::vec3{ 375.f, 0.f,  375.f},
-                        /*cellSize=*/2.f);
+                        /*cellSize=*/1.f);
                 m_TeamFogs[teamId] = std::move(fg);
             }
         }
@@ -675,9 +576,6 @@ void GameScene::OnEnter(SceneContext& ctx) {
             }
         }
 
-        // Build the fog-cover mesh from the initial fog state
-        BuildFogCoverMesh(ctx);
-
         // Position camera above local player's Main Base
         {
             auto bView = ctx.serverRegistry.view<BuildingComponent, TransformComponent>();
@@ -739,9 +637,16 @@ void GameScene::OnEnter(SceneContext& ctx) {
     // Build GPU instance buffers for all scatter entities. Done once here;
     // every frame the render pass binds these SSBOs instead of issuing
     // one draw call per entity.
-    // Build scatter batches without fog filter initially (fog cover handles culling).
-    // Scatter batches will be rebuilt once the first fog data arrives.
-    BuildScatterBatches(ctx, nullptr);
+    // Use fog filter on the host (fog grids are already initialised);
+    // clients receive fog later via network and will rebuild then.
+    {
+        const FogGrid* fogPtr = nullptr;
+        if (ctx.network.IsHosting()) {
+            const FogGrid& f = LocalFog(ctx);
+            if (f.IsInitialised()) fogPtr = &f;
+        }
+        BuildScatterBatches(ctx, fogPtr);
+    }
 
     // ------------------------------------------------------------------
     // Structure placement (faction bases + neutral resource nodes).
@@ -853,14 +758,9 @@ void GameScene::OnExit(SceneContext& ctx) {
     // Reset all team fog grids for next session
     for (auto& [tid, fg] : m_TeamFogs) fg.Reset();
 
-    // Reset fog cover state
-    m_FogCoverEntity  = entt::null;
-    m_FogCoverVersion = 0;
-    m_FogCoverDirty   = true;
-    m_FogCoverTimer   = 0.f;
-
     // Mark scatter batches for rebuild on next session
     m_ScatterBatchesDirty = true;
+    m_FogTextureDirty = true;
 
     // Release map texture
     m_MapTexture.reset();
@@ -909,6 +809,42 @@ void GameScene::OnExit(SceneContext& ctx) {
  * @param ctx The scene context.
  * @param renderer Pointer to the renderer.
  */
+// Push constant struct shared by model and scatter pipelines.
+// Must match `layout(set = 3, binding = 0)` in model.frag.
+struct alignas(16) FragPC {
+    uint32_t matIdx;
+    uint32_t objID;
+    float alpha;
+    float blocksView;
+    float fogEnabled;
+    float _pad0, _pad1, _pad2;
+    glm::vec4 ghostPos;
+    glm::vec4 tintColor;
+};
+static_assert(sizeof(FragPC) == 64, "FragPC must be 64 bytes for std140 layout");
+
+void GameScene::UpdateFogTexture(const SceneContext& ctx, const FogGrid& fog) {
+    if (!ctx.renderer) return;
+    int w = fog.cellsX;
+    int h = fog.cellsZ;
+    if (w <= 0 || h <= 0) return;
+    std::vector<uint8_t> pixels(w * h * 4, 0);
+    for (int z = 0; z < h; ++z) {
+        for (int x = 0; x < w; ++x) {
+            bool revealed = fog.IsRevealed(x, z);
+            int idx = (z * w + x) * 4;
+            uint8_t v = revealed ? 255 : 0;
+            pixels[idx + 0] = v;
+            pixels[idx + 1] = v;
+            pixels[idx + 2] = v;
+            pixels[idx + 3] = 255;
+        }
+    }
+    m_FogTexture = std::make_shared<Texture>(ctx.renderer->GetDevice(), pixels.data(),
+                                              (uint32_t)w, (uint32_t)h,
+                                              TextureFilter::Nearest);
+}
+
 void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     if (!m_Camera) return;
     // ------------------------------------------------------------------
@@ -916,7 +852,7 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     // ------------------------------------------------------------------
     if (!m_ModelPipeline) {
         ShaderResourceLayout vertLayout = {0, 0, 2, 1}; // 2 SSBOs: GlobalUniforms + InstanceTransforms
-        ShaderResourceLayout fragLayout = {2, 0, 2, 1};
+        ShaderResourceLayout fragLayout = {3, 0, 2, 1}; // 3 samplers: baseColor(0), shadowMap(1), fogTexture(2); 2 storage buffers at 3,4
 
         m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert", ShaderStage::Vertex, vertLayout);
         m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag", ShaderStage::Fragment, fragLayout);
@@ -1128,6 +1064,12 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         renderCtx.BindPipeline(m_ShadowPipeline);
         renderCtx.PushVertexConstants(1, &sunVP, sizeof(glm::mat4));
 
+        // Frustum planes for sun shadow (cull chunks outside the shadow map)
+        FrustumPlane sunFrustum[6];
+        ExtractFrustumPlanes(sunVP, sunFrustum);
+        float we = m_World.GetConfig().worldExtent;
+        int cpa = m_ChunksPerAxis;
+
         // --- Non-scatter entities: one draw per mesh instance (unchanged behavior) ---
         auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>(entt::exclude<ScatterPropComponent>);
         for (auto entity : view) {
@@ -1146,6 +1088,20 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                         hiddenByFog = true;
                 }
                 if (hiddenByFog) continue;
+            }
+
+            // Per-chunk terrain culling: frustum + fog
+            if (auto* tcc = ctx.clientRegistry.try_get<TerrainChunkComponent>(entity)) {
+                // Frustum cull against sun VP
+                glm::vec3 min(-we + (float)tcc->chunkX * m_ChunkSize, -5.f, -we + (float)tcc->chunkZ * m_ChunkSize);
+                glm::vec3 max(-we + (float)(tcc->chunkX + 1) * m_ChunkSize, 20.f, -we + (float)(tcc->chunkZ + 1) * m_ChunkSize);
+                if (!IsAABBVisible(min, max, sunFrustum)) continue;
+                // Fog cull
+                if (m_HasFogData || ctx.network.IsHosting()) {
+                    const FogGrid& fog = LocalFog(ctx);
+                    if (fog.IsInitialised() && !IsChunkRevealed(fog, tcc->chunkX, tcc->chunkZ))
+                        continue;
+                }
             }
 
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
@@ -1199,6 +1155,16 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     Framebuffer* gbuffer = renderer->GetGBuffer();
     if (!gbuffer) return;
 
+    // Update the per-tile fog texture if the grid has changed.
+    // Must happen OUTSIDE any AddPass lambda — GPU texture upload is illegal during command recording.
+    if (m_FogTextureDirty) {
+        m_FogTextureDirty = false;
+        if (m_HasFogData || ctx.network.IsHosting()) {
+            const FogGrid& f = LocalFog(ctx);
+            if (f.IsInitialised()) UpdateFogTexture(ctx, f);
+        }
+    }
+
     renderer->AddPass("GameRenderPass", gbuffer, [this, ctx, renderer](RenderContext& renderCtx) {
         if (!m_IdentityInstanceBuffer) return;
         renderCtx.BindPipeline(m_ModelPipeline);
@@ -1207,6 +1173,22 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
         if (m_ShadowMap && m_ShadowMap->GetDepthTarget())
             renderCtx.BindFragmentTexture(1, m_ShadowMap->GetDepthTarget());
+
+        // Bind per-tile fog of war texture (sampled in model.frag when fogEnabled > 0)
+        if (m_FogTexture)
+            renderCtx.BindFragmentTexture(2, m_FogTexture.get());
+
+        // Frustum planes for main camera (cull chunks outside the viewport)
+        FrustumPlane camFrustum[6];
+        if (m_Camera) {
+            int winW = 1, winH = 1;
+            if (ctx.renderer && ctx.renderer->GetWindow())
+                SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
+            float aspect = (winH > 0) ? (float)winW / (float)winH : 1.f;
+            glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
+            ExtractFrustumPlanes(vp, camFrustum);
+        }
+        float we = m_World.GetConfig().worldExtent;
 
         // --- Non-scatter entities: per-entity draw (player, terrain, cubes, …) ---
         auto view = ctx.clientRegistry.view<TransformComponent, ModelComponent>(entt::exclude<ScatterPropComponent>);
@@ -1226,6 +1208,23 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                         hiddenByFog = true;
                 }
                 if (hiddenByFog) continue;
+            }
+
+            // Per-chunk terrain culling: frustum + fog
+            bool isTerrainChunk = false;
+            if (auto* tcc = ctx.clientRegistry.try_get<TerrainChunkComponent>(entity)) {
+                isTerrainChunk = true;
+                // Frustum cull against main camera
+                glm::vec3 min(-we + (float)tcc->chunkX * m_ChunkSize, -5.f, -we + (float)tcc->chunkZ * m_ChunkSize);
+                glm::vec3 max(-we + (float)(tcc->chunkX + 1) * m_ChunkSize, 20.f, -we + (float)(tcc->chunkZ + 1) * m_ChunkSize);
+                if (!IsAABBVisible(min, max, camFrustum)) continue;
+                // Fog cull (coarse pre-cull: skip if no tile in this chunk is revealed;
+                // per-pixel fog is handled by the GPU shader for partially-revealed chunks)
+                if (m_HasFogData || ctx.network.IsHosting()) {
+                    const FogGrid& fog = LocalFog(ctx);
+                    if (fog.IsInitialised() && !IsChunkRevealed(fog, tcc->chunkX, tcc->chunkZ))
+                        continue;
+                }
             }
 
             renderCtx.BindVertexBuffer(sceneData.model->GetVertexBuffer());
@@ -1248,11 +1247,13 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
                 for (uint32_t i = 0; i < instance.sectionCount; ++i) {
                     const auto& section = allSections[instance.firstSection + i];
-                    struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; float blocksView; glm::vec4 ghostPos; glm::vec4 tintColor; } fpc;
+                    FragPC fpc;
                     fpc.matIdx = (uint32_t)section.materialIndex;
                     fpc.objID  = 0;
                     fpc.alpha  = 1.0f;
                     fpc.blocksView = 0.f;
+                    fpc.fogEnabled = isTerrainChunk ? 1.f : 0.f;
+                    fpc._pad0 = fpc._pad1 = fpc._pad2 = 0.f;
                     fpc.ghostPos   = glm::vec4(0.f);
                     fpc.tintColor  = glm::vec4(1.f);
                     renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
@@ -1301,11 +1302,13 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
                         for (uint32_t i = 0; i < instance.sectionCount; ++i) {
                             const auto& section = gSections[instance.firstSection + i];
-                            struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; float blocksView; glm::vec4 ghostPos; glm::vec4 tintColor; } gfpc;
+                            FragPC gfpc;
                             gfpc.matIdx = (uint32_t)section.materialIndex;
                             gfpc.objID  = 0;
                             gfpc.alpha  = 0.35f;
                             gfpc.blocksView = 0.f;
+                            gfpc.fogEnabled = 0.f;
+                            gfpc._pad0 = gfpc._pad1 = gfpc._pad2 = 0.f;
                             gfpc.ghostPos   = glm::vec4(0.f);
                             gfpc.tintColor  = m_PlacementValid ? glm::vec4(1.f) : glm::vec4(1.f, 0.f, 0.f, 1.f);
                             renderCtx.PushFragmentConstants(0, &gfpc, sizeof(FragPC));
@@ -1351,11 +1354,13 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 
                 for (uint32_t i = 0; i < meshInst.sectionCount; ++i) {
                     const auto& section = allSections[meshInst.firstSection + i];
-                    struct FragPC { uint32_t matIdx; uint32_t objID; float alpha; float blocksView; glm::vec4 ghostPos; glm::vec4 tintColor; } fpc;
+                    FragPC fpc;
                     fpc.matIdx = (uint32_t)section.materialIndex;
                     fpc.objID  = 0;
                     fpc.alpha  = 1.0f;
                     fpc.blocksView = blocksView ? 1.f : 0.f;
+                    fpc.fogEnabled = 0.f;
+                    fpc._pad0 = fpc._pad1 = fpc._pad2 = 0.f;
                     fpc.ghostPos   = blocksView ? glm::vec4(m_FadeCenter, 0.f) : glm::vec4(0.f);
                     fpc.tintColor  = glm::vec4(1.f);
                     renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
@@ -1428,30 +1433,6 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
 
         constexpr float TOPDOWN_PAN_SPEED = 25.f;
 
-        // Helper: only allow a pan that keeps the camera over revealed
-        // terrain — stops the player from sliding the view into unexplored
-        // areas. If the fog grid isn't initialised yet (e.g. client briefly
-        // before first FogSnapshot), allow the pan unconditionally.
-        const FogGrid& panFog = LocalFog(ctx);
-        auto applyPan = [&](const glm::vec3& pan) {
-            glm::vec3 next = m_Camera->m_Position + pan;
-            if (!panFog.IsInitialised()) { m_Camera->m_Position = next; return; }
-            int cx, cz;
-            panFog.WorldToCell(glm::vec3(next.x, 0.f, next.z), cx, cz);
-            if (panFog.IsRevealed(cx, cz)) {
-                m_Camera->m_Position = next;
-            } else {
-                // Try sliding along one axis at a time so the camera glides
-                // along the fog boundary instead of getting stuck on a corner.
-                glm::vec3 nx = m_Camera->m_Position + glm::vec3(pan.x, 0.f, 0.f);
-                int ax, az; panFog.WorldToCell(glm::vec3(nx.x, 0.f, nx.z), ax, az);
-                if (panFog.IsRevealed(ax, az)) { m_Camera->m_Position = nx; return; }
-                glm::vec3 nz = m_Camera->m_Position + glm::vec3(0.f, 0.f, pan.z);
-                int bx, bz; panFog.WorldToCell(glm::vec3(nz.x, 0.f, nz.z), bx, bz);
-                if (panFog.IsRevealed(bx, bz)) m_Camera->m_Position = nz;
-            }
-        };
-
         // Camera orientation depends on mode
         if (m_CameraMode == CameraMode::Commander) {
             m_Camera->m_Pitch = -89.f;
@@ -1464,7 +1445,7 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
             if (Input::IsKeyDown(SDLK_S)) pan.z += TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_A)) pan.x -= TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_D)) pan.x += TOPDOWN_PAN_SPEED * dt;
-            applyPan(pan);
+            m_Camera->m_Position += pan;
         } else {
             // Building: isometric view, arrow keys rotate the diagonal
             constexpr float BUILD_ROTATE_SPEED = 60.f;
@@ -1482,15 +1463,13 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
             if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
-            applyPan(pan);
+            m_Camera->m_Position += pan;
         }
 
         // Building mode: scroll to zoom (adjust ortho size)
         if (m_CameraMode == CameraMode::Building) {
             float scroll = Input::GetMouseWheelDelta();
             if (scroll != 0.f) {
-                // Cap max zoom-out so the player can't pull the camera back so
-                // far that the whole world (incl. unrevealed areas) is visible.
                 m_BuildOrthoSize = glm::clamp(m_BuildOrthoSize - scroll * 3.f, 5.f, 80.f);
                 m_Camera->m_OrthoSize = m_BuildOrthoSize;
                 spdlog::debug("Building zoom: orthoSize={:.1f}", m_BuildOrthoSize);
@@ -2097,7 +2076,6 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                     anyChanged = true;
             }
             if (anyChanged) {
-                m_FogCoverDirty = true;
                 m_ScatterBatchesDirty = true;
             }
         }
@@ -2132,26 +2110,6 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         }
     }
 
-    // Throttled fog-cover rebuild (host and client)
-    m_FogCoverTimer += dt;
-    // Also rebuild when the camera moves, zooms, or rotates enough that the
-    // previous rotated cull rect no longer safely covers the visible area.
-    if (m_Camera) {
-        glm::vec3 d = m_Camera->m_Position - m_FogCoverLastPos;
-        float distSq = d.x * d.x + d.z * d.z;
-        if (distSq > 15.f * 15.f) m_FogCoverDirty = true;
-        if (std::abs(m_BuildOrthoSize - m_FogCoverLastOrtho) > 2.f)
-            m_FogCoverDirty = true;
-        float dy = std::abs(m_Camera->m_Yaw - m_FogCoverLastYaw);
-        while (dy > 360.f) dy -= 360.f;
-        if (dy > 180.f) dy = 360.f - dy;
-        if (dy > 5.f) m_FogCoverDirty = true;
-    }
-    if (m_FogCoverDirty && m_FogCoverTimer >= 0.1f) {
-        BuildFogCoverMesh(ctx);
-        m_FogCoverTimer = 0.f;
-    }
-
     // Separate throttle for scatter batch rebuilds (delayed, less frequent)
     if (m_ScatterBatchesDirty) {
         m_ScatterBatchTimer += dt;
@@ -2160,6 +2118,8 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
             BuildScatterBatches(ctx, f.IsInitialised() ? &f : nullptr);
             m_ScatterBatchesDirty = false;
             m_ScatterBatchTimer = 0.f;
+            // Rebuild the GPU fog texture at the same throttle rate
+            m_FogTextureDirty = true;
         }
     } else {
         m_ScatterBatchTimer = 0.f;
@@ -2245,7 +2205,7 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
                 FogGrid fg;
                 fg.Init(glm::vec3{-375.f, 0.f, -375.f},
                         glm::vec3{ 375.f, 0.f,  375.f},
-                        /*cellSize=*/2.f);
+                        /*cellSize=*/1.f);
                 m_TeamFogs[newPlayerId] = std::move(fg);
             }
 
@@ -2482,12 +2442,11 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
                 m_ClientFog.Init(
                     glm::vec3{-375.f, 0.f, -375.f},
                     glm::vec3{ 375.f, 0.f,  375.f},
-                    /*cellSize=*/2.f
+                    1.f
                 );
                 m_HasFogData = true;
             }
             if (m_ClientFog.ApplyDelta(pkt->cells, pkt->count)) {
-                m_FogCoverDirty = true;
                 m_ScatterBatchesDirty = true;
             }
         }
@@ -2497,7 +2456,6 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         auto pkt = ctx.network.ReceiveFromServer<FogSnapshotPacket>(PacketType::FOG_SNAPSHOT);
         if (pkt) {
             HandleFogSnapshot(*pkt);
-            m_FogCoverDirty = true;
             m_ScatterBatchesDirty = true;
         }
     }

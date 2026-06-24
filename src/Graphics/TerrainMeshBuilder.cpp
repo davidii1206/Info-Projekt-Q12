@@ -20,24 +20,24 @@ constexpr glm::vec3 kOutward[4] = {
 glm::vec4 BiomeTierColor(BugClass bc, int tier, int numTiers) {
     glm::vec3 base;
     switch (bc) {
-        case BugClass::Ants:             base = {0.82f, 0.68f, 0.44f}; break; // warm sandy nest floor
-        case BugClass::Termites:         base = {0.30f, 0.44f, 0.16f}; break; // earthy grass
-        case BugClass::Spiders:          base = {0.13f, 0.10f, 0.15f}; break; // near-black shadow floor
-        case BugClass::Woodlice:         base = {0.34f, 0.46f, 0.20f}; break; // muted mossy green
-        case BugClass::BeesWasps:        base = {0.38f, 0.52f, 0.20f}; break; // natural meadow
-        case BugClass::ButterfliesMoths: base = {0.36f, 0.50f, 0.22f}; break; // soft green
-        case BugClass::Snails:           base = {0.22f, 0.42f, 0.17f}; break; // dark wet grass
-        case BugClass::Mantis:           base = {0.17f, 0.38f, 0.12f}; break; // deep forest floor
-        case BugClass::Fireflies:        base = {0.20f, 0.36f, 0.20f}; break; // shadowy green
-        case BugClass::CentipedesWorms:  base = {0.16f, 0.11f, 0.08f}; break; // dark underground loam
-        case BugClass::MosquitosTicks:   base = {0.27f, 0.39f, 0.14f}; break; // murky swamp
-        case BugClass::Dragonflies:      base = {0.22f, 0.44f, 0.26f}; break; // green-teal
-        case BugClass::Bugs:             base = {0.42f, 0.52f, 0.13f}; break; // muted yellow-green
-        case BugClass::Roaches:          base = {0.28f, 0.25f, 0.16f}; break; // olive-grey decay rot
-        case BugClass::Beetles:          base = {0.22f, 0.20f, 0.21f}; break; // dark slate rock
-        case BugClass::Scorpions:        base = {0.90f, 0.78f, 0.52f}; break; // hot desert sand
-        case BugClass::BossArena:        base = {0.30f, 0.27f, 0.20f}; break; // dark weathered stone
-        default:                          base = {0.40f, 0.56f, 0.26f}; break; // fallback grass
+        case BugClass::Ants:             base = {0.82f, 0.68f, 0.44f}; break;
+        case BugClass::Termites:         base = {0.30f, 0.44f, 0.16f}; break;
+        case BugClass::Spiders:          base = {0.13f, 0.10f, 0.15f}; break;
+        case BugClass::Woodlice:         base = {0.34f, 0.46f, 0.20f}; break;
+        case BugClass::BeesWasps:        base = {0.38f, 0.52f, 0.20f}; break;
+        case BugClass::ButterfliesMoths: base = {0.36f, 0.50f, 0.22f}; break;
+        case BugClass::Snails:           base = {0.22f, 0.42f, 0.17f}; break;
+        case BugClass::Mantis:           base = {0.17f, 0.38f, 0.12f}; break;
+        case BugClass::Fireflies:        base = {0.20f, 0.36f, 0.20f}; break;
+        case BugClass::CentipedesWorms:  base = {0.16f, 0.11f, 0.08f}; break;
+        case BugClass::MosquitosTicks:   base = {0.27f, 0.39f, 0.14f}; break;
+        case BugClass::Dragonflies:      base = {0.22f, 0.44f, 0.26f}; break;
+        case BugClass::Bugs:             base = {0.42f, 0.52f, 0.13f}; break;
+        case BugClass::Roaches:          base = {0.28f, 0.25f, 0.16f}; break;
+        case BugClass::Beetles:          base = {0.22f, 0.20f, 0.21f}; break;
+        case BugClass::Scorpions:        base = {0.90f, 0.78f, 0.52f}; break;
+        case BugClass::BossArena:        base = {0.30f, 0.27f, 0.20f}; break;
+        default:                          base = {0.40f, 0.56f, 0.26f}; break;
     }
     float t = (numTiers > 1) ? (float)tier / (float)(numTiers - 1) : 0.5f;
     glm::vec3 c = glm::clamp(glm::mix(base * 0.70f, base * 1.30f, t), 0.f, 0.95f);
@@ -48,7 +48,7 @@ constexpr glm::vec4 kWaterColor = { 0.20f, 0.45f, 0.62f, 1.f };
 constexpr glm::vec4 kCliffColor = { 0.40f, 0.37f, 0.35f, 1.f };
 constexpr glm::vec4 kRampColor  = { 0.58f, 0.48f, 0.34f, 1.f };
 
-constexpr float kJitterAmp  = 0.12f;  // ±12 cm micro-height relief on plateau corners
+constexpr float kJitterAmp  = 0.12f;
 
 float CornerNoise(int cx, int cz) {
     uint32_t h = (uint32_t)cx * 0x9E3779B1u ^ (uint32_t)cz * 0x85EBCA77u;
@@ -56,8 +56,6 @@ float CornerNoise(int cx, int cz) {
     return (float)(h & 0xFFFF) / 32767.5f - 1.f;
 }
 
-// Bilinear smooth noise sampled at world-scale for organic ground color splotches.
-// Seed offsets decorrelate the two octaves.
 float SmoothColorNoise(float x, float y, int seed) {
     auto H = [seed](int ix, int iy) -> float {
         uint32_t h = ((uint32_t)(ix + seed * 1031)) * 0x9E3779B1u
@@ -67,7 +65,7 @@ float SmoothColorNoise(float x, float y, int seed) {
     };
     int ix = (int)std::floor(x), iy = (int)std::floor(y);
     float fx = x - ix, fy = y - iy;
-    fx = fx * fx * (3.f - 2.f * fx);  // smoothstep
+    fx = fx * fx * (3.f - 2.f * fx);
     fy = fy * fy * (3.f - 2.f * fy);
     return glm::mix(glm::mix(H(ix, iy), H(ix+1, iy), fx),
                     glm::mix(H(ix, iy+1), H(ix+1, iy+1), fx), fy);
@@ -104,7 +102,6 @@ void AddQuad(TerrainMeshData& out,
     out.indices.push_back(base + 3);
 }
 
-// Per-vertex color variant used for plateau tops so biome colors fade across borders.
 void AddQuadVC(TerrainMeshData& out,
                const glm::vec3& v0, const glm::vec3& v1,
                const glm::vec3& v2, const glm::vec3& v3,
@@ -125,31 +122,24 @@ void AddQuadVC(TerrainMeshData& out,
     out.indices.push_back(base + 3);
 }
 
-} // namespace
+// -----------------------------------------------------------------------
+// Computes per-corner blended biome colours for the full grid.
+// Shared by both Build() and BuildChunks().
+// -----------------------------------------------------------------------
+struct CornerColors {
+    std::vector<glm::vec4> colors;
+    int cornerW = 0;
+};
 
-TerrainMeshData Build(const WorldManager& world) {
-    TerrainMeshData out;
-
+CornerColors ComputeCornerColors(const WorldManager& world) {
     const auto& cfg = world.GetConfig();
     const int gridSize = world.GetGridSize();
-    if (gridSize <= 0) return out;
-
-    out.vertices.reserve((size_t)gridSize * gridSize * 8);
-    out.indices.reserve((size_t)gridSize * gridSize * 12);
-
     const auto& terrains = world.GetTerrains();
 
-    // -----------------------------------------------------------------------
-    // Pre-compute per-corner blended biome colors for smooth cross-biome fading.
-    //
-    // Each grid corner is shared by up to 4 tiles.  We accumulate the biome
-    // color from all adjacent PLATEAU tiles and average them.  The GPU then
-    // interpolates linearly across each quad, giving a natural gradient at
-    // territory borders without any shader changes.
-    // -----------------------------------------------------------------------
-    const int cornerW = gridSize + 1;
-    std::vector<glm::vec4> cornerColors((size_t)cornerW * cornerW, {0.f, 0.f, 0.f, 0.f});
-    std::vector<int>       cornerCount ((size_t)cornerW * cornerW, 0);
+    CornerColors cc;
+    cc.cornerW = gridSize + 1;
+    cc.colors.assign((size_t)cc.cornerW * cc.cornerW, {0.f, 0.f, 0.f, 0.f});
+    std::vector<int> count((size_t)cc.cornerW * cc.cornerW, 0);
 
     for (int tz = 0; tz < gridSize; ++tz) {
         for (int tx = 0; tx < gridSize; ++tx) {
@@ -160,37 +150,48 @@ TerrainMeshData Build(const WorldManager& world) {
                 ? terrains[tile.territoryId].bugClass : BugClass::None;
             glm::vec4 col = BiomeTierColor(bc, tile.tier, cfg.numTiers);
 
-            // corners: (tx,tz) (tx+1,tz) (tx+1,tz+1) (tx,tz+1)
             const int cxs[4] = { tx, tx+1, tx+1, tx   };
             const int czs[4] = { tz, tz,   tz+1, tz+1 };
             for (int i = 0; i < 4; ++i) {
-                int idx = czs[i] * cornerW + cxs[i];
-                cornerColors[idx] += col;
-                cornerCount [idx]++;
+                int idx = czs[i] * cc.cornerW + cxs[i];
+                cc.colors[idx] += col;
+                count[idx]++;
             }
         }
     }
-    for (int i = 0; i < cornerW * cornerW; ++i) {
-        if (cornerCount[i] > 0)
-            cornerColors[i] /= (float)cornerCount[i];
+    for (int i = 0; i < cc.cornerW * cc.cornerW; ++i) {
+        if (count[i] > 0)
+            cc.colors[i] /= (float)count[i];
         else
-            cornerColors[i] = BiomeTierColor(BugClass::None, 0, cfg.numTiers);
+            cc.colors[i] = BiomeTierColor(BugClass::None, 0, cfg.numTiers);
 
-        // Two-octave brightness splotch: coarse large patches + finer detail.
-        int cx = i % cornerW, cz = i / cornerW;
+        int cx = i % cc.cornerW, cz = i / cc.cornerW;
         float n = SmoothColorNoise((float)cx / 12.f, (float)cz / 12.f, 0) * 0.10f
                 + SmoothColorNoise((float)cx /  5.f, (float)cz /  5.f, 3) * 0.04f;
         float b = 1.f + n;
-        cornerColors[i] = glm::clamp(
-            glm::vec4(cornerColors[i].r * b, cornerColors[i].g * b, cornerColors[i].b * b, 1.f),
+        cc.colors[i] = glm::clamp(
+            glm::vec4(cc.colors[i].r * b, cc.colors[i].g * b, cc.colors[i].b * b, 1.f),
             0.f, 0.95f);
     }
+    return cc;
+}
 
-    // -----------------------------------------------------------------------
-    // Main tile loop
-    // -----------------------------------------------------------------------
-    for (int tz = 0; tz < gridSize; ++tz) {
-        for (int tx = 0; tx < gridSize; ++tx) {
+// -----------------------------------------------------------------------
+// Builds geometry for tiles in [txStart, txEnd) × [tzStart, tzEnd).
+// Used by both Build() and BuildChunks().
+// -----------------------------------------------------------------------
+void BuildTileRange(TerrainMeshData& out,
+                    const WorldManager& world,
+                    int txStart, int txEnd,
+                    int tzStart, int tzEnd,
+                    const CornerColors& cc)
+{
+    const auto& cfg = world.GetConfig();
+    const int gridSize = world.GetGridSize();
+    const auto& terrains = world.GetTerrains();
+
+    for (int tz = tzStart; tz < tzEnd; ++tz) {
+        for (int tx = txStart; tx < txEnd; ++tx) {
             const TerrainTile& tile = world.GetTile(tx, tz);
             glm::vec2 center = world.TileToWorld(tx, tz);
             const float half = cfg.tileSize * 0.5f;
@@ -199,7 +200,7 @@ TerrainMeshData Build(const WorldManager& world) {
             const float topH = world.TierToWorldHeight(tile.tier);
 
             float h[4] = { topH, topH, topH, topH };
-            glm::vec4 topColor;   // flat color for non-plateau surfaces
+            glm::vec4 topColor;
             bool useFlatColor = true;
 
             switch (tile.surface) {
@@ -223,7 +224,7 @@ TerrainMeshData Build(const WorldManager& world) {
                 }
                 case TileSurface::Plateau:
                 default:
-                    useFlatColor = false; // will use per-corner blended colors
+                    useFlatColor = false;
                     break;
             }
 
@@ -250,41 +251,33 @@ TerrainMeshData Build(const WorldManager& world) {
             if (useFlatColor) {
                 AddQuad(out, c0, c1, c2, c3, normal, topColor);
 
-                // Ramp side walls: the two triangular gaps where the sloped surface
-                // meets adjacent cliff walls are open by default.  Close them here
-                // so corridors have solid walls and no see-through edges.
-                // Each closing triangle fills the right-angle gap at the low end
-                // of each perpendicular side of the ramp.
                 if (tile.surface == TileSurface::Ramp) {
                     const glm::vec4 wallColor = glm::clamp(kRampColor * 0.80f, 0.f, 1.f);
-                    // Only emit a side triangle when the perpendicular neighbour is NOT
-                    // a matching ramp tile — if it is, the two tiles form a corridor and
-                    // the shared inner edge has no gap to close.
                     auto noRampNeighbour = [&](int nx, int nz) -> bool {
                         if (nx < 0 || nx >= gridSize || nz < 0 || nz >= gridSize) return true;
                         const TerrainTile& nb = world.GetTile(nx, nz);
                         return !(nb.surface == TileSurface::Ramp && nb.rampDir == tile.rampDir);
                     };
                     switch (tile.rampDir) {
-                        case 0: { // high at x0, low at x1; sides along Z
+                        case 0: {
                             glm::vec3 w0(x1, topH, z0), w1(x1, topH, z1);
                             if (noRampNeighbour(tx, tz-1)) AddTriangle(out, c0, w0, c1, {0.f, 0.f, -1.f}, wallColor);
                             if (noRampNeighbour(tx, tz+1)) AddTriangle(out, c3, c2, w1, {0.f, 0.f,  1.f}, wallColor);
                             break;
                         }
-                        case 1: { // high at x1, low at x0; sides along Z
+                        case 1: {
                             glm::vec3 w0(x0, topH, z0), w1(x0, topH, z1);
                             if (noRampNeighbour(tx, tz-1)) AddTriangle(out, c1, c0, w0, {0.f, 0.f, -1.f}, wallColor);
                             if (noRampNeighbour(tx, tz+1)) AddTriangle(out, c2, w1, c3, {0.f, 0.f,  1.f}, wallColor);
                             break;
                         }
-                        case 2: { // high at z0, low at z1; sides along X
+                        case 2: {
                             glm::vec3 w0(x0, topH, z1), w1(x1, topH, z1);
                             if (noRampNeighbour(tx-1, tz)) AddTriangle(out, c0, c3, w0, {-1.f, 0.f, 0.f}, wallColor);
                             if (noRampNeighbour(tx+1, tz)) AddTriangle(out, c1, w1, c2, { 1.f, 0.f, 0.f}, wallColor);
                             break;
                         }
-                        case 3: { // high at z1, low at z0; sides along X
+                        case 3: {
                             glm::vec3 w0(x0, topH, z0), w1(x1, topH, z0);
                             if (noRampNeighbour(tx-1, tz)) AddTriangle(out, c3, w0, c0, {-1.f, 0.f, 0.f}, wallColor);
                             if (noRampNeighbour(tx+1, tz)) AddTriangle(out, c2, c1, w1, { 1.f, 0.f, 0.f}, wallColor);
@@ -294,11 +287,10 @@ TerrainMeshData Build(const WorldManager& world) {
                     }
                 }
             } else {
-                // Plateau: per-corner blended colors for smooth biome fading.
-                glm::vec4 cc0 = cornerColors[tz       * cornerW + tx    ];
-                glm::vec4 cc1 = cornerColors[tz       * cornerW + (tx+1)];
-                glm::vec4 cc2 = cornerColors[(tz + 1) * cornerW + (tx+1)];
-                glm::vec4 cc3 = cornerColors[(tz + 1) * cornerW + tx    ];
+                glm::vec4 cc0 = cc.colors[tz       * cc.cornerW + tx    ];
+                glm::vec4 cc1 = cc.colors[tz       * cc.cornerW + (tx+1)];
+                glm::vec4 cc2 = cc.colors[(tz + 1) * cc.cornerW + (tx+1)];
+                glm::vec4 cc3 = cc.colors[(tz + 1) * cc.cornerW + tx    ];
                 AddQuadVC(out, c0, c1, c2, c3, normal, cc0, cc1, cc2, cc3);
             }
 
@@ -306,7 +298,6 @@ TerrainMeshData Build(const WorldManager& world) {
             const glm::vec3 corners[4] = { c0, c1, c2, c3 };
             static constexpr int edgeA[4] = { 1, 3, 2, 0 };
             static constexpr int edgeB[4] = { 2, 0, 3, 1 };
-            // Grid-corner coordinates for each of this tile's 4 corners.
             const int cornerGX[4] = { tx, tx+1, tx+1, tx   };
             const int cornerGZ[4] = { tz, tz,   tz+1, tz+1 };
 
@@ -323,9 +314,6 @@ TerrainMeshData Build(const WorldManager& world) {
                 const glm::vec3& a = corners[edgeA[d]];
                 const glm::vec3& b = corners[edgeB[d]];
 
-                // If the neighbour is a plateau tile its surface is micro-jittered.
-                // Match the cliff wall bottom to those jittered heights so no gap
-                // opens between the wall face and the floor behind it.
                 const bool nbIsPlat = (nb.surface == TileSurface::Plateau);
                 const float jA = nbIsPlat ? CornerNoise(cornerGX[edgeA[d]], cornerGZ[edgeA[d]]) * kJitterAmp : 0.f;
                 const float jB = nbIsPlat ? CornerNoise(cornerGX[edgeB[d]], cornerGZ[edgeB[d]]) * kJitterAmp : 0.f;
@@ -342,7 +330,6 @@ TerrainMeshData Build(const WorldManager& world) {
 
                 const glm::vec3 cliffNorm = kOutward[d];
 
-                // Per-corner mid heights keep the top/bottom quads watertight when jA != jB.
                 const float midHA = (a.y + botHA) * 0.5f;
                 const float midHB = (b.y + botHB) * 0.5f;
                 glm::vec3 midA(a.x, midHA, a.z);
@@ -362,8 +349,51 @@ TerrainMeshData Build(const WorldManager& world) {
             }
         }
     }
+}
+
+} // namespace
+
+TerrainMeshData Build(const WorldManager& world) {
+    TerrainMeshData out;
+    const int gridSize = world.GetGridSize();
+    if (gridSize <= 0) return out;
+
+    out.vertices.reserve((size_t)gridSize * gridSize * 8);
+    out.indices.reserve((size_t)gridSize * gridSize * 12);
+
+    CornerColors cc = ComputeCornerColors(world);
+    BuildTileRange(out, world, 0, gridSize, 0, gridSize, cc);
 
     return out;
+}
+
+ChunkBuildResult BuildChunks(const WorldManager& world, int chunkSize) {
+    ChunkBuildResult result;
+    const int gridSize = world.GetGridSize();
+    if (gridSize <= 0) return result;
+
+    result.chunkSize = chunkSize;
+    result.chunksPerAxis = (gridSize + chunkSize - 1) / chunkSize;
+    result.chunks.resize((size_t)result.chunksPerAxis * result.chunksPerAxis);
+
+    CornerColors cc = ComputeCornerColors(world);
+
+    for (int cz = 0; cz < result.chunksPerAxis; ++cz) {
+        for (int cx = 0; cx < result.chunksPerAxis; ++cx) {
+            int txStart = cx * chunkSize;
+            int txEnd   = std::min(txStart + chunkSize, gridSize);
+            int tzStart = cz * chunkSize;
+            int tzEnd   = std::min(tzStart + chunkSize, gridSize);
+
+            TerrainMeshData& out = result.chunks[cz * result.chunksPerAxis + cx];
+            out.vertices.reserve((size_t)chunkSize * chunkSize * 8);
+            out.indices.reserve((size_t)chunkSize * chunkSize * 12);
+
+            BuildTileRange(out, world, txStart, txEnd, tzStart, tzEnd, cc);
+        }
+    }
+
+    return result;
 }
 
 } // namespace TerrainMeshBuilder

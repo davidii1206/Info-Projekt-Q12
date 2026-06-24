@@ -32,7 +32,7 @@ struct FogGrid
 {
     glm::vec3 worldMin{-50.f, 0.f, -50.f};
     glm::vec3 worldMax{ 50.f, 0.f,  50.f};
-    float     cellSize = 2.f;
+    float     cellSize = 1.f;
 
     int cellsX = 0;
     int cellsZ = 0;
@@ -42,7 +42,7 @@ struct FogGrid
 
     void Init(glm::vec3 min = {-50.f,0.f,-50.f},
               glm::vec3 max = { 50.f,0.f, 50.f},
-              float     cell = 2.f)
+              float     cell = 1.f)
     {
         worldMin = min;
         worldMax = max;

@@ -40,8 +40,11 @@ layout(set = 2, binding = 0) uniform sampler2D baseColorTexture;
 // Binding 1 (sampler): shadow map depth texture
 layout(set = 2, binding = 1) uniform sampler2DShadow shadowMap;
 
-// Binding 2: GlobalUniforms SSBO (offset by 2 samplers)
-layout(set = 2, binding = 2, std430) readonly buffer GlobalUniforms {
+// Binding 2: per-tile fog of war texture (R=visible, sampled nearest)
+layout(set = 2, binding = 2) uniform sampler2D fogTexture;
+
+// Binding 3: GlobalUniforms SSBO
+layout(set = 2, binding = 3, std430) readonly buffer GlobalUniforms {
     mat4 view;
     mat4 proj;
     mat4 viewProj;
@@ -55,8 +58,8 @@ layout(set = 2, binding = 2, std430) readonly buffer GlobalUniforms {
     Light lights[16];
 } globals;
 
-// Binding 3: Material buffer SSBO
-layout(set = 2, binding = 3, std430) readonly buffer MaterialBuffer {
+// Binding 4: Material buffer SSBO
+layout(set = 2, binding = 4, std430) readonly buffer MaterialBuffer {
     GPUMaterial materials[];
 } matBuffer;
 
@@ -68,6 +71,10 @@ layout(set = 3, binding = 0) uniform MaterialIndex {
     uint  objectID;
     float alpha;
     float blocksView;     // >0 = apply distance-based transparency near ghostPos
+    float fogEnabled;     // >0 = apply per-tile fog of war culling
+    float pad0;
+    float pad1;
+    float pad2;
     vec4  ghostPos;       // xyz = fade centre when blocksView > 0, w unused
     vec4  tintColor;      // rgb = per-object colour tint (1 = no tint), w unused
 } pc;
@@ -181,6 +188,13 @@ void main() {
     }
 
     albedo.rgb *= pc.tintColor.rgb;
+
+    // Per-tile fog of war: discard fragments in unrevealed cells
+    if (pc.fogEnabled > 0.5) {
+        vec2 fogUV = (vPos.xz + vec2(375.0)) / 750.0;
+        float vis = texture(fogTexture, fogUV).r;
+        if (vis < 0.5) discard;
+    }
 
     if (albedo.a < 0.01) discard;
 
