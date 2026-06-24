@@ -266,6 +266,10 @@ struct BarracksComponent {
     std::vector<SpawnJob> queue;        ///< FIFO spawn queue
     float                 productionSpeed = 1.f; ///< Multiplier from tribe bonuses
     uint32_t              maxQueueSize    = 5;   ///< Max queued spawns
+    /// Set by BuildingSystem::UpdateBarracks when a job's timer elapses;
+    /// drained by GameScene each tick to actually spawn the unit at the
+    /// barracks position (and broadcast it).
+    int                   completedSpawns = 0;
 };
 
 /**

@@ -12,8 +12,12 @@ Renderer::Renderer(Window* window)
     : m_Window(window), m_Device(nullptr), m_CurrentCommandBuffer(nullptr), 
       m_CurrentSwapchainTexture(nullptr) 
 {
-    // Let SDL select the best available GPU backend (DX12 on Windows, Metal on macOS, Vulkan on Linux)
-    m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXBC | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL, false, nullptr);
+    // We currently only ship SPIR-V shaders (the DXBC compile step in
+    // CMakeLists.txt requires spirv-cross + dxc on PATH and prints a warning
+    // when it can't find them). Requesting only SPIRV makes SDL pick the
+    // Vulkan backend automatically, so double-clicking the .exe works without
+    // needing the SDL_GPU_DRIVER=vulkan env var.
+    m_Device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, false, nullptr);
 
     if (!m_Device) {
         spdlog::critical("Failed to create SDL GPU Device: {}", SDL_GetError());

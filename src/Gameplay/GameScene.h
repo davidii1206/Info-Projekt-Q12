@@ -405,6 +405,12 @@ private:
     /// rebuilds when the camera has moved enough that the cull box no longer
     /// covers the visible area.
     glm::vec3    m_FogCoverLastPos { std::numeric_limits<float>::infinity() };
+    /// Ortho size at the last fog cover rebuild — used to re-trigger when
+    /// the player zooms enough to enlarge the visible area beyond the cull box.
+    float        m_FogCoverLastOrtho = -1.f;
+    /// Camera yaw at the last fog cover rebuild — re-triggers the mesh when
+    /// the player rotates enough to swing the rotated cull rect.
+    float        m_FogCoverLastYaw = std::numeric_limits<float>::infinity();
 
     bool         m_ScatterBatchesDirty = false;
 

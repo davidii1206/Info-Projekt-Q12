@@ -176,35 +176,102 @@ void GameScene::BuildFogCoverMesh(SceneContext& ctx) {
     std::vector<uint32_t> indices;
 
     // ------------------------------------------------------------------
-    // View-aligned cull box: only emit fog quads for cells the camera can
-    // actually see. The full grid is 375x375x4=540k cells worst case; with
-    // this we typically emit a few hundred. Box is sized generously per
-    // camera mode + clamped to the grid, and we re-build when the camera
-    // moves out of the safety margin.
+    // View-aligned cull rectangle on the ground.
+    //
+    // Full grid is 375×375 cells worst case; this drops it to the few
+    // hundred actually visible. Building mode uses a yaw-rotated rect that
+    // matches the tilted ortho's visible footprint (extends ~orthoSize /
+    // sin(pitch) ahead of the camera). Commander / fallback uses a flat
+    // 180u radius centred on the camera since the near-straight-down view
+    // makes rotation almost irrelevant. We iterate the AABB of the rect
+    // and per-cell test rotated-rect inclusion.
     // ------------------------------------------------------------------
-    float halfW, halfH; // half-extents of visible area in world units (XZ)
+    glm::vec3 cameraPos = m_Camera ? m_Camera->m_Position : glm::vec3(0.f);
+
+    // Defaults = Commander / fallback (axis-aligned around camera).
+    glm::vec2 rectCenter(cameraPos.x, cameraPos.z);
+    glm::vec2 rightDir   (1.f, 0.f);
+    glm::vec2 forwardDir (0.f, 1.f);
+    float halfR = 180.f;
+    float halfF = 180.f;
+
     if (m_CameraMode == CameraMode::Building && m_Camera) {
-        // Orthographic top-down: ortho size is the visible half-height.
-        // Width depends on aspect ratio. Add 30% margin so panning isn't visible.
         int winW = 1, winH = 1;
         if (ctx.renderer && ctx.renderer->GetWindow())
             SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
         float aspect = (winH > 0) ? (float)winW / (float)winH : 1.f;
-        halfH = m_BuildOrthoSize * 1.30f;
-        halfW = halfH * aspect;
-    } else {
-        // First-person / commander view: cover a circle around the camera that
-        // comfortably exceeds the far visible distance on flat terrain.
-        halfW = halfH = 120.f;
+
+        // Horizontal projections of camera axes. Right is 90° from forward
+        // in XZ; sign mismatch is harmless since the rect is symmetric.
+        glm::vec2 fwd(m_Camera->m_Front.x, m_Camera->m_Front.z);
+        float fwdLen = glm::length(fwd);
+        if (fwdLen > 1e-4f) fwd /= fwdLen;
+        forwardDir = fwd;
+        rightDir   = glm::vec2(fwd.y, -fwd.x);
+
+        // Bias cameraY down by a typical ground height so the cull centre
+        // sits where the camera actually looks, not where it would on a Y=0
+        // plane (terrain sits on tiers, avg ~5u, max ~14u).
+        constexpr float kTypicalGroundY = 6.f;
+        float pitchRad   = glm::radians(std::abs(m_Camera->m_Pitch));
+        float effectiveY = std::max(5.f, cameraPos.y - kTypicalGroundY);
+        float fwdOffset  = (std::tan(pitchRad) > 1e-3f)
+                           ? effectiveY / std::tan(pitchRad) : 0.f;
+        rectCenter += forwardDir * glm::clamp(fwdOffset, 0.f, 200.f);
+
+        // 1.4× margin + 30u absolute soaks up terrain-height variability
+        // and rebuild-cadence jitter so edges never leak.
+        constexpr float kMargin = 1.4f;
+        halfR = m_BuildOrthoSize * aspect * kMargin + 30.f;
+        halfF = (m_BuildOrthoSize / std::max(0.1f, std::sin(pitchRad))) * kMargin + 30.f;
     }
 
-    glm::vec3 cameraPos = m_Camera ? m_Camera->m_Position : glm::vec3(0.f);
-    int cxMin, czMin, cxMax, czMax;
-    fog.WorldToCell(glm::vec3(cameraPos.x - halfW, 0.f, cameraPos.z - halfH), cxMin, czMin);
-    fog.WorldToCell(glm::vec3(cameraPos.x + halfW, 0.f, cameraPos.z + halfH), cxMax, czMax);
-    // WorldToCell clamps to grid bounds, so the loop below is always in-range.
+    // AABB of the rotated rect on the ground.
+    float aabbHalfX = std::abs(rightDir.x) * halfR + std::abs(forwardDir.x) * halfF;
+    float aabbHalfZ = std::abs(rightDir.y) * halfR + std::abs(forwardDir.y) * halfF;
 
-    m_FogCoverLastPos = cameraPos;
+    int cxMin, czMin, cxMax, czMax;
+    fog.WorldToCell(glm::vec3(rectCenter.x - aabbHalfX, 0.f, rectCenter.y - aabbHalfZ), cxMin, czMin);
+    fog.WorldToCell(glm::vec3(rectCenter.x + aabbHalfX, 0.f, rectCenter.y + aabbHalfZ), cxMax, czMax);
+
+    // Per-cell rotated-rect inclusion threshold; +cellSize so cells whose
+    // *edges* clip the rect are still emitted (otherwise their interior is
+    // visible but the cell is culled).
+    const float incR = halfR + fog.cellSize;
+    const float incF = halfF + fog.cellSize;
+
+    m_FogCoverLastPos   = cameraPos;
+    m_FogCoverLastOrtho = m_BuildOrthoSize;
+    m_FogCoverLastYaw   = m_Camera ? m_Camera->m_Yaw : 0.f;
+
+    // Vertical fog floor — covers cliff faces and ramps below the cell's
+    // top quad. Pulled well below the lowest terrain tier (water is at
+    // tier 0..1 in world units 0..1.2) so skirts always reach past the
+    // ground, even when the camera is below world Y=0.
+    constexpr float kFogFloorY = -50.0f;
+    // Lift the top quad clearly above any plateau micro-jitter (±0.12u in
+    // TerrainMeshBuilder) so the fog wins the depth test without z-fighting.
+    constexpr float kFogTopLift = 0.35f;
+
+    // Global ceiling — y for every fog top quad. Per-cell neighbour-max
+    // sampling missed isolated tall peaks more than ~2 tiles from the
+    // fog cell, leaving the peak poking through. Using the world's
+    // highest possible tier as a flat ceiling guarantees coverage; the
+    // skirts handle vertical sides below.
+    const float fogTopY = m_World.TierToWorldHeight(m_World.GetConfig().numTiers - 1) + kFogTopLift;
+
+    // Helper that pushes one quad with a given normal.
+    auto pushQuad = [&](const glm::vec3& v0, const glm::vec3& v1,
+                        const glm::vec3& v2, const glm::vec3& v3,
+                        const glm::vec3& n) {
+        uint32_t base = (uint32_t)vertices.size();
+        vertices.push_back({v0, n, {0,0}, {0,0,0,1}});
+        vertices.push_back({v1, n, {1,0}, {0,0,0,1}});
+        vertices.push_back({v2, n, {1,1}, {0,0,0,1}});
+        vertices.push_back({v3, n, {0,1}, {0,0,0,1}});
+        indices.push_back(base); indices.push_back(base + 1); indices.push_back(base + 2);
+        indices.push_back(base); indices.push_back(base + 2); indices.push_back(base + 3);
+    };
 
     for (int cz = czMin; cz <= czMax; ++cz) {
         for (int cx = cxMin; cx <= cxMax; ++cx) {
@@ -217,23 +284,31 @@ void GameScene::BuildFogCoverMesh(SceneContext& ctx) {
             float wxCenter = (wx0 + wx1) * 0.5f;
             float wzCenter = (wz0 + wz1) * 0.5f;
 
-            // Sample terrain height at cell center + small offset to avoid z-fighting
-            int tx, tz;
-            m_World.WorldToTile(wxCenter, wzCenter, tx, tz);
-            const auto& tile = m_World.GetTile(tx, tz);
-            float y = m_World.TierToWorldHeight(tile.tier) + 0.15f;
+            // Rotated-rect inclusion test on the cell centre.
+            glm::vec2 delta(wxCenter - rectCenter.x, wzCenter - rectCenter.y);
+            float u = delta.x * rightDir.x   + delta.y * rightDir.y;
+            float v = delta.x * forwardDir.x + delta.y * forwardDir.y;
+            if (std::abs(u) > incR || std::abs(v) > incF) continue;
 
-            uint32_t base = (uint32_t)vertices.size();
-            vertices.push_back({{wx0, y, wz0}, {0,1,0}, {0,0}, {0,0,0,1}});
-            vertices.push_back({{wx1, y, wz0}, {0,1,0}, {1,0}, {0,0,0,1}});
-            vertices.push_back({{wx1, y, wz1}, {0,1,0}, {1,1}, {0,0,0,1}});
-            vertices.push_back({{wx0, y, wz1}, {0,1,0}, {1,1}, {0,0,0,1}});
-            indices.push_back(base);
-            indices.push_back(base + 1);
-            indices.push_back(base + 2);
-            indices.push_back(base);
-            indices.push_back(base + 2);
-            indices.push_back(base + 3);
+            // Top quad at the global fogTopY ceiling + 4 side skirts down to
+            // kFogFloorY. Top covers anything below (no peak pokes through),
+            // skirts cover all vertical cliff faces between adjacent cells.
+            const float y = fogTopY;
+            // Top
+            pushQuad({wx0, y, wz0}, {wx1, y, wz0},
+                     {wx1, y, wz1}, {wx0, y, wz1}, {0, 1, 0});
+            // West (-X)
+            pushQuad({wx0, y,          wz1}, {wx0, y,          wz0},
+                     {wx0, kFogFloorY, wz0}, {wx0, kFogFloorY, wz1}, {-1, 0, 0});
+            // East (+X)
+            pushQuad({wx1, y,          wz0}, {wx1, y,          wz1},
+                     {wx1, kFogFloorY, wz1}, {wx1, kFogFloorY, wz0}, {1, 0, 0});
+            // North (-Z)
+            pushQuad({wx0, y,          wz0}, {wx1, y,          wz0},
+                     {wx1, kFogFloorY, wz0}, {wx0, kFogFloorY, wz0}, {0, 0, -1});
+            // South (+Z)
+            pushQuad({wx1, y,          wz1}, {wx0, y,          wz1},
+                     {wx0, kFogFloorY, wz1}, {wx1, kFogFloorY, wz1}, {0, 0, 1});
         }
     }
 
@@ -1322,6 +1397,30 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
 
         constexpr float TOPDOWN_PAN_SPEED = 25.f;
 
+        // Helper: only allow a pan that keeps the camera over revealed
+        // terrain — stops the player from sliding the view into unexplored
+        // areas. If the fog grid isn't initialised yet (e.g. client briefly
+        // before first FogSnapshot), allow the pan unconditionally.
+        const FogGrid& panFog = ctx.network.IsHosting() ? m_Fog : m_ClientFog;
+        auto applyPan = [&](const glm::vec3& pan) {
+            glm::vec3 next = m_Camera->m_Position + pan;
+            if (!panFog.IsInitialised()) { m_Camera->m_Position = next; return; }
+            int cx, cz;
+            panFog.WorldToCell(glm::vec3(next.x, 0.f, next.z), cx, cz);
+            if (panFog.IsRevealed(cx, cz)) {
+                m_Camera->m_Position = next;
+            } else {
+                // Try sliding along one axis at a time so the camera glides
+                // along the fog boundary instead of getting stuck on a corner.
+                glm::vec3 nx = m_Camera->m_Position + glm::vec3(pan.x, 0.f, 0.f);
+                int ax, az; panFog.WorldToCell(glm::vec3(nx.x, 0.f, nx.z), ax, az);
+                if (panFog.IsRevealed(ax, az)) { m_Camera->m_Position = nx; return; }
+                glm::vec3 nz = m_Camera->m_Position + glm::vec3(0.f, 0.f, pan.z);
+                int bx, bz; panFog.WorldToCell(glm::vec3(nz.x, 0.f, nz.z), bx, bz);
+                if (panFog.IsRevealed(bx, bz)) m_Camera->m_Position = nz;
+            }
+        };
+
         // Camera orientation depends on mode
         if (m_CameraMode == CameraMode::Commander) {
             m_Camera->m_Pitch = -89.f;
@@ -1334,7 +1433,7 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
             if (Input::IsKeyDown(SDLK_S)) pan.z += TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_A)) pan.x -= TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_D)) pan.x += TOPDOWN_PAN_SPEED * dt;
-            m_Camera->m_Position += pan;
+            applyPan(pan);
         } else {
             // Building: isometric view, arrow keys rotate the diagonal
             constexpr float BUILD_ROTATE_SPEED = 60.f;
@@ -1352,14 +1451,16 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
             if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
             if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
-            m_Camera->m_Position += pan;
+            applyPan(pan);
         }
 
         // Building mode: scroll to zoom (adjust ortho size)
         if (m_CameraMode == CameraMode::Building) {
             float scroll = Input::GetMouseWheelDelta();
             if (scroll != 0.f) {
-                m_BuildOrthoSize = glm::clamp(m_BuildOrthoSize - scroll * 3.f, 5.f, 150.f);
+                // Cap max zoom-out so the player can't pull the camera back so
+                // far that the whole world (incl. unrevealed areas) is visible.
+                m_BuildOrthoSize = glm::clamp(m_BuildOrthoSize - scroll * 3.f, 5.f, 80.f);
                 m_Camera->m_OrthoSize = m_BuildOrthoSize;
                 spdlog::debug("Building zoom: orthoSize={:.1f}", m_BuildOrthoSize);
             }
@@ -1625,13 +1726,16 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             BuildingType type;
         };
         const BldBtn placeableBlds[] = {
+            {"Brutkammer", BuildingType::Barracks},
+            {"Speicher",   BuildingType::Storage},
             {"Verteid.",   BuildingType::Defense},
             {"Angriff",    BuildingType::Attack},
             {"Vorposten",  BuildingType::Outpost},
+            {"Konversion", BuildingType::Conversion},
         };
 
         ImGui::Text("Gebaeude platzieren:");
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < (int)(sizeof(placeableBlds)/sizeof(placeableBlds[0])); i++) {
             bool active = (m_PlacementActive &&
                            m_SelectedBuildingType == static_cast<int>(placeableBlds[i].type));
             if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
@@ -1723,6 +1827,70 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip("%s", def->description);
                     }
+                }
+            }
+
+            // ---------------------------------------------------------------
+            // Brutkammer (Barracks): queue + ausbilden + instant-spawn debug.
+            // Lists every Barracks owned by the local team with its current
+            // production state, and gives a quick way to actually get units.
+            // ---------------------------------------------------------------
+            ImGui::Separator();
+            ImGui::Text("Brutkammern:");
+            int barracksIdx = 0;
+            auto barrView = ctx.serverRegistry.view<TransformComponent,
+                                                     BuildingComponent,
+                                                     BarracksComponent>();
+            bool anyBarracks = false;
+            for (auto e : barrView) {
+                const auto& bc = barrView.get<BuildingComponent>(e);
+                if (bc.teamId != myTeam || bc.destroyed) continue;
+                anyBarracks = true;
+                auto& barr = barrView.get<BarracksComponent>(e);
+                const auto& tf = barrView.get<TransformComponent>(e);
+
+                ImGui::PushID(barracksIdx++);
+                ImGui::Text("Brutkammer @ (%.0f, %.0f)  Queue: %zu/%u",
+                            tf.position.x, tf.position.z,
+                            barr.queue.size(), barr.maxQueueSize);
+                if (!barr.queue.empty()) {
+                    const auto& job = barr.queue.front();
+                    float pct = 1.f - (job.total > 0.f ? job.timer / job.total : 0.f);
+                    ImGui::ProgressBar(pct, ImVec2(180, 0));
+                }
+                if (ImGui::Button("Ausbilden")) {
+                    if (barr.queue.size() < barr.maxQueueSize) {
+                        BarracksComponent::SpawnJob j;
+                        j.tier  = 1;
+                        j.total = 4.f;      // 4 s to produce
+                        j.timer = j.total;
+                        barr.queue.push_back(j);
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Sofort (Cheat)")) {
+                    // Bypass the queue: spawn one unit immediately at the building.
+                    SpawnUnit(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f));
+                }
+                ImGui::PopID();
+            }
+            if (!anyBarracks) {
+                ImGui::TextDisabled("  Keine Brutkammer gebaut. (Bauen -> Brutkammer)");
+                if (ImGui::Button("Test-Einheit am MainBase spawnen")) {
+                    // Fallback: spawn near the team's Main Base so the user can
+                    // try Commander mode without first placing a Barracks.
+                    glm::vec3 sp{};
+                    bool found = false;
+                    auto mbView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+                    for (auto mb : mbView) {
+                        const auto& mbBc = mbView.get<BuildingComponent>(mb);
+                        if (mbBc.teamId == myTeam && mbBc.type == BuildingType::Main && !mbBc.destroyed) {
+                            sp = mbView.get<TransformComponent>(mb).position;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) SpawnUnit(ctx, myTeam, sp + glm::vec3(3.f, 0.f, 0.f));
                 }
             }
         }
@@ -1851,6 +2019,28 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         m_ResourceManager.Update(ctx.serverRegistry, dt);
         ResourceSystem::Update(ctx.serverRegistry, m_ResourceManager, dt);
         BuildingSystem::Update(ctx.serverRegistry, dt);
+
+        // Drain Barracks completed-spawn flags into real Unit entities.
+        // BuildingSystem can't do this itself because it doesn't know about
+        // networking or our SpawnUnit helper.
+        {
+            auto bv = ctx.serverRegistry.view<TransformComponent,
+                                              BuildingComponent,
+                                              BarracksComponent>();
+            for (auto e : bv) {
+                auto& barr = bv.get<BarracksComponent>(e);
+                if (barr.completedSpawns <= 0) continue;
+                const auto& tf = bv.get<TransformComponent>(e);
+                const auto& bc = bv.get<BuildingComponent>(e);
+                for (int i = 0; i < barr.completedSpawns; ++i) {
+                    // Spawn just in front of the barracks (offset on X) so units
+                    // don't pile up exactly on top of the building.
+                    glm::vec3 p = tf.position + glm::vec3((float)i * 1.4f + 2.f, 0.f, 0.f);
+                    SpawnUnit(ctx, bc.teamId, p);
+                }
+                barr.completedSpawns = 0;
+            }
+        }
         if (FogOfWarSystem::Update(m_Fog, ctx.serverRegistry)) {
             m_FogCoverDirty = true;
             m_ScatterBatchesDirty = true;
@@ -1888,15 +2078,22 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
 
     // Throttled fog-cover + scatter-batch rebuild (host and client, at most 0.5 Hz)
     m_FogCoverTimer += dt;
-    // Also rebuild when the camera has moved far enough that the previous
-    // cull box no longer safely covers the visible area. The 30% margin in
-    // BuildFogCoverMesh means re-building every ~25 world units is plenty.
+    // Also rebuild when the camera moves, zooms, or rotates enough that the
+    // previous rotated cull rect no longer safely covers the visible area.
     if (m_Camera) {
         glm::vec3 d = m_Camera->m_Position - m_FogCoverLastPos;
         float distSq = d.x * d.x + d.z * d.z;
-        if (distSq > 25.f * 25.f) m_FogCoverDirty = true;
+        if (distSq > 15.f * 15.f) m_FogCoverDirty = true;
+        if (std::abs(m_BuildOrthoSize - m_FogCoverLastOrtho) > 2.f)
+            m_FogCoverDirty = true;
+        // Yaw rotation swings the whole rotated rect — must rebuild.
+        float dy = std::abs(m_Camera->m_Yaw - m_FogCoverLastYaw);
+        // Normalise to [0, 180] so wrap-around at 360 doesn't false-trigger.
+        while (dy > 360.f) dy -= 360.f;
+        if (dy > 180.f) dy = 360.f - dy;
+        if (dy > 5.f) m_FogCoverDirty = true;
     }
-    if (m_FogCoverDirty && m_FogCoverTimer >= 0.5f) {
+    if (m_FogCoverDirty && m_FogCoverTimer >= 0.1f) {
         BuildFogCoverMesh(ctx);
         m_FogCoverTimer = 0.f;
     }
@@ -2449,6 +2646,22 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, flo
     pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
     pkt.hp = hp; pkt.maxHp = hp;
     ctx.network.BroadcastToAll(pkt);
+
+    // Also create the client-side entity directly when hosting, because
+    // BroadcastToAll doesn't loop back to the host's local client — so
+    // without this the host never sees its own freshly spawned units.
+    // Mirrors the same fallback that SpawnBuilding uses.
+    if (!m_ClientNetMap.count(netId)) {
+        auto ce = ctx.clientRegistry.create();
+        ctx.clientRegistry.emplace<TransformComponent>(ce, pos);
+        ctx.clientRegistry.emplace<MovementComponent>(ce);
+        ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
+        ctx.clientRegistry.emplace<ModelComponent>(ce, std::string("assets/cube.glb"));
+        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, false});
+        ctx.clientRegistry.emplace<HealthComponent>(ce, HealthComponent{hp});
+        ctx.clientRegistry.emplace<MovementOrderComponent>(ce);
+        m_ClientNetMap[netId] = ce;
+    }
 
     spdlog::info("GameScene: spawned unit netId={} team={} class={} hp={:.0f}",
                  netId, teamId, (int)bc, hp);

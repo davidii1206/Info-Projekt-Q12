@@ -208,7 +208,8 @@ void LobbyScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
         bool allReady = true;
         for (auto& [pid, info] : m_LobbyPlayers)
             if (!info.ready) { allReady = false; break; }
-        if (m_LobbyPlayers.size() < 2)
+        // Solo playtest is allowed; the lobby just needs at least the host.
+        if (m_LobbyPlayers.empty())
             allReady = false;
 
         if (ImGui::Button("Start Game") && allReady && !m_GameStarting) {
@@ -232,10 +233,10 @@ void LobbyScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
             // Host transitions immediately
             ctx.scenes.RequestTransition(new GameScene());
         }
-        if (!allReady && m_LobbyPlayers.size() >= 2)
+        if (!allReady && !m_LobbyPlayers.empty())
             ImGui::TextDisabled("Waiting for all players to ready up...");
-        else if (m_LobbyPlayers.size() < 2)
-            ImGui::TextDisabled("Need at least 2 players...");
+        else if (m_LobbyPlayers.empty())
+            ImGui::TextDisabled("Waiting for the host to join the lobby...");
     }
 
     ImGui::Separator();
