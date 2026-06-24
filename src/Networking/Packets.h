@@ -37,7 +37,8 @@ enum class PacketType : uint8_t {
 
     // Server → Client (state sync)
     TERRITORY_SNAPSHOT = 13, /**< Periodic territory zone ownership + progress. */
-    FOG_SNAPSHOT       = 14, /**< Periodic fog-of-war grid bits. */
+    FOG_SNAPSHOT       = 14, /**< Periodic fog-of-war grid bits (deprecated, use FOG_DELTA). */
+    FOG_DELTA          = 24, /**< Server → Client: changed fog cells since last sync. */
     RESOURCE_SPAWNED   = 15, /**< A resource node was spawned. */
     RESOURCE_DEPLETED  = 16, /**< A resource node was depleted or destroyed. */
     BUILDING_SPAWNED   = 17, /**< A building was spawned. */
@@ -224,6 +225,21 @@ struct FogSnapshotPacket {
     uint16_t   cellsZ  = 0;                         /**< Number of fog cells along Z. */
     /// Bit-packed revealed flags; enough for a 375×375 grid (140 625 bits → 2198 uint64s).
     uint64_t   gridData[2200]{};
+};
+
+/**
+ * @struct FogDeltaPacket
+ * @brief Server → Client: only the cells that changed since the last sync.
+ *
+ * Instead of sending the full 375×375 bit grid every time, this packet
+ * carries a list of newly-revealed cell indices (row-major).  For the
+ * common case of a few units moving, this is < 100 bytes instead of ~18 KB.
+ */
+struct FogDeltaPacket {
+    PacketType type   = PacketType::FOG_DELTA; /**< Packet type identifier. */
+    uint16_t   count  = 0;                     /**< Number of valid entries in cells[]. */
+    /// Newly-revealed cell indices (row-major: z*cellsX + x).
+    uint32_t   cells[512]{};
 };
 
 /**

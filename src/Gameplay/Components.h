@@ -200,6 +200,22 @@ struct MovementOrderComponent {
 };
 
 /**
+ * @struct PathComponent
+ * @brief Stores a computed A* path as a list of waypoints (world XZ).
+ *
+ * Units with an active MovementOrderComponent will have their PathComponent
+ * filled by the pathfinding system.  The unit's UpdateUnitMovement step
+ * advances along the waypoint list each tick.
+ */
+struct PathComponent {
+    std::vector<glm::vec2> waypoints;  ///< World XZ positions to follow.
+    int                    current = 0;  ///< Index of the next waypoint.
+    bool                   dirty   = false; ///< Set to true when the path needs recalculation.
+    float                  recalcTimer = 0.f; ///< Accumulator for periodic recalc.
+    static constexpr float RECALC_INTERVAL = 0.5f; ///< Recalculate every 0.5s.
+};
+
+/**
  * @struct BaseHealthComponent
  * @brief Marks an entity as a team base with health (destroyable).
  */
@@ -232,6 +248,19 @@ struct FogCoverComponent {};
  * @brief Tag for entities that should never be fog-culled (e.g. terrain mesh).
  */
 struct NoFogCullComponent {};
+
+/**
+ * @struct TerrainChunkComponent
+ * @brief Tags a per-tile-chunk terrain entity. Stores chunk coordinates for
+ *        frustum and fog-of-war culling in the render loop.
+ */
+struct TerrainChunkComponent {
+    int chunkX = 0; ///< Chunk index along the X axis.
+    int chunkZ = 0; ///< Chunk index along the Z axis.
+
+    TerrainChunkComponent() = default;
+    TerrainChunkComponent(int x, int z) : chunkX(x), chunkZ(z) {}
+};
 
 /**
  * @struct ConstructionComponent

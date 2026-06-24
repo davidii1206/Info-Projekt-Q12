@@ -15,6 +15,7 @@
 #include "ResourceHUD.h"
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
+#include <unordered_set>
 #include "ScatterSystem.h"
 #include "HUDTextureRegistry.h"
 #include "../Core/WorldManager.h"
@@ -220,8 +221,11 @@ private:
     /// Called once in OnEnter() after scatter population; results are reused every frame.
     void BuildScatterBatches(SceneContext& ctx, const FogGrid* fog = nullptr);
 
-    /// Builds or rebuilds the flat black fog-cover mesh over unrevealed cells.
-    void BuildFogCoverMesh(SceneContext& ctx);
+    /// Returns the fog grid for the local player (host: playerId's grid, client: m_ClientFog).
+    const FogGrid& LocalFog(const SceneContext& ctx) const;
+
+    /// Helper: checks whether any tile in a chunk is revealed in the given fog grid.
+    bool IsChunkRevealed(const FogGrid& fog, int chunkX, int chunkZ) const;
 
     /// Generates/re-generates the top-down map texture from world data and fog state.
     void GenerateMapTexture(SceneContext& ctx);
@@ -236,8 +240,8 @@ private:
     /// Server-side resource manager: owns spawn points, depletion, respawn.
     ResourceManager m_ResourceManager;
 
-    /// Fog of War grid – tracks which map cells have been explored.
-    FogGrid m_Fog;
+    /// Per-team fog grids on the server. Keyed by teamId (= playerId in FFA).
+    std::unordered_map<uint32_t, FogGrid> m_TeamFogs;
 
     /// Procedural world data (heightmap + biomes) used to drive decorative
     /// prop scattering. Generated locally on every peer from the shared seed.
@@ -316,9 +320,9 @@ private:
     float m_TerritorySnapAccum = 0.f;
     static constexpr float TERRITORY_SNAP_RATE = 1.f / 2.f; ///< Territory snapshot rate (2 Hz).
 
-    /// Accumulator for fog snapshot broadcasting (2 Hz).
+    /// Accumulator for fog delta broadcasting (now used for FOG_DELTA packets).
     float m_FogSnapAccum = 0.f;
-    static constexpr float FOG_SNAP_RATE = 1.f / 2.f; ///< Fog snapshot rate (2 Hz).
+    static constexpr float FOG_SNAP_RATE = 1.f / 4.f; ///< Fog delta rate (4 Hz).
 
     // --- Client-side synced state ---
     /// Client-side fog grid copy (updated from server snapshot).
@@ -396,25 +400,22 @@ private:
     /// Single identity mat4 SSBO bound for non-scatter draw calls so slot 1 is always valid.
     std::unique_ptr<GPUBuffer> m_IdentityInstanceBuffer;
 
-    // --- 3D Fog Cover (flat black mesh at terrain height for unrevealed cells) ---
-    entt::entity m_FogCoverEntity = entt::null;
-    uint32_t     m_FogCoverVersion = 0;
-    bool         m_FogCoverDirty   = true;
-    float        m_FogCoverTimer   = 0.f;
-    /// XZ position the fog cover mesh was last built around — used to trigger
-    /// rebuilds when the camera has moved enough that the cull box no longer
-    /// covers the visible area.
-    glm::vec3    m_FogCoverLastPos { std::numeric_limits<float>::infinity() };
-    /// Ortho size at the last fog cover rebuild — used to re-trigger when
-    /// the player zooms enough to enlarge the visible area beyond the cull box.
-    float        m_FogCoverLastOrtho = -1.f;
-    /// Camera yaw at the last fog cover rebuild — re-triggers the mesh when
-    /// the player rotates enough to swing the rotated cull rect.
-    float        m_FogCoverLastYaw = std::numeric_limits<float>::infinity();
+    // --- Per-chunk terrain mesh metadata ---
+    int  m_ChunkSize       = 32;       ///< Tiles per chunk edge.
+    int  m_ChunksPerAxis   = 0;        ///< Chunks along one grid edge.
 
-    bool         m_ScatterBatchesDirty = false;
+    bool m_ScatterBatchesDirty = false;
+    /// Separate timer for scatter batch rebuilds (avoids sharing with fog cover).
+    float        m_ScatterBatchTimer = 0.f;
+    static constexpr float SCATTER_BATCH_REBUILD_DELAY = 0.4f; ///< Throttle: rebuild scatter batches after fog change.
 
     // --- Map Texture (top-down view of the world from generator data) ---
     std::unique_ptr<class Texture> m_MapTexture;
     bool m_MapTextureDirty = true;
+
+    // --- Per-tile fog of war GPU texture ---
+    std::shared_ptr<class Texture> m_FogTexture;
+    bool m_FogTextureDirty = true;
+
+    void UpdateFogTexture(const SceneContext& ctx, const FogGrid& fog);
 };
