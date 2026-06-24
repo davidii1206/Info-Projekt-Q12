@@ -6,6 +6,7 @@
 #pragma once
 #include "../Core/Layer.h"
 #include "../Core/Timer.h"
+#include "../Core/DebugUI.h"
 #include "../Networking/NetworkManager.h"
 #include "../Networking/NetworkDebugUI.h"
 #include <imgui.h>
@@ -26,6 +27,7 @@ public:
 
     /// @brief Draws the debugger and network ImGui windows.
     void OnImGuiRender(Renderer* renderer) override {
+        if (!DebugUI::IsVisible()) return;
         ImGui::Begin("Bugmin Debugger");
         ImGui::Text("FPS: %.1f", m_Timer->GetFPS());
         // We can add more general stats here

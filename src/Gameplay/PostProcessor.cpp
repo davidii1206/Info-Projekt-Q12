@@ -7,6 +7,7 @@
 #include "Graphics/Renderer.h"
 #include "Graphics/API/PipelineLibrary.h"
 #include "Graphics/API/Shader.h"
+#include "Core/DebugUI.h"
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 
@@ -152,6 +153,7 @@ void PostProcessor::SetFog(glm::vec3 color, float density, float start) {
 }
 
 void PostProcessor::OnImGui() {
+    if (!DebugUI::IsVisible()) return;
     ImGui::Begin("Post-Processing Settings");
 
     // 1. Temporäre statische Variable für das flüssige Ziehen im UI

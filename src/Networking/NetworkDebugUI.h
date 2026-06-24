@@ -5,6 +5,7 @@
 
 #pragma once
 #include "NetworkManager.h"
+#include "../Core/DebugUI.h"
 #include <imgui.h>
 #include <cstring>
 
@@ -21,6 +22,7 @@ namespace NetDebug {
  * @param net Reference to the NetworkManager instance.
  */
 inline void Draw(NetworkManager& net) {
+    if (!DebugUI::IsVisible()) return;
     ImGui::Begin("Network");
 
     // State label

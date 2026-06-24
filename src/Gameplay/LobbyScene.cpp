@@ -3,6 +3,7 @@
 #include "MainMenuScene.h"
 #include "../Networking/NetworkManager.h"
 #include "../Core/Input.h"
+#include "../Core/DebugUI.h"
 #include "../Graphics/Renderer.h"
 #include <imgui.h>
 #include <spdlog/spdlog.h>
@@ -100,6 +101,8 @@ void LobbyScene::OnExit(SceneContext& ctx) {
 }
 
 void LobbyScene::LogicUpdate(SceneContext& ctx, float dt) {
+    if (Input::IsKeyPressed(SDLK_F12)) DebugUI::Toggle();
+
     if (!ctx.network.IsConnected()) {
         ctx.scenes.RequestTransition(new MainMenuScene());
         return;
@@ -118,7 +121,17 @@ void LobbyScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
         return;
     }
 
-    ImGui::Begin("Lobby");
+    // Center the lobby on screen, give it a fixed sensible size, lock it
+    // in place so it can't be dragged off and so it looks like a real menu.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(520.f, 0.f), ImGuiCond_Always);
+    }
+    ImGui::Begin("Lobby", nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::Text("Bugmin - Lobby");
     ImGui::Separator();
 

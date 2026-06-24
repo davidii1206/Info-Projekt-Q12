@@ -15,6 +15,7 @@
 #include "../Core/Input.h"
 #include "../Core/AssetManager.h"
 #include "../Core/MeshCollisionBuilder.h"
+#include "../Core/DebugUI.h"
 #include "../Graphics/Renderer.h"
 #include "../Graphics/TerrainMeshBuilder.h"
 #include "StructurePlacementSystem.h"
@@ -1348,6 +1349,9 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 // ---------------------------------------------------------------------------
 
 void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
+    // F12 toggles all developer ImGui panels at once.
+    if (Input::IsKeyPressed(SDLK_F12)) DebugUI::Toggle();
+
     if (!ctx.network.IsConnected()) {
         ctx.scenes.RequestTransition(new MainMenuScene());
         return;
@@ -1682,18 +1686,43 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         return;
     }
 
-    ImGui::Begin("Game");
+    // -- Game HUD: pinned to the bottom-left of the screen, no title bar,
+    // no drag, fixed width. Reads like an RTS command bar instead of a
+    // floating dev panel. --
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        const float W = 380.f;
+        const float marginX = 12.f;
+        const float marginY = 12.f;
+        ImGui::SetNextWindowPos(ImVec2(marginX, io.DisplaySize.y - marginY),
+                                ImGuiCond_Always, ImVec2(0.f, 1.f));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(W, 0.f),
+                                            ImVec2(W, io.DisplaySize.y * 0.85f));
+    }
+    constexpr ImGuiWindowFlags kHUDFlags =
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_AlwaysAutoResize;
+    ImGui::Begin("Game", nullptr, kHUDFlags);
+
+    // Mode pill — compact, looks like a status badge.
     const char* modeLabel = "Unknown";
     switch (m_CameraMode) {
-        case CameraMode::Commander: modeLabel = "Commander (Top-Down)";   break;
-        case CameraMode::Building:  modeLabel = "Building (Ortho)";      break;
+        case CameraMode::Commander: modeLabel = "Commander"; break;
+        case CameraMode::Building:  modeLabel = "Building";  break;
     }
-    ImGui::Text("Mode: %s | %s", ctx.network.IsHosting() ? "Host" : "Client", modeLabel);
-    ImGui::Text("[TAB] wechseln");
-    if (m_IdAssigned)
-        ImGui::Text("playerId=%u  netId=%u", m_MyPlayerId, m_MyNetId);
-    else
-        ImGui::Text("Waiting for server assignment...");
+    ImGui::TextColored(ImVec4(0.85f, 0.70f, 0.30f, 1.f), "%s", modeLabel);
+    ImGui::SameLine();
+    ImGui::TextDisabled("[TAB] wechseln");
+
+    // Dev-only identity lines move behind the F12 flag — cleaner default HUD.
+    if (DebugUI::IsVisible()) {
+        ImGui::Separator();
+        ImGui::TextDisabled("%s | playerId=%u netId=%u",
+                            ctx.network.IsHosting() ? "Host" : "Client",
+                            m_MyPlayerId, m_MyNetId);
+        if (!m_IdAssigned) ImGui::TextDisabled("Waiting for server assignment...");
+    }
 
     if (m_CameraMode == CameraMode::Commander) {
         ImGui::Separator();
@@ -1931,11 +1960,13 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         DrawUnitHPBars(ctx);
     }
 
-    ImGui::Begin("Shadow Debug");
-    ImGui::SliderFloat("Bias Constant", &m_ShadowBiasConstant, 0.0f, 10.0f);
-    ImGui::SliderFloat("Bias Slope", &m_ShadowBiasSlope, 0.0f, 10.0f);
-    ImGui::SliderFloat("Ortho Size", &m_ShadowOrthoSize, 5.0f, 100.0f);
-    ImGui::End();
+    if (DebugUI::IsVisible()) {
+        ImGui::Begin("Shadow Debug");
+        ImGui::SliderFloat("Bias Constant", &m_ShadowBiasConstant, 0.0f, 10.0f);
+        ImGui::SliderFloat("Bias Slope", &m_ShadowBiasSlope, 0.0f, 10.0f);
+        ImGui::SliderFloat("Ortho Size", &m_ShadowOrthoSize, 5.0f, 100.0f);
+        ImGui::End();
+    }
 }
 
 /**

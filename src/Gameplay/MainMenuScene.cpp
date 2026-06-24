@@ -2,6 +2,7 @@
 #include "LobbyScene.h"
 #include "../Networking/NetworkManager.h"
 #include "../Core/Input.h"
+#include "../Core/DebugUI.h"
 #include "../Graphics/Renderer.h"
 #include "../Core/Biome.h"
 #include <imgui.h>
@@ -45,6 +46,8 @@ void MainMenuScene::OnExit(SceneContext& ctx) {
  * @brief Called every frame to update scene logic.
  */
 void MainMenuScene::LogicUpdate(SceneContext& ctx, float dt) {
+    if (Input::IsKeyPressed(SDLK_F12)) DebugUI::Toggle();
+
     if (ctx.network.IsHosting()) {
         ctx.scenes.RequestTransition(new LobbyScene());
     }
@@ -55,33 +58,53 @@ void MainMenuScene::LogicUpdate(SceneContext& ctx, float dt) {
  * @brief Called every frame to update scene UI.
  */
 void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
-    ImGui::Begin("Main Menu");
-    ImGui::Text("Bugmin Engine - Main Menu");
-    if (ImGui::Button("Host Game")) {
+    // Center the main menu in the middle of the screen, fixed width.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(380.f, 0.f), ImGuiCond_Always);
+    }
+    ImGui::Begin("Bugmin", nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize);
+
+    ImGui::TextColored(ImVec4(0.85f, 0.70f, 0.30f, 1.f), "Bugmin");
+    ImGui::TextDisabled("Insekten-RTS - Hauptmenue");
+    ImGui::Separator();
+
+    const float W = ImGui::GetContentRegionAvail().x;
+    if (ImGui::Button("Host Game", ImVec2(W, 32))) {
         if (ctx.network.StartHost()) {
             spdlog::info("Hosting game on port 25565");
         }
     }
-    ImGui::InputText("IP", m_ConnectIP, sizeof(m_ConnectIP));
-    if (ImGui::Button("Connect") && !ctx.network.IsConnected()) {
+    ImGui::Spacing();
+    ImGui::TextDisabled("Beitreten:");
+    ImGui::SetNextItemWidth(W);
+    ImGui::InputText("##IP", m_ConnectIP, sizeof(m_ConnectIP));
+    if (ImGui::Button("Connect", ImVec2(W, 28)) && !ctx.network.IsConnected()) {
         if (ctx.network.Connect(m_ConnectIP)) {
             spdlog::info("Connecting to {}", m_ConnectIP);
         }
     }
     if (ctx.network.IsConnected()) {
-        ImGui::SameLine();
-        if (ImGui::Button("Open Lobby")) {
+        if (ImGui::Button("Open Lobby", ImVec2(W, 32))) {
             ctx.scenes.RequestTransition(new LobbyScene());
         }
     }
-    if (ImGui::Button("Quit")) {
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (ImGui::Button("Quit", ImVec2(W, 26))) {
         SDL_Event quitEvent;
         quitEvent.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&quitEvent);
     }
+    ImGui::TextDisabled("F12 = Entwicklerwerkzeuge");
     ImGui::End();
 
-    // Terrain Generation Debug Window
+    // Terrain Generation Debug Window — only visible when dev panels are on.
+    if (!DebugUI::IsVisible()) { return; }
     ImGui::Begin("World Generation (WorldManager)");
     ImGui::SliderInt("Terrains", &m_GenConfig.numTerrains, 4, 64);
     ImGui::SliderInt("Relaxation", &m_GenConfig.relaxationIterations, 0, 10);

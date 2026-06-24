@@ -8,6 +8,7 @@
 #include <entt/entt.hpp>
 #include "World.h"
 #include "Components.h"
+#include "../Core/DebugUI.h"
 
 /**
  * @namespace WorldDebugUI
@@ -101,6 +102,7 @@ inline void DrawRegistry(const char* label, entt::registry& reg) {
  * @param world Reference to the World instance to debug.
  */
 inline void Draw(World& world) {
+    if (!DebugUI::IsVisible()) return;
     ImGui::Begin("World Debug");
 
     ImGui::Text("Scene:       %s", world.GetCurrentSceneName());
