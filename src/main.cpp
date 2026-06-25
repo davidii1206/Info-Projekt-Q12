@@ -17,6 +17,10 @@
  * @return int Exit code (0 for success, 1 for failure).
  */
 int main(int argc, char* argv[]) {
+    // Force every spdlog message to flush immediately so diagnostic output
+    // never lags behind a freeze (otherwise the last few lines before a
+    // hang can be lost in the internal buffer and we misdiagnose).
+    spdlog::flush_on(spdlog::level::info);
     try {
         Application app;
         app.Run();

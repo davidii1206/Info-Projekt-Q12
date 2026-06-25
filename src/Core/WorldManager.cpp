@@ -4,6 +4,8 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <numeric>
+#include <unordered_set>
 #include <spdlog/spdlog.h>
 
 #define JC_VORONOI_IMPLEMENTATION
@@ -324,9 +326,11 @@ void WorldManager::GenerateTileGrid() {
     };
 
     struct CorridorCandidate {
-        int ax, az, bx, bz; // the two parallel cliff tiles (A and B)
+        int ax, az, bx, bz;  // the two parallel cliff tiles (A and B)
         int pdx, pdz;        // unit perpendicular vector from A to B
         int slopeDir;        // direction of descent (rampDir)
+        uint16_t terrUp;     // territory of the uphill plateau approach
+        uint16_t terrDown;   // territory of the downhill plateau approach
         float score;
     };
     std::vector<CorridorCandidate> corridorCandidates;
@@ -372,7 +376,22 @@ void WorldManager::GenerateTileGrid() {
                     float score = (float)std::min(upApp, dnApp);
                     if (score < 1.f) continue; // must have at least one tile of approach on each side
 
-                    corridorCandidates.push_back({tx, tz, bx, bz, kDX[perpD], kDZ[perpD], sD, score});
+                    // Sample the territory on each side from the first plateau tile in the
+                    // approach direction (more reliable than the cliff's own territoryId,
+                    // which sits exactly on the Voronoi border).
+                    int upTx = tx + kDX[sD ^ 1], upTz = tz + kDZ[sD ^ 1];
+                    uint16_t terrUp = (upTx >= 0 && upTx < m_GridSize && upTz >= 0 && upTz < m_GridSize)
+                        ? m_Tiles[(size_t)upTz * m_GridSize + upTx].territoryId
+                        : A.territoryId;
+                    uint16_t terrDown = Adown.territoryId;
+
+                    // Cross-biome corridors are far more important than in-biome ones:
+                    // they're the only way to walk between territories. Bias the greedy
+                    // selection heavily toward them.
+                    if (terrUp != terrDown) score += 1000.f;
+
+                    corridorCandidates.push_back({tx, tz, bx, bz, kDX[perpD], kDZ[perpD], sD,
+                                                  terrUp, terrDown, score});
                 }
             }
         }
@@ -437,18 +456,103 @@ void WorldManager::GenerateTileGrid() {
         }
     }
 
-    // Fallback: force a corridor for any tier-pair still not covered.
-    for (int lower = waterCutoff; lower < numTiers - 1; ++lower) {
-        if (rampPairCovered[(size_t)lower]) continue;
+    // --- Biome-pair connectivity fallback ----------------------------------------
+    // Goal: every two territories that share a tile-border in the Voronoi map must
+    // be reachable from each other via walkable terrain (Plateau or Ramp tiles).
+    // The greedy carve above already prefers cross-biome candidates, but small
+    // borders, spacing constraints, or rare multi-tier cliffs can still leave a
+    // biome pair without a usable crossing. Here we (a) catalogue every adjacent
+    // biome pair, (b) build a Union-Find of which territories are walkably linked,
+    // and (c) force a corridor for any adjacent pair still not linked.
+    auto packPair = [](uint16_t a, uint16_t b) -> uint32_t {
+        if (a > b) std::swap(a, b);
+        return ((uint32_t)a << 16) | (uint32_t)b;
+    };
+
+    std::unordered_set<uint32_t> adjacentPairs;
+    for (int tz = 0; tz < m_GridSize; ++tz) {
+        for (int tx = 0; tx < m_GridSize; ++tx) {
+            uint16_t t = m_Tiles[(size_t)tz * m_GridSize + tx].territoryId;
+            for (int d = 0; d < 4; ++d) {
+                int nx = tx + kDX[d], nz = tz + kDZ[d];
+                if (nx < 0 || nx >= m_GridSize || nz < 0 || nz >= m_GridSize) continue;
+                uint16_t n = m_Tiles[(size_t)nz * m_GridSize + nx].territoryId;
+                if (n != t && t != 0xFFFF && n != 0xFFFF) adjacentPairs.insert(packPair(t, n));
+            }
+        }
+    }
+
+    std::vector<int> uf((size_t)N);
+    std::iota(uf.begin(), uf.end(), 0);
+    auto ufFind = [&](int x) {
+        while (uf[(size_t)x] != x) { uf[(size_t)x] = uf[(size_t)uf[(size_t)x]]; x = uf[(size_t)x]; }
+        return x;
+    };
+    auto ufUnion = [&](int a, int b) {
+        a = ufFind(a); b = ufFind(b);
+        if (a != b) uf[(size_t)a] = b;
+    };
+
+    auto rebuildUnion = [&]() {
+        std::iota(uf.begin(), uf.end(), 0);
+        for (int tz = 0; tz < m_GridSize; ++tz) {
+            for (int tx = 0; tx < m_GridSize; ++tx) {
+                const auto& t = m_Tiles[(size_t)tz * m_GridSize + tx];
+                if (t.surface != TileSurface::Plateau && t.surface != TileSurface::Ramp) continue;
+                for (int d = 0; d < 4; ++d) {
+                    int nx = tx + kDX[d], nz = tz + kDZ[d];
+                    if (nx < 0 || nx >= m_GridSize || nz < 0 || nz >= m_GridSize) continue;
+                    const auto& nt = m_Tiles[(size_t)nz * m_GridSize + nx];
+                    if (nt.surface != TileSurface::Plateau && nt.surface != TileSurface::Ramp) continue;
+                    if (nt.territoryId != t.territoryId && t.territoryId < N && nt.territoryId < N)
+                        ufUnion((int)t.territoryId, (int)nt.territoryId);
+                }
+            }
+        }
+    };
+
+    rebuildUnion();
+
+    int forcedCorridors = 0;
+    for (uint32_t key : adjacentPairs) {
+        uint16_t a = (uint16_t)(key >> 16);
+        uint16_t b = (uint16_t)(key & 0xFFFFu);
+        if (ufFind((int)a) == ufFind((int)b)) continue;
+        // Find any candidate that bridges exactly this biome pair and whose
+        // cliff tiles are still cliffs (i.e. not already carved by a prior pass).
         for (auto& c : corridorCandidates) {
+            bool matches = (c.terrUp == a && c.terrDown == b) ||
+                           (c.terrUp == b && c.terrDown == a);
+            if (!matches) continue;
             auto& tA = m_Tiles[(size_t)c.az * m_GridSize + c.ax];
             auto& tB = m_Tiles[(size_t)c.bz * m_GridSize + c.bx];
             if (tA.surface != TileSurface::Cliff || tB.surface != TileSurface::Cliff) continue;
-            if ((int)tA.tier - 1 != lower) continue;
             carvePair(c.ax, c.az, c.bx, c.bz, c.slopeDir);
+            ufUnion((int)a, (int)b);
+            ++forcedCorridors;
             break;
         }
     }
+
+    // --- Connectivity verification (Phase 3) -------------------------------------
+    // Re-derive the UF from the post-carve grid and log any adjacent biome pairs
+    // that are STILL not connected. Those are the hard cases — usually a biome
+    // border that is a multi-tier cliff (no one-tier candidate exists at all).
+    rebuildUnion();
+    int disconnected = 0;
+    for (uint32_t key : adjacentPairs) {
+        uint16_t a = (uint16_t)(key >> 16);
+        uint16_t b = (uint16_t)(key & 0xFFFFu);
+        if (ufFind((int)a) != ufFind((int)b)) ++disconnected;
+    }
+    if (disconnected == 0) {
+        spdlog::info("WorldManager: all {} adjacent biome pairs connected ({} forced corridors)",
+                     adjacentPairs.size(), forcedCorridors);
+    } else {
+        spdlog::warn("WorldManager: {}/{} adjacent biome pairs UNREACHABLE (likely multi-tier cliffs)",
+                     disconnected, adjacentPairs.size());
+    }
+    (void)rampPairCovered; // legacy per-tier coverage info, now unused
 
     // --- Buildable slots --------------------------------------------------------
     // Flat plateau tiles whose 4 neighbours are all in-bounds plateau tiles of

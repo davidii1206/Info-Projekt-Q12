@@ -277,14 +277,6 @@ ScatterConfig ScatterConfig::Default(uint32_t seed) {
         l.scaleXZJitter = 0.18f; l.scaleYJitter = 0.35f;
         cfg.layers.push_back(l);
     }
-    {
-        auto l = layer("pine_tall", "assets/PineTree_Tall_1.glb",
-            {BugClass::BeesWasps},
-            0.45f, 3.0f, 7.0f, 0.07f, 0.0f, false);
-        l.maxSlope = 0.28f; l.cliffBuffer = 2;
-        l.scaleXZJitter = 0.15f; l.scaleYJitter = 0.30f;
-        cfg.layers.push_back(l);
-    }
 
     // -----------------------------------------------------------------------
     // Light airy canopy — ButterfliesMoths (mostly open, few sparse trees).
