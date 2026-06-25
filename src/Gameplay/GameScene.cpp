@@ -2116,11 +2116,143 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         // Keyboard shortcut M
         if (ImGui::IsKeyPressed(ImGuiKey_M))
             m_ShowMapOverlay = !m_ShowMapOverlay;
+    }
 
-        // Map overlay disabled for now — ingame 3D fog cover mesh handles visibility
-        if (m_ShowMapOverlay) {
-            // no-op; the ImGui per-cell overlay was replaced by the 3D fog cover mesh
+    if (m_ShowMapOverlay) {
+        const FogGrid& fog = LocalFog(ctx);
+        if (!fog.IsInitialised()) return;
+
+        // Regenerate map texture if dirty (fog changed since last open).
+        if (m_MapTextureDirty || !m_MapTexture) {
+            GenerateMapTexture(ctx);
         }
+
+        const float worldMinX = fog.worldMin.x;
+        const float worldMaxX = fog.worldMax.x;
+        const float worldMinZ = fog.worldMin.z;
+        const float worldMaxZ = fog.worldMax.z;
+        const float worldSpanX = worldMaxX - worldMinX;
+        const float worldSpanZ = worldMaxZ - worldMinZ;
+
+        // Get the current ImGui viewport size for the full-screen overlay.
+        ImVec2 vpSize = ImGui::GetMainViewport()->Size;
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(vpSize);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+
+        constexpr float kMapMargin = 40.f;
+        float availW = vpSize.x - kMapMargin * 2.f;
+        float availH = vpSize.y - kMapMargin * 2.f;
+        float mapSize = std::min(availW, availH);
+        ImVec2 mapTL((vpSize.x - mapSize) * 0.5f, (vpSize.y - mapSize) * 0.5f);
+        ImVec2 mapBR(mapTL.x + mapSize, mapTL.y + mapSize);
+
+        ImGui::Begin("##MapOverlay", nullptr,
+                     ImGuiWindowFlags_NoTitleBar |
+                     ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoScrollbar |
+                     ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus |
+                     ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoDecoration);
+
+        // Draw the map texture.
+        ImTextureID texID = (ImTextureID)m_MapTexture->GetHandle();
+        ImGui::SetCursorScreenPos(mapTL);
+        ImGui::Image(texID, ImVec2(mapSize, mapSize));
+        bool mapHovered = ImGui::IsItemHovered();
+
+        // Collect all entity markers (units + buildings in revealed fog).
+        struct Marker { float wx, wz; };
+        std::vector<Marker> markers;
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        // Unit markers
+        {
+            auto view = ctx.clientRegistry.view<TransformComponent, UnitComponent>();
+            for (auto e : view) {
+                auto& tf = view.get<TransformComponent>(e);
+                auto& uc = view.get<UnitComponent>(e);
+
+                int fcx, fcz;
+                fog.WorldToCell(glm::vec3(tf.position.x, 0.f, tf.position.z), fcx, fcz);
+                if (!fog.IsRevealed(fcx, fcz)) continue;
+
+                float u = (tf.position.x - worldMinX) / worldSpanX;
+                float v = (tf.position.z - worldMinZ) / worldSpanZ;
+                ImVec2 dp(mapTL.x + u * mapSize, mapTL.y + v * mapSize);
+
+                ImU32 col = (uc.teamId == m_MyPlayerId) ? IM_COL32(0, 255, 0, 220)
+                                                        : IM_COL32(255, 0, 0, 180);
+                dl->AddCircleFilled(dp, 3.f, col);
+                markers.push_back({tf.position.x, tf.position.z});
+            }
+        }
+
+        // Building markers
+        {
+            auto view = ctx.clientRegistry.view<TransformComponent, BuildingComponent>();
+            for (auto e : view) {
+                auto& tf = view.get<TransformComponent>(e);
+                auto& bc = view.get<BuildingComponent>(e);
+                if (bc.destroyed) continue;
+
+                int fcx, fcz;
+                fog.WorldToCell(glm::vec3(tf.position.x, 0.f, tf.position.z), fcx, fcz);
+                if (!fog.IsRevealed(fcx, fcz)) continue;
+
+                float u = (tf.position.x - worldMinX) / worldSpanX;
+                float v = (tf.position.z - worldMinZ) / worldSpanZ;
+                ImVec2 dp(mapTL.x + u * mapSize, mapTL.y + v * mapSize);
+
+                ImU32 col = (bc.teamId == m_MyPlayerId) ? IM_COL32(0, 255, 0, 220)
+                                                        : IM_COL32(255, 0, 0, 180);
+                dl->AddCircleFilled(dp, 4.f, col);
+                markers.push_back({tf.position.x, tf.position.z});
+            }
+        }
+
+        // Click-to-teleport: only teleport when clicking on a marker.
+        if (mapHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            ImVec2 mousePos = ImGui::GetMousePos();
+            float u = (mousePos.x - mapTL.x) / mapSize;
+            float v = (mousePos.y - mapTL.y) / mapSize;
+            u = std::clamp(u, 0.f, 1.f);
+            v = std::clamp(v, 0.f, 1.f);
+
+            // Find the nearest marker within a pick radius (~8 screen pixels).
+            float wx = worldMinX + u * worldSpanX;
+            float wz = worldMinZ + v * worldSpanZ;
+            constexpr float kPickPx = 8.f;
+            float bestDist = kPickPx * kPickPx;
+            bool hit = false;
+            for (const auto& m : markers) {
+                float dx = ((m.wx - worldMinX) / worldSpanX * mapSize + mapTL.x) - mousePos.x;
+                float dz = ((m.wz - worldMinZ) / worldSpanZ * mapSize + mapTL.y) - mousePos.y;
+                float d2 = dx * dx + dz * dz;
+                if (d2 < bestDist) {
+                    bestDist = d2;
+                    wx = m.wx;
+                    wz = m.wz;
+                    hit = true;
+                }
+            }
+            if (hit) {
+                m_Camera->m_Position = glm::vec3(wx, m_TopDownHeight, wz);
+                m_Camera->UpdateVectors();
+            }
+        }
+        if (mapHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            m_ShowMapOverlay = false;
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar(2);
     }
 
     // HP bars above units (visible in both top-down modes)
@@ -2301,6 +2433,7 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
             }
             if (anyChanged) {
                 m_ScatterBatchesDirty = true;
+                m_MapTextureDirty     = true;
             }
         }
         TerritorySystem::Update(ctx.serverRegistry, dt);
@@ -2683,6 +2816,7 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
             }
             if (m_ClientFog.ApplyDelta(pkt->cells, pkt->count)) {
                 m_ScatterBatchesDirty = true;
+                m_MapTextureDirty     = true;
             }
         }
     }
@@ -2692,6 +2826,7 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (pkt) {
             HandleFogSnapshot(*pkt);
             m_ScatterBatchesDirty = true;
+            m_MapTextureDirty     = true;
         }
     }
 
