@@ -309,8 +309,18 @@ private:
         float timer = 0.f;
         float maxDuration = 0.5f;
         float maxRadius = 2.0f;
+        int type = 0; // 0 = Fire/Kamikaze, 1 = Toxic Hairs (purple/green), 2 = Sleep Pollen (blue/cyan), 3 = Healing (emerald green)
     };
     std::vector<VisualExplosion> m_VisualExplosions;
+
+    struct SlimeNode {
+        glm::vec3 position;
+        uint32_t teamId;
+        float timer;
+    };
+    std::vector<SlimeNode> m_ServerSlimeNodes;
+    std::vector<SlimeNode> m_ClientSlimeNodes;
+    float m_SlimeDropAccum = 0.f;
     /// Direct control mode status
     bool                  m_DirectControlActive = false;
     /// Network ID of the unit under direct control

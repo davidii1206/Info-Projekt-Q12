@@ -1421,6 +1421,31 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         }
     }
 
+    // Tick client slime nodes
+    for (auto it = m_ClientSlimeNodes.begin(); it != m_ClientSlimeNodes.end(); ) {
+        it->timer -= dt;
+        if (it->timer <= 0.f) {
+            it = m_ClientSlimeNodes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Drop client-side slime trails
+    static float clientSlimeAccum = 0.f;
+    clientSlimeAccum += dt;
+    if (clientSlimeAccum >= 0.3f) {
+        clientSlimeAccum = 0.f;
+        auto view = ctx.clientRegistry.view<TransformComponent, UnitComponent>();
+        for (auto ce : view) {
+            auto& uc = view.get<UnitComponent>(ce);
+            if (uc.bugClass == BugClass::Snails && uc.tier == 1) {
+                auto& tf = view.get<TransformComponent>(ce);
+                m_ClientSlimeNodes.push_back({tf.position, uc.teamId, 5.0f});
+            }
+        }
+    }
+
     // F12 toggles all developer ImGui panels at once.
     if (Input::IsKeyPressed(SDLK_F12)) DebugUI::Toggle();
 
@@ -3132,13 +3157,36 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         auto entity = it->second;
         auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
         auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
-        if (uc && tf && uc->bugClass == BugClass::BeesWasps && uc->tier == 1) {
-            VisualExplosion expl;
-            expl.position = tf->position;
-            expl.timer = 0.f;
-            expl.maxDuration = 0.5f;
-            expl.maxRadius = 2.5f;
-            m_VisualExplosions.push_back(expl);
+        if (uc && tf) {
+            if (uc->bugClass == BugClass::BeesWasps && uc->tier == 1) {
+                VisualExplosion expl;
+                expl.position = tf->position;
+                expl.timer = 0.f;
+                expl.maxDuration = 0.5f;
+                expl.maxRadius = 2.5f;
+                m_VisualExplosions.push_back(expl);
+            }
+            else if (uc->tier == 1) {
+                // Check if devoured by a nearby Tigerschnegel (Snails Tier 3)
+                auto snailView = ctx.clientRegistry.view<TransformComponent, UnitComponent>();
+                for (auto sEnt : snailView) {
+                    auto& sUc = snailView.get<UnitComponent>(sEnt);
+                    if (sUc.bugClass == BugClass::Snails && sUc.tier == 3) {
+                        auto& sTf = snailView.get<TransformComponent>(sEnt);
+                        float d = glm::length(glm::vec2(sTf.position.x - tf->position.x, sTf.position.z - tf->position.z));
+                        if (d <= 2.2f) {
+                            VisualExplosion expl;
+                            expl.position = tf->position;
+                            expl.timer = 0.f;
+                            expl.maxDuration = 0.4f;
+                            expl.maxRadius = 1.8f;
+                            expl.type = 1; // Reuse toxic purple splash for devour!
+                            m_VisualExplosions.push_back(expl);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         ctx.clientRegistry.destroy(entity);
@@ -3154,8 +3202,58 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (!pkt) break;
         auto it = m_ClientNetMap.find(pkt->netId);
         if (it == m_ClientNetMap.end()) continue;
-        auto* hc = ctx.clientRegistry.try_get<HealthComponent>(it->second);
-        if (hc) hc->hp = pkt->hp;
+        auto entity = it->second;
+        auto* hc = ctx.clientRegistry.try_get<HealthComponent>(entity);
+        if (hc) {
+            // Visual triggers on health changes
+            if (pkt->hp < hc->hp) {
+                auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
+                auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
+                if (uc && tf) {
+                    if (uc->bugClass == BugClass::ButterfliesMoths && uc->tier == 3) {
+                        // Brennhaar-Raupe toxic hairs visual explosion
+                        VisualExplosion expl;
+                        expl.position = tf->position;
+                        expl.timer = 0.f;
+                        expl.maxDuration = 0.5f;
+                        expl.maxRadius = 3.0f;
+                        expl.type = 1; // type 1 = Toxic Hairs (purple/green)
+                        m_VisualExplosions.push_back(expl);
+                    }
+                }
+            }
+            
+            // Check for Totenkopfschwärmer triggering a heal or pollen visual
+            auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
+            auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
+            if (uc && tf && uc->bugClass == BugClass::ButterfliesMoths && uc->tier == 5) {
+                // Determine whether it healed allies or stunned enemies
+                bool anyDamagedAlly = false;
+                auto allyView = ctx.clientRegistry.view<UnitComponent, HealthComponent, TransformComponent>();
+                for (auto fEnt : allyView) {
+                    auto& fUc = allyView.get<UnitComponent>(fEnt);
+                    auto& fHc = allyView.get<HealthComponent>(fEnt);
+                    if (fUc.teamId == uc->teamId && fHc.hp < fHc.maxHp) {
+                        auto& fTf = allyView.get<TransformComponent>(fEnt);
+                        float dist = glm::length(glm::vec2(fTf.position.x - tf->position.x, fTf.position.z - tf->position.z));
+                        if (dist <= 4.0f) {
+                            anyDamagedAlly = true;
+                            break;
+                        }
+                    }
+                }
+
+                VisualExplosion expl;
+                expl.position = tf->position;
+                expl.timer = 0.f;
+                expl.maxDuration = 0.6f;
+                expl.maxRadius = 4.0f;
+                expl.type = anyDamagedAlly ? 3 : 2; // Type 3 = Heal (emerald green), Type 2 = Sleep Pollen (blue/cyan)
+                m_VisualExplosions.push_back(expl);
+            }
+
+            hc->hp = pkt->hp;
+        }
     }
 
     // Territory snapshot
@@ -3443,7 +3541,7 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
 
     // Position: ground units sit on terrain, flying units hover above it.
     pos.y = GroundHeightAt(m_World, pos.x, pos.z);
-    if (IsFlying(bc))
+    if (IsFlying(bc, tier))
         pos.y += 4.f;
 
     // Define unit properties based on bugClass and tier
@@ -3490,6 +3588,80 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
             attackRate = 1.2f;
             unitScale = 1.6f;
         }
+    } else if (bc == BugClass::Snails) {
+        if (tier == 1) { // Nacktschnecke (crawling melee, leaves slime slow trail)
+            if (hp < 0.f) hp = 100.f;
+            dmg = 8.f;
+            speed = 3.5f;
+            attackRange = 1.3f;
+            attackRate = 1.5f;
+            unitScale = 0.6f;
+        } else if (tier == 2) { // Hain-Bänderschnecke (crawling light tank, retreats to shell at low HP)
+            if (hp < 0.f) hp = 170.f;
+            dmg = 12.f;
+            speed = 2.8f;
+            attackRange = 1.4f;
+            attackRate = 1.8f;
+            unitScale = 0.9f;
+        } else if (tier == 3) { // Tigerschnegel (surprisingly fast, devours T1 units)
+            if (hp < 0.f) hp = 140.f;
+            dmg = 18.f;
+            speed = 8.5f;
+            attackRange = 1.4f;
+            attackRate = 1.4f;
+            unitScale = 0.8f;
+        } else if (tier == 4) { // Turmdeckelschnecke (crawling front-shield barricade)
+            if (hp < 0.f) hp = 240.f;
+            dmg = 14.f;
+            speed = 2.0f;
+            attackRange = 1.3f;
+            attackRate = 1.9f;
+            unitScale = 1.1f;
+        } else if (tier == 5) { // Weinbergschnecke (gigantic rolling siege tank, ignores small hits, 3x structure dmg)
+            if (hp < 0.f) hp = 450.f;
+            dmg = 35.f;
+            speed = 1.8f;
+            attackRange = 1.8f;
+            attackRate = 2.2f;
+            unitScale = 1.8f;
+        }
+    } else if (bc == BugClass::ButterfliesMoths) {
+        if (tier == 1) { // Blattraupe (melee meat shield, slow, high HP, cheap)
+            if (hp < 0.f) hp = 120.f;
+            dmg = 5.f;
+            speed = 3.5f;
+            attackRange = 1.3f;
+            attackRate = 1.8f;
+            unitScale = 0.5f;
+        } else if (tier == 2) { // Tagfalter (scout, flying, fast, no damage)
+            if (hp < 0.f) hp = 55.f;
+            dmg = 1.f;
+            speed = 14.f;
+            attackRange = 1.5f;
+            attackRate = 2.0f;
+            unitScale = 0.8f;
+        } else if (tier == 3) { // Brennhaar-Raupe (defensive crawler, releases toxic hairs when hit)
+            if (hp < 0.f) hp = 160.f;
+            dmg = 12.f;
+            speed = 4.5f;
+            attackRange = 1.5f;
+            attackRate = 1.6f;
+            unitScale = 0.6f;
+        } else if (tier == 4) { // Nachtfalter / Motte (flying support stealth shroud)
+            if (hp < 0.f) hp = 90.f;
+            dmg = 8.f;
+            speed = 8.0f;
+            attackRange = 4.0f; // Ranged dust spit
+            attackRate = 1.8f;
+            unitScale = 0.8f;
+        } else if (tier == 5) { // Totenkopfschwärmer (flying magical elite: heal / stun area burst)
+            if (hp < 0.f) hp = 240.f;
+            dmg = 10.f;
+            speed = 9.5f;
+            attackRange = 4.5f;
+            attackRate = 2.5f;
+            unitScale = 1.4f;
+        }
     } else {
         // Fallback scaling for other factions
         if (tier == 1) {
@@ -3531,7 +3703,7 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
     m_ServerNetMap[netId] = e;
 
     // Dynamic box for ground units
-    if (!IsFlying(bc) && ctx.physics) {
+    if (!IsFlying(bc, tier) && ctx.physics) {
         uint32_t physicsId = ctx.world->GetNextPhysicsID();
         PhysicsBodyHandle bh = ctx.physics->AddUnitBox(
             physicsId,
@@ -3824,6 +3996,30 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
     struct KillRec { entt::entity dead; uint32_t netId; uint32_t killerTeam; };
     std::vector<KillRec> toKillMovement;
 
+    // Drop and update server-side slime trails
+    m_SlimeDropAccum += dt;
+    if (m_SlimeDropAccum >= 0.3f) {
+        m_SlimeDropAccum = 0.f;
+        auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent>();
+        for (auto se : view) {
+            auto& uc = view.get<UnitComponent>(se);
+            if (uc.bugClass == BugClass::Snails && uc.tier == 1) {
+                auto& tf = view.get<TransformComponent>(se);
+                m_ServerSlimeNodes.push_back({tf.position, uc.teamId, 5.0f});
+            }
+        }
+    }
+
+    // Tick server slime nodes
+    for (auto it = m_ServerSlimeNodes.begin(); it != m_ServerSlimeNodes.end(); ) {
+        it->timer -= dt;
+        if (it->timer <= 0.f) {
+            it = m_ServerSlimeNodes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Build a per‑tile occupancy grid from buildings (2×2 blocks).
     const int gs = m_World.GetGridSize();
     std::vector<bool> occupiedTiles(static_cast<size_t>(gs) * gs, false);
@@ -3859,11 +4055,45 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         auto& mv = view.get<MovementComponent>(e);
         auto& mo = view.get<MovementOrderComponent>(e);
         auto& uc = view.get<UnitComponent>(e);
-        bool isFlying  = IsFlying(uc.bugClass);
+        bool isFlying  = IsFlying(uc.bugClass, uc.tier);
         bool isClimber = IsClimber(uc.bugClass);
 
         // Apply slow debuffs if any
         float currentSpeed = mv.speed;
+
+        // Apply shell retreat movement freeze
+        if (ctx.serverRegistry.any_of<ShellRetreatComponent>(e)) {
+            currentSpeed = 0.f;
+        }
+
+        // Apply slime slow if on an enemy slime trail
+        bool onEnemySlime = false;
+        for (const auto& node : m_ServerSlimeNodes) {
+            if (node.teamId != uc.teamId) {
+                float dist = glm::length(glm::vec2(node.position.x - tf.position.x, node.position.z - tf.position.z));
+                if (dist <= 1.5f) {
+                    onEnemySlime = true;
+                    break;
+                }
+            }
+        }
+
+        if (onEnemySlime) {
+            auto& slow = ctx.serverRegistry.get_or_emplace<SlowDebuffComponent>(e);
+            slow.timer = 0.5f;
+            slow.speedMultiplier = 0.3f; // Drastic slow!
+            slow.damagePerSecond = 0.f;
+        }
+
+        // Apply stun debuffs if any
+        if (auto* stun = ctx.serverRegistry.try_get<StunDebuffComponent>(e)) {
+            stun->timer -= dt;
+            if (stun->timer > 0.f) {
+                currentSpeed = 0.f;
+            } else {
+                ctx.serverRegistry.remove<StunDebuffComponent>(e);
+            }
+        }
         if (auto* slow = ctx.serverRegistry.try_get<SlowDebuffComponent>(e)) {
             slow->timer -= dt;
             if (slow->timer > 0.f) {
@@ -4162,7 +4392,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             for (auto other : sepView) {
                 if (other == e) continue;
                 const auto& otherUc = sepView.get<UnitComponent>(other);
-                if (IsFlying(otherUc.bugClass) != isFlying) continue;
+                if (IsFlying(otherUc.bugClass, otherUc.tier) != isFlying) continue;
 
                 const auto& otf = sepView.get<TransformComponent>(other);
                 glm::vec2 d(curXZ.x - otf.position.x, curXZ.y - otf.position.z);
@@ -4301,6 +4531,57 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
  */
 void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 {
+    // Update Hain-Bänderschnecke shell retreat state
+    {
+        auto view = ctx.serverRegistry.view<UnitComponent, HealthComponent>();
+        for (auto unitEnt : view) {
+            auto& uc = view.get<UnitComponent>(unitEnt);
+            auto& hc = view.get<HealthComponent>(unitEnt);
+            if (uc.bugClass == BugClass::Snails && uc.tier == 2 && !hc.dead) {
+                bool hasShell = ctx.serverRegistry.any_of<ShellRetreatComponent>(unitEnt);
+                if (!hasShell && hc.hp < hc.maxHp * 0.3f) {
+                    ctx.serverRegistry.emplace<ShellRetreatComponent>(unitEnt);
+                    spdlog::debug("Hain-Bänderschnecke: Entered shell retreat!");
+                } else if (hasShell) {
+                    // Regenerate HP while in shell
+                    hc.hp = glm::min(hc.hp + 12.f * dt, hc.maxHp);
+                    
+                    // Broadcast HP update
+                    auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(unitEnt);
+                    if (tnc) {
+                        UnitHpUpdatePacket hp_pkt;
+                        hp_pkt.netId = tnc->netId;
+                        hp_pkt.hp    = hc.hp;
+                        ctx.network.BroadcastToAll(hp_pkt);
+                    }
+
+                    if (hc.hp >= hc.maxHp * 0.9f) {
+                        ctx.serverRegistry.remove<ShellRetreatComponent>(unitEnt);
+                        spdlog::debug("Hain-Bänderschnecke: Exited shell retreat!");
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper to check if a unit is stealthed under a friendly Motte (ButterfliesMoths Tier 4)
+    auto IsUnitStealthed = [&](entt::entity unitEnt, uint32_t teamId, const glm::vec3& unitPos) -> bool {
+        auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+        for (auto mothEnt : view) {
+            if (mothEnt == unitEnt) continue;
+            auto& mUc = view.get<UnitComponent>(mothEnt);
+            auto& mHc = view.get<HealthComponent>(mothEnt);
+            if (mUc.teamId == teamId && !mHc.dead && mUc.bugClass == BugClass::ButterfliesMoths && mUc.tier == 4) {
+                auto& mTf = view.get<TransformComponent>(mothEnt);
+                float dist = glm::length(glm::vec2(mTf.position.x - unitPos.x, mTf.position.z - unitPos.z));
+                if (dist <= 5.0f) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
     // Collect all units with health for target queries
     struct UnitInfo { entt::entity e; glm::vec3 pos; uint32_t team; float hp; };
     std::vector<UnitInfo> unitInfos;
@@ -4330,6 +4611,16 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
         auto& mo  = combatView.get<MovementOrderComponent>(e);
 
         if (hc.dead) continue;
+
+        // Freeze combat actions if unit is currently stunned
+        if (ctx.serverRegistry.any_of<StunDebuffComponent>(e)) {
+            continue;
+        }
+
+        // Freeze combat actions if Hain-Bänderschnecke is in shell retreat
+        if (ctx.serverRegistry.any_of<ShellRetreatComponent>(e)) {
+            continue;
+        }
 
         // Tick attack cooldown
         if (cc.attackCooldown > 0.f) cc.attackCooldown -= dt;
@@ -4372,6 +4663,7 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
             // Check immediate units
             for (const auto& info : unitInfos) {
                 if (info.team == uc.teamId) continue;
+                if (IsUnitStealthed(info.e, info.team, info.pos)) continue;
                 float d = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
                 if (d < bestDist) {
                     bestDist = d;
@@ -4409,6 +4701,7 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
                 // Check units in sight range
                 for (const auto& info : unitInfos) {
                     if (info.team == uc.teamId) continue;
+                    if (IsUnitStealthed(info.e, info.team, info.pos)) continue;
                     float d = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
                     if (d < bestSightDist) {
                         bestSightDist = d;
@@ -4454,12 +4747,92 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
             mo.active = false;
 
             if (cc.attackCooldown <= 0.f) {
+                // SPECIAL LOGIC: Lepidoptera Tier 5 (Totenkopfschwärmer) area heal or sleep pollen (stun)
+                if (uc.bugClass == BugClass::ButterfliesMoths && uc.tier == 5) {
+                    cc.attackCooldown = cc.attackRate; // Put on cooldown
+
+                    // 1. Try to find damaged friendly units in 4.0f XZ radius
+                    std::vector<entt::entity> friendliesToHeal;
+                    auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+                    for (auto fEnt : view) {
+                        auto& fUc = view.get<UnitComponent>(fEnt);
+                        auto& fHc = view.get<HealthComponent>(fEnt);
+                        if (fUc.teamId == uc.teamId && !fHc.dead && fHc.hp < fHc.maxHp) {
+                            auto& fTf = view.get<TransformComponent>(fEnt);
+                            float dist = glm::length(glm::vec2(fTf.position.x - tf.position.x, fTf.position.z - tf.position.z));
+                            if (dist <= 4.0f) {
+                                friendliesToHeal.push_back(fEnt);
+                            }
+                        }
+                    }
+
+                    if (!friendliesToHeal.empty()) {
+                        // Healing Burst!
+                        for (auto fEnt : friendliesToHeal) {
+                            auto& fHc = view.get<HealthComponent>(fEnt);
+                            fHc.hp = glm::min(fHc.hp + 20.f, fHc.maxHp);
+
+                            // Broadcast HP update
+                            auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(fEnt);
+                            if (tnc) {
+                                UnitHpUpdatePacket hp_pkt;
+                                hp_pkt.netId = tnc->netId;
+                                hp_pkt.hp    = fHc.hp;
+                                ctx.network.BroadcastToAll(hp_pkt);
+                            }
+                        }
+
+                        // Broadcast self HP update to trigger visual heal explosion on client
+                        auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                        if (enc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = enc->netId;
+                            hp_pkt.hp    = hc.hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
+                        spdlog::debug("Totenkopfschwärmer: Casted Healing Burst on {} units", friendliesToHeal.size());
+                        continue; // Done with this tick's action
+                    }
+
+                    // 2. If no friendlies to heal, try to find enemies in 4.0f XZ radius to Stun!
+                    std::vector<entt::entity> enemiesToStun;
+                    for (const auto& info : unitInfos) {
+                        if (info.team == uc.teamId) continue;
+                        float dist = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
+                        if (dist <= 4.0f) {
+                            enemiesToStun.push_back(info.e);
+                        }
+                    }
+
+                    if (!enemiesToStun.empty()) {
+                        // Drop sleep pollen!
+                        for (auto enemyEnt : enemiesToStun) {
+                            auto& stun = ctx.serverRegistry.get_or_emplace<StunDebuffComponent>(enemyEnt);
+                            stun.timer = 2.0f; // Stun for 2 seconds
+                        }
+
+                        // Broadcast self HP update to trigger visual pollen explosion on client
+                        auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                        if (enc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = enc->netId;
+                            hp_pkt.hp    = hc.hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
+                        spdlog::debug("Totenkopfschwärmer: Dropped Sleep Pollen on {} enemies", enemiesToStun.size());
+                        continue;
+                    }
+                    
+                    continue; // No targets at all, do nothing
+                }
+
                 cc.attackCooldown = cc.attackRate;
 
                 if (!targetIsBuilding) {
                     auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
                     if (thc && !thc->dead) {
                         float dmgDealt = cc.attackDamage;
+                        auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
                         if (uc.bugClass == BugClass::BeesWasps) {
                             if (uc.tier == 1) { // Honigbiene: Kamikaze
                                 hc.hp = 0.f;
@@ -4467,14 +4840,12 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
                                 auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
                                 uint32_t enetId = enc ? enc->netId : 0;
                                 uint32_t killerTeam = uc.teamId == 0 ? 1 : 0;
-                                auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
                                 if (targetUc) killerTeam = targetUc->teamId;
                                 toKill.push_back({e, enetId, killerTeam});
                                 spdlog::debug("Honigbiene: Kamikaze hit against unit!");
                             }
                             else if (uc.tier == 4) { // Gelbwest-Wespe: Slow acid
-                                auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
-                                if (targetUc && !IsFlying(targetUc->bugClass)) {
+                                if (targetUc && !IsFlying(targetUc->bugClass, targetUc->tier)) {
                                     auto& slow = ctx.serverRegistry.get_or_emplace<SlowDebuffComponent>(cc.target);
                                     slow.timer = 3.f;
                                     slow.speedMultiplier = 0.5f;
@@ -4483,7 +4854,6 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
                                 }
                             }
                             else if (uc.tier == 5) { // Hornisse: Boss-Killer
-                                auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
                                 if (targetUc && (targetUc->tier == 1 || targetUc->tier == 2)) {
                                     dmgDealt *= 3.f;
                                     spdlog::debug("Hornisse: Triple bite damage against Tier {} target!", targetUc->tier);
@@ -4491,9 +4861,83 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
                             }
                         }
 
+                        // Hain-Bänderschnecke shell retreat damage reduction (80%)
+                        if (ctx.serverRegistry.any_of<ShellRetreatComponent>(cc.target)) {
+                            dmgDealt *= 0.2f;
+                        }
+
+                        // Turmdeckelschnecke frontal shield (85% reduction)
+                        if (targetUc && targetUc->bugClass == BugClass::Snails && targetUc->tier == 4) {
+                            auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
+                            if (ttf) {
+                                glm::vec2 targetToAttacker = glm::normalize(glm::vec2(tf.position.x - ttf->position.x, tf.position.z - ttf->position.z));
+                                float yawRad = glm::radians(ttf->rotation.y);
+                                glm::vec2 targetForward = glm::normalize(glm::vec2(std::sin(yawRad), std::cos(yawRad)));
+                                float dotProd = glm::dot(targetToAttacker, targetForward);
+                                if (dotProd > 0.5f) { // Facing within ~60 degrees
+                                    dmgDealt *= 0.15f;
+                                    spdlog::debug("Turmdeckelschnecke: Blocked frontal damage!");
+                                }
+                            }
+                        }
+
+                        // Weinbergschnecke ignores small damage (< 15)
+                        if (targetUc && targetUc->bugClass == BugClass::Snails && targetUc->tier == 5) {
+                            if (dmgDealt < 15.f) {
+                                dmgDealt = 0.f;
+                                spdlog::debug("Weinbergschnecke: Ignored minor damage!");
+                            }
+                        }
+
                         thc->hp -= dmgDealt;
                         spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
                                       (uint32_t)e, (uint32_t)cc.target, dmgDealt, thc->hp);
+
+                        // Tigerschnegel devour Tier 1 units (Insta-kill)
+                        if (uc.bugClass == BugClass::Snails && uc.tier == 3) {
+                            if (targetUc && targetUc->tier == 1) {
+                                thc->hp = 0.f; // Instant devour!
+                                spdlog::debug("Tigerschnegel: Devoured Tier 1 enemy!");
+                            }
+                        }
+
+                        // Brennhaar-Raupe retaliatory toxic hair release when hit
+                        if (targetUc && targetUc->bugClass == BugClass::ButterfliesMoths && targetUc->tier == 3) {
+                            auto* targetTf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
+                            if (targetTf) {
+                                auto enemyView = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+                                for (auto enemyEnt : enemyView) {
+                                    auto& eUc = enemyView.get<UnitComponent>(enemyEnt);
+                                    if (eUc.teamId != targetUc->teamId) {
+                                        auto& eTf = enemyView.get<TransformComponent>(enemyEnt);
+                                        float d = glm::length(glm::vec2(eTf.position.x - targetTf->position.x, eTf.position.z - targetTf->position.z));
+                                        if (d <= 3.0f) {
+                                            auto& eHc = enemyView.get<HealthComponent>(enemyEnt);
+                                            if (!eHc.dead) {
+                                                eHc.hp -= 12.f; // Toxic retaliatory damage
+                                                
+                                                // Broadcast HP update
+                                                auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(enemyEnt);
+                                                if (tnc) {
+                                                    UnitHpUpdatePacket hp_pkt;
+                                                    hp_pkt.netId = tnc->netId;
+                                                    hp_pkt.hp    = eHc.hp;
+                                                    ctx.network.BroadcastToAll(hp_pkt);
+                                                }
+
+                                                if (eHc.hp <= 0.f) {
+                                                    eHc.hp = 0.f;
+                                                    eHc.dead = true;
+                                                    auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(enemyEnt);
+                                                    uint32_t dnetId = dnc ? dnc->netId : 0;
+                                                    toKill.push_back({enemyEnt, dnetId, targetUc->teamId});
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         // Broadcast HP update
                         auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
@@ -4516,6 +4960,10 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
                     auto* tbc = ctx.serverRegistry.try_get<BuildingComponent>(cc.target);
                     if (tbc && !tbc->destroyed) {
                         float dmgDealt = cc.attackDamage;
+                        // Weinbergschnecke deals 3x damage against buildings
+                        if (uc.bugClass == BugClass::Snails && uc.tier == 5) {
+                            dmgDealt *= 3.f;
+                        }
                         if (uc.bugClass == BugClass::BeesWasps) {
                             if (uc.tier == 1) { // Honigbiene: Kamikaze
                                 hc.hp = 0.f;
@@ -4577,6 +5025,10 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 
                 float dmgDealt = cc2->attackDamage;
                 auto* uc = ctx.serverRegistry.try_get<UnitComponent>(info.e);
+                // Weinbergschnecke deals 3x damage against buildings
+                if (uc && uc->bugClass == BugClass::Snails && uc->tier == 5) {
+                    dmgDealt *= 3.f;
+                }
                 if (uc && uc->bugClass == BugClass::BeesWasps) {
                     if (uc->tier == 1) { // Honigbiene: Kamikaze
                         auto* hc = ctx.serverRegistry.try_get<HealthComponent>(info.e);
@@ -4815,6 +5267,8 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
     float aspect = (float)winW / (float)winH;
     glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
 
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+
     // Draw visual explosions
     for (const auto& expl : m_VisualExplosions) {
         float progress = glm::clamp(expl.timer / expl.maxDuration, 0.f, 1.f);
@@ -4836,15 +5290,50 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
             rScreen = glm::abs(ex - cx);
         }
 
-        ImDrawList* explDl = ImGui::GetBackgroundDrawList();
-
-        // Draw expanding fading orange outer ring
+        // Draw expanding fading outer ring
         int alphaOuter = static_cast<int>((1.f - progress) * 200);
-        explDl->AddCircle(ImVec2(cx, cy), rScreen, IM_COL32(255, 100, 0, alphaOuter), 0, 4.0f);
-
-        // Draw expanding white/yellow core
         int alphaInner = static_cast<int>((1.f - progress) * 255);
-        explDl->AddCircleFilled(ImVec2(cx, cy), rScreen * 0.6f, IM_COL32(255, 230, 100, alphaInner));
+
+        ImU32 colOuter = IM_COL32(255, 100, 0, alphaOuter);
+        ImU32 colInner = IM_COL32(255, 230, 100, alphaInner);
+
+        if (expl.type == 1) { // Toxic Hairs
+            colOuter = IM_COL32(180, 50, 255, alphaOuter);
+            colInner = IM_COL32(100, 255, 100, alphaInner);
+        } else if (expl.type == 2) { // Sleep Pollen
+            colOuter = IM_COL32(0, 100, 255, alphaOuter);
+            colInner = IM_COL32(150, 240, 255, alphaInner);
+        } else if (expl.type == 3) { // Healing Burst
+            colOuter = IM_COL32(0, 255, 100, alphaOuter);
+            colInner = IM_COL32(200, 255, 200, alphaInner);
+        }
+
+        dl->AddCircle(ImVec2(cx, cy), rScreen, colOuter, 0, 4.0f);
+        dl->AddCircleFilled(ImVec2(cx, cy), rScreen * 0.6f, colInner);
+    }
+
+    // Draw client slime trails on the ground
+    for (const auto& node : m_ClientSlimeNodes) {
+        glm::vec4 centerClip = vp * glm::vec4(node.position, 1.f);
+        if (centerClip.w <= 0.f) continue;
+        centerClip /= centerClip.w;
+        if (centerClip.x < -1.1f || centerClip.x > 1.1f || centerClip.y < -1.1f || centerClip.y > 1.1f) continue;
+
+        float cx = (centerClip.x * 0.5f + 0.5f) * (float)winW;
+        float cy = (1.f - (centerClip.y * 0.5f + 0.5f)) * (float)winH;
+
+        glm::vec4 edgeClip = vp * glm::vec4(node.position + glm::vec3(1.2f, 0.f, 0.f), 1.f);
+        float rScreen = 8.f;
+        if (edgeClip.w > 0.f) {
+            edgeClip /= edgeClip.w;
+            float ex = (edgeClip.x * 0.5f + 0.5f) * (float)winW;
+            rScreen = glm::abs(ex - cx);
+        }
+
+        float alphaFrac = glm::clamp(node.timer / 5.0f, 0.f, 1.f);
+        int alpha = static_cast<int>(alphaFrac * 100);
+        dl->AddCircleFilled(ImVec2(cx, cy), rScreen, IM_COL32(50, 220, 50, alpha));
+        dl->AddCircle(ImVec2(cx, cy), rScreen, IM_COL32(80, 255, 80, (int)(alphaFrac * 30)), 0, 1.0f);
     }
 
     // Fog check: hide HP bars for entities not revealed to the local player
@@ -4855,7 +5344,6 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
             fog = &fit->second;
     }
 
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
     constexpr float BAR_W = 40.f, BAR_H = 5.f;
 
     // Units
@@ -4886,6 +5374,73 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
                 ? IM_COL32(60, 140, 255, 220)
                 : IM_COL32(255, 60, 60, 220);
             dl->AddRectFilled(bmin, ImVec2(bmin.x + BAR_W * frac, bmax.y), col);
+
+            // Nachtfalter stealth check for friendly units
+            bool isStealthed = false;
+            if (uc.teamId == m_MyPlayerId) {
+                auto mothView = ctx.clientRegistry.view<TransformComponent, UnitComponent>();
+                for (auto mothEnt : mothView) {
+                    auto& mUc = mothView.get<UnitComponent>(mothEnt);
+                    if (mUc.teamId == uc.teamId && mUc.bugClass == BugClass::ButterfliesMoths && mUc.tier == 4) {
+                        auto& mTf = mothView.get<TransformComponent>(mothEnt);
+                        float dist = glm::length(glm::vec2(mTf.position.x - tf.position.x, mTf.position.z - tf.position.z));
+                        if (dist <= 5.0f) {
+                            isStealthed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (isStealthed) {
+                // Draw a soft translucent purple stealth indicator dot next to the HP bar
+                dl->AddCircleFilled(ImVec2(bmax.x + 6.f, sy + BAR_H * 0.5f), 3.f, IM_COL32(180, 100, 255, 220));
+            }
+
+            // Draw shell/armor visuals for Snails
+            glm::vec4 groundClip = vp * glm::vec4(tf.position, 1.f);
+            if (groundClip.w > 0.f) {
+                groundClip /= groundClip.w;
+                float gcx = (groundClip.x * 0.5f + 0.5f) * (float)winW;
+                float gcy = (1.f - (groundClip.y * 0.5f + 0.5f)) * (float)winH;
+
+                // Hain-Bänderschnecke shell retreat protective dome
+                if (uc.bugClass == BugClass::Snails && uc.tier == 2 && hc.hp < hc.maxHp * 0.9f) {
+                    dl->AddCircleFilled(ImVec2(gcx, gcy), 22.f, IM_COL32(139, 90, 43, 60)); // brown tint
+                    dl->AddCircle(ImVec2(gcx, gcy), 22.f, IM_COL32(210, 180, 140, 200), 0, 2.0f); // tan border
+                }
+
+                // Turmdeckelschnecke frontal shield arc
+                if (uc.bugClass == BugClass::Snails && uc.tier == 4) {
+                    float yawRad = glm::radians(tf.rotation.y);
+                    float sAngle = -yawRad - 1.57079f - 0.8f;
+                    float eAngle = -yawRad - 1.57079f + 0.8f;
+                    dl->PathArcTo(ImVec2(gcx, gcy), 20.f, sAngle, eAngle);
+                    dl->PathStroke(IM_COL32(255, 215, 0, 220), false, 2.5f);
+                }
+            }
+
+            // Draw a beautiful dusty purple shroud field under the Nachtfalter itself
+            if (uc.bugClass == BugClass::ButterfliesMoths && uc.tier == 4) {
+                float worldR = 5.0f;
+                glm::vec4 centerClip = vp * glm::vec4(tf.position, 1.f);
+                if (centerClip.w > 0.f) {
+                    centerClip /= centerClip.w;
+                    float cx = (centerClip.x * 0.5f + 0.5f) * (float)winW;
+                    float cy = (1.f - (centerClip.y * 0.5f + 0.5f)) * (float)winH;
+
+                    glm::vec4 edgeClip = vp * glm::vec4(tf.position + glm::vec3(worldR, 0.f, 0.f), 1.f);
+                    float rScreen = 25.f;
+                    if (edgeClip.w > 0.f) {
+                        edgeClip /= edgeClip.w;
+                        float ex = (edgeClip.x * 0.5f + 0.5f) * (float)winW;
+                        rScreen = glm::abs(ex - cx);
+                    }
+
+                    dl->AddCircle(ImVec2(cx, cy), rScreen, IM_COL32(180, 100, 255, 90), 0, 1.5f);
+                    dl->AddCircleFilled(ImVec2(cx, cy), rScreen, IM_COL32(180, 100, 255, 20));
+                }
+            }
 
             bool selected = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId)
                             != m_SelectedUnits.end();

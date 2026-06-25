@@ -175,6 +175,21 @@ struct SlowDebuffComponent {
 };
 
 /**
+ * @struct StunDebuffComponent
+ * @brief Prevents movement and combat for units.
+ */
+struct StunDebuffComponent {
+    float timer = 0.f;            ///< Remaining duration in seconds.
+};
+
+/**
+ * @struct ShellRetreatComponent
+ * @brief Flag component when a snail is retreated in its shell.
+ */
+struct ShellRetreatComponent {
+};
+
+/**
  * @struct HealthComponent
  * @brief Tracks hit points for any entity that can take damage.
  */
