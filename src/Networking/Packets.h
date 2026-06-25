@@ -124,6 +124,11 @@ struct EntitySnapshotPacket {
     float      vx = 0.f;                             /**< Velocity X. */
     float      vy = 0.f;                             /**< Velocity Y. */
     float      vz = 0.f;                             /**< Velocity Z. */
+    uint32_t   targetNetId = 0;                      /**< Network ID of the combat target. */
+    float      attackCooldown = 0.f;                 /**< Cooldown timer remaining. */
+    float      attackRate     = 1.f;                 /**< Attack rate (total duration). */
+    uint8_t    autoAttack  = 0;                      /**< 1 if autoAttack is enabled. */
+    uint8_t    padding[3]{};                         /**< Alignment padding. */
 };
 
 /**
@@ -137,6 +142,10 @@ struct PlayerInputPacket {
     float      dz   = 0.f;                       /**< Forward/backward (Z) movement input. */
     float      yaw  = 0.f;                       /**< Current camera yaw. */
     float      pitch = 0.f;                      /**< Current camera pitch. */
+    uint32_t   controlNetId = 0;                 /**< Network ID of directly controlled unit. */
+    uint8_t    attackActive = 0;                 /**< 1 if attack key (Space) is pressed. */
+    float      targetX = 0.f;                    /**< Target world position X (cursor). */
+    float      targetZ = 0.f;                    /**< Target world position Z (cursor). */
 };
 
 /**
@@ -148,7 +157,8 @@ struct UnitSpawnedPacket {
     uint32_t   netId   = 0;                        /**< Network ID of the unit. */
     uint32_t   teamId  = 0;                        /**< Owning team. */
     uint8_t    bugClass = 0;                       /**< BugClass enum value (faction/type). */
-    uint8_t    role    = 0;                        /**< UnitRole: 0=Combat, 1=Worker. */
+    uint8_t    role     = 0;                       /**< UnitRole: 0=Combat, 1=Worker. */
+    uint8_t    tier     = 1;                       /**< Unit tier (1 to 5). */
     float      x = 0.f;                            /**< Spawn position X. */
     float      y = 0.f;                            /**< Spawn position Y. */
     float      z = 0.f;                            /**< Spawn position Z. */
@@ -304,7 +314,7 @@ struct CommanderOrderPacket {
     float      z = 0.f;                                     ///< World destination Z.
     uint32_t   selectedCount = 0;                           ///< How many units are selected (max 32).
     uint32_t   selectedNetIds[32]{};                        ///< NetIds of selected units.
-    uint8_t    orderType     = 0;                           ///< 0=Move, 1=AttackUnit, 2=AttackBuilding.
+    uint8_t    orderType     = 0;                           ///< 0=Move, 1=AttackUnit, 2=AttackBuilding, 3=ToggleAutoAttack.
     uint32_t   targetNetId   = 0;                           ///< Network ID of attack target (0 for move orders).
 };
 

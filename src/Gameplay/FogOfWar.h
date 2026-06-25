@@ -164,12 +164,16 @@ namespace FogOfWarSystem
         bool changed = false;
 
         auto revealIfTeam = [&](auto e, const glm::vec3& pos, float radius, bool skipTeamCheck) {
+            auto* uc = registry.try_get<UnitComponent>(e);
             if (!skipTeamCheck)
             {
-                auto* uc = registry.try_get<UnitComponent>(e);
                 if (!uc || uc->teamId != teamId) return;
             }
-            changed |= fog.Reveal(pos, radius);
+            float finalRadius = radius;
+            if (uc && uc->bugClass == BugClass::ButterfliesMoths && uc->tier == 2) {
+                finalRadius = 24.f; // Scout has massive vision
+            }
+            changed |= fog.Reveal(pos, finalRadius);
         };
 
         {

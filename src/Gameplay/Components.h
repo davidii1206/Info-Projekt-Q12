@@ -170,10 +170,37 @@ enum class UnitRole : uint8_t {
  * @brief Tags an entity as a controllable unit belonging to a team.
  */
 struct UnitComponent {
-    uint32_t teamId   = 0;                    ///< Owning team.
-    BugClass bugClass = BugClass::Ants;       ///< Unit type / faction.
-    bool     selected = false;                ///< Currently selected by Commander.
-    UnitRole role     = UnitRole::Combat;     ///< Combat vs Worker.
+    uint32_t teamId        = 0;                ///< Owning team.
+    BugClass bugClass      = BugClass::Ants;   ///< Unit type / faction.
+    int      tier          = 1;                ///< Unit tier (1 to 5).
+    bool     selected      = false;            ///< Currently selected by Commander.
+    bool     directControl = false;            ///< Currently directly controlled by player (WASD).
+    UnitRole role          = UnitRole::Combat; ///< Combat vs Worker.
+};
+
+/**
+ * @struct SlowDebuffComponent
+ * @brief Dynamic movement slow applied to units.
+ */
+struct SlowDebuffComponent {
+    float timer = 0.f;            ///< Remaining duration in seconds.
+    float speedMultiplier = 0.5f; ///< Movement speed multiplier.
+    float damagePerSecond = 0.f;  ///< Acid damage per second.
+};
+
+/**
+ * @struct StunDebuffComponent
+ * @brief Prevents movement and combat for units.
+ */
+struct StunDebuffComponent {
+    float timer = 0.f;            ///< Remaining duration in seconds.
+};
+
+/**
+ * @struct ShellRetreatComponent
+ * @brief Flag component when a snail is retreated in its shell.
+ */
+struct ShellRetreatComponent {
 };
 
 /**
@@ -203,6 +230,7 @@ struct CombatComponent {
     float attackRate     = 1.5f;  ///< Seconds between attacks.
     entt::entity target  = entt::null; ///< Current attack target (server).
     bool commandedTarget = false; ///< True when target was set by an attack order (pursue).
+    bool autoAttack      = false; ///< When true, unit autonomously chases enemies within sight.
 };
 
 /**

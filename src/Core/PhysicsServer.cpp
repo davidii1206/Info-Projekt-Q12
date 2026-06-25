@@ -532,6 +532,42 @@ PhysicsBodyHandle PhysicsServer::AddKinematicBox(
     return PhysicsBodyHandle{ id };
 }
 
+PhysicsBodyHandle PhysicsServer::AddUnitBox(
+    uint32_t entityID, RVec3 position, Vec3 halfExtents)
+{
+    BodyInterface& bi = mPhysicsSystem->GetBodyInterface();
+
+    BoxShapeSettings shapeSettings(halfExtents);
+    auto shapeResult = shapeSettings.Create();
+    if (!shapeResult.IsValid())
+    {
+        std::cerr << "[PhysicsServer] AddUnitBox: shape creation failed\n";
+        return {};
+    }
+
+    BodyCreationSettings bcs(
+        shapeResult.Get(),
+        position,
+        Quat::sIdentity(),
+        EMotionType::Dynamic,
+        ObjectLayers::DYNAMIC
+    );
+    bcs.mGravityFactor  = 0.0f;   // units don't fall
+    bcs.mFriction       = 0.0f;   // no friction so units slide past cleanly
+    bcs.mRestitution    = 0.0f;
+    bcs.mLinearDamping  = 0.0f;
+    bcs.mAllowSleeping  = false;  // always active so collision stays live
+    bcs.mUserData       = static_cast<uint64>(entityID);
+
+    BodyID id = bi.CreateAndAddBody(bcs, EActivation::Activate);
+    if (!id.IsInvalid())
+    {
+        mEntityToBody[entityID] = id;
+        mBodyToEntity[id.GetIndex()] = entityID;
+    }
+    return PhysicsBodyHandle{ id };
+}
+
 void PhysicsServer::RemoveBody(PhysicsBodyHandle handle)
 {
     if (!handle.IsValid()) return;
@@ -573,6 +609,20 @@ void PhysicsServer::SetLinearVelocity(PhysicsBodyHandle h, Vec3 vel)
 void PhysicsServer::AddImpulse(PhysicsBodyHandle h, Vec3 impulse)
 {
     mPhysicsSystem->GetBodyInterface().AddImpulse(h.id, impulse);
+}
+
+void PhysicsServer::SetPosition(PhysicsBodyHandle h, RVec3 pos)
+{
+    mPhysicsSystem->GetBodyInterface().SetPosition(
+        h.id, pos, EActivation::Activate
+    );
+}
+
+void PhysicsServer::SetRotation(PhysicsBodyHandle h, Quat rot)
+{
+    mPhysicsSystem->GetBodyInterface().SetRotation(
+        h.id, rot, EActivation::Activate
+    );
 }
 
 void PhysicsServer::Teleport(PhysicsBodyHandle h, RVec3 pos, Quat rot)

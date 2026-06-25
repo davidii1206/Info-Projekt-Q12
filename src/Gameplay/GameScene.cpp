@@ -1426,6 +1426,53 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 // ---------------------------------------------------------------------------
 
 void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
+    // Tick client-side combat cooldowns for visuals
+    {
+        auto view = ctx.clientRegistry.view<CombatComponent>();
+        for (auto e : view) {
+            auto& cc = view.get<CombatComponent>(e);
+            if (cc.attackCooldown > 0.f) {
+                cc.attackCooldown -= dt;
+                if (cc.attackCooldown < 0.f) cc.attackCooldown = 0.f;
+            }
+        }
+    }
+
+    // Tick visual explosions
+    for (auto it = m_VisualExplosions.begin(); it != m_VisualExplosions.end(); ) {
+        it->timer += dt;
+        if (it->timer >= it->maxDuration) {
+            it = m_VisualExplosions.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Tick client slime nodes
+    for (auto it = m_ClientSlimeNodes.begin(); it != m_ClientSlimeNodes.end(); ) {
+        it->timer -= dt;
+        if (it->timer <= 0.f) {
+            it = m_ClientSlimeNodes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Drop client-side slime trails
+    static float clientSlimeAccum = 0.f;
+    clientSlimeAccum += dt;
+    if (clientSlimeAccum >= 0.3f) {
+        clientSlimeAccum = 0.f;
+        auto view = ctx.clientRegistry.view<TransformComponent, UnitComponent>();
+        for (auto ce : view) {
+            auto& uc = view.get<UnitComponent>(ce);
+            if (uc.bugClass == BugClass::Snails && uc.tier == 1) {
+                auto& tf = view.get<TransformComponent>(ce);
+                m_ClientSlimeNodes.push_back({tf.position, uc.teamId, 5.0f});
+            }
+        }
+    }
+
     // F12 toggles all developer ImGui panels at once.
     if (Input::IsKeyPressed(SDLK_F12)) DebugUI::Toggle();
 
@@ -1444,8 +1491,48 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
             CancelPlacement(ctx);
         m_CameraMode = (m_CameraMode == CameraMode::Commander)
                        ? CameraMode::Building : CameraMode::Commander;
+        if (m_CameraMode == CameraMode::Building) {
+            m_DirectControlActive = false;
+            m_DirectControlNetId = 0;
+        }
         spdlog::info("GameScene: switched to {} mode",
                       m_CameraMode == CameraMode::Commander ? "Commander" : "Building");
+    }
+
+    // ------------------------------------------------------------------
+    // C: toggle Direct Control of selected unit (only in Commander mode)
+    // ------------------------------------------------------------------
+    if (m_CameraMode == CameraMode::Commander && Input::IsKeyPressed(SDLK_C)) {
+        if (m_DirectControlActive) {
+            m_DirectControlActive = false;
+            m_DirectControlNetId = 0;
+            spdlog::info("Direct control disabled");
+        } else {
+            if (!m_SelectedUnits.empty()) {
+                m_DirectControlNetId = m_SelectedUnits[0];
+                m_DirectControlActive = true;
+                spdlog::info("Direct control enabled for unit netId={}", m_DirectControlNetId);
+            } else {
+                spdlog::info("Cannot enable direct control: no unit selected");
+            }
+        }
+    }
+
+    // Auto-disable direct control if controlled unit dies or is destroyed
+    if (m_DirectControlActive && m_DirectControlNetId != 0) {
+        auto it = m_ClientNetMap.find(m_DirectControlNetId);
+        if (it == m_ClientNetMap.end()) {
+            m_DirectControlActive = false;
+            m_DirectControlNetId = 0;
+            spdlog::info("Direct control disabled (unit no longer exists)");
+        } else {
+            auto* hc = ctx.clientRegistry.try_get<HealthComponent>(it->second);
+            if (hc && hc->dead) {
+                m_DirectControlActive = false;
+                m_DirectControlNetId = 0;
+                spdlog::info("Direct control disabled (unit died)");
+            }
+        }
     }
 
     if (m_CameraMode == CameraMode::Commander || m_CameraMode == CameraMode::Building) {
@@ -1462,17 +1549,39 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         // orbiting around the ground point at the centre of the screen.
         constexpr float YAW_ANIM_DURATION = 0.25f;
         if (Input::IsKeyPressed(SDLK_LEFT) && m_YawAnimT >= 1.f) {
-            // Compute the pivot: the ground-level point at the centre of the view.
-            float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
-            m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            if (m_DirectControlActive && m_DirectControlNetId != 0) {
+                auto it = m_ClientNetMap.find(m_DirectControlNetId);
+                if (it != m_ClientNetMap.end()) {
+                    auto* tf = ctx.clientRegistry.try_get<TransformComponent>(it->second);
+                    if (tf) m_YawPivot = tf->position;
+                    else m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                } else {
+                    m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                }
+            } else {
+                // Compute the pivot: the ground-level point at the centre of the view.
+                float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
+                m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            }
             m_CamPosFrom = m_Camera->m_Position;
             m_BuildYawFrom   = m_BuildYaw;
             m_BuildYawTarget = m_BuildYawFrom + 90.f;
             m_YawAnimT = 0.f;
         }
         if (Input::IsKeyPressed(SDLK_RIGHT) && m_YawAnimT >= 1.f) {
-            float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
-            m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            if (m_DirectControlActive && m_DirectControlNetId != 0) {
+                auto it = m_ClientNetMap.find(m_DirectControlNetId);
+                if (it != m_ClientNetMap.end()) {
+                    auto* tf = ctx.clientRegistry.try_get<TransformComponent>(it->second);
+                    if (tf) m_YawPivot = tf->position;
+                    else m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                } else {
+                    m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                }
+            } else {
+                float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
+                m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            }
             m_CamPosFrom = m_Camera->m_Position;
             m_BuildYawFrom   = m_BuildYaw;
             m_BuildYawTarget = m_BuildYawFrom - 90.f;
@@ -1501,15 +1610,28 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         m_Camera->m_Yaw   = m_BuildYaw;
         m_Camera->UpdateVectors();
 
-        // WASD pans relative to the isometric camera view
+        // WASD pans relative to the isometric camera view unless directly controlling a unit
         glm::vec3 forward = glm::normalize(glm::vec3(m_Camera->m_Front.x, 0.f, m_Camera->m_Front.z));
         glm::vec3 right   = m_Camera->m_Right;
         glm::vec3 pan{0.f};
-        if (Input::IsKeyDown(SDLK_W)) pan += forward * TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
-        m_Camera->m_Position += pan;
+        if (!m_DirectControlActive) {
+            if (Input::IsKeyDown(SDLK_W)) pan += forward * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
+            m_Camera->m_Position += pan;
+        } else {
+            // Camera smoothly follows the directly controlled unit
+            auto it = m_ClientNetMap.find(m_DirectControlNetId);
+            if (it != m_ClientNetMap.end()) {
+                auto* tf = ctx.clientRegistry.try_get<TransformComponent>(it->second);
+                if (tf) {
+                    float t = (tf->position.y - m_TopDownHeight) / m_Camera->m_Front.y;
+                    glm::vec3 targetCamPos = tf->position - t * m_Camera->m_Front;
+                    m_Camera->m_Position = glm::mix(m_Camera->m_Position, targetCamPos, 10.f * dt);
+                }
+            }
+        }
 
         // Scroll to zoom (adjust ortho size) — skip if mouse is over ImGui UI
         if (!ImGui::GetIO().WantCaptureMouse) {
@@ -1610,56 +1732,108 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
 
         // Commander mode: unit selection + orders (not in Building mode)
         if (m_CameraMode == CameraMode::Commander) {
-            // Left-click: pick the single NEAREST own-team unit under the cursor.
-            // Hold SHIFT to add/remove that one unit from the existing selection
-            // (multi-select still possible, just one click = one unit).
-            if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT)) {
+            // Hybrid selection: drag = circle select (Pikmin-style), pure click
+            // = pick the SINGLE nearest unit. A drag radius below the click
+            // threshold falls back to single-pick so a careless click on a
+            // cluster of workers doesn't grab them all (per user request:
+            // "click on the entity I want = only that one").
+            bool leftDown  = Input::IsMouseButtonDown(SDL_BUTTON_LEFT);
+            bool leftUp    = Input::IsMouseButtonReleased(SDL_BUTTON_LEFT);
+            bool leftPress = Input::IsMouseButtonPressed(SDL_BUTTON_LEFT);
+            bool shiftHeld = Input::IsKeyDown(SDLK_LSHIFT) || Input::IsKeyDown(SDLK_RSHIFT);
+
+            if (leftPress) {
                 glm::vec2 mpos = Input::GetMousePosition();
-                glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
-                // Generous-enough hit radius for small worker units without grabbing
-                // a whole cluster — picks one unit per click.
-                constexpr float SELECT_HIT_RADIUS = 1.8f;
+                glm::vec3 wp   = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+                m_SelectStartWorld = {wp.x, wp.z};
+                m_SelectEndWorld   = {wp.x, wp.z};
+                m_SelectDragging   = true;
+            }
 
-                bool shiftHeld = Input::IsKeyDown(SDLK_LSHIFT) || Input::IsKeyDown(SDLK_RSHIFT);
+            if (m_SelectDragging && leftDown) {
+                glm::vec2 mpos = Input::GetMousePosition();
+                glm::vec3 wp   = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+                m_SelectEndWorld = {wp.x, wp.z};
+            }
 
-                // Find the SINGLE nearest own-team unit within the hit radius.
-                entt::entity bestEntity = entt::null;
-                uint32_t     bestNetId  = 0;
-                float        bestDist2  = SELECT_HIT_RADIUS * SELECT_HIT_RADIUS;
+            if (m_SelectDragging && leftUp) {
+                m_SelectDragging = false;
+
+                const glm::vec2 center = m_SelectStartWorld;
+                const float dragRadius = glm::length(m_SelectEndWorld - center);
+                // Below this radius (in world units) we treat the gesture as a
+                // pure click — pick exactly one unit instead of a circle.
+                constexpr float kClickVsDragThreshold = 1.8f;
+                const bool isClick = (dragRadius < kClickVsDragThreshold);
+                const float radius = isClick
+                    ? kClickVsDragThreshold
+                    : std::min(dragRadius, m_SelectMaxRadius);
+
                 auto view = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, UnitComponent>();
-                for (auto entity : view) {
-                    const auto& tf = view.get<TransformComponent>(entity);
-                    const auto& uc = view.get<UnitComponent>(entity);
-                    if (uc.teamId != m_MyPlayerId) continue;
-                    float dx = tf.position.x - worldPos.x;
-                    float dz = tf.position.z - worldPos.z;
-                    float d2 = dx * dx + dz * dz;
-                    if (d2 <= bestDist2) {
-                        bestDist2  = d2;
-                        bestEntity = entity;
-                        bestNetId  = view.get<NetworkedComponent>(entity).netId;
-                    }
-                }
 
-                if (!shiftHeld) {
-                    // Plain click: clear and select that one unit (or clear all if click hit nothing).
+                if (isClick) {
+                    // --- Single-click: pick the SINGLE nearest own-team unit ---
+                    entt::entity bestEntity = entt::null;
+                    uint32_t     bestNetId  = 0;
+                    float        bestDist2  = radius * radius;
                     for (auto entity : view) {
-                        view.get<UnitComponent>(entity).selected = false;
+                        const auto& tf = view.get<TransformComponent>(entity);
+                        const auto& uc = view.get<UnitComponent>(entity);
+                        if (uc.teamId != m_MyPlayerId) continue;
+                        float dx = tf.position.x - center.x;
+                        float dz = tf.position.z - center.y;
+                        float d2 = dx * dx + dz * dz;
+                        if (d2 <= bestDist2) {
+                            bestDist2  = d2;
+                            bestEntity = entity;
+                            bestNetId  = view.get<NetworkedComponent>(entity).netId;
+                        }
                     }
-                    m_SelectedUnits.clear();
-                    if (bestEntity != entt::null) {
-                        m_SelectedUnits.push_back(bestNetId);
-                        view.get<UnitComponent>(bestEntity).selected = true;
+                    if (!shiftHeld) {
+                        for (auto entity : view) view.get<UnitComponent>(entity).selected = false;
+                        m_SelectedUnits.clear();
+                        if (bestEntity != entt::null) {
+                            m_SelectedUnits.push_back(bestNetId);
+                            view.get<UnitComponent>(bestEntity).selected = true;
+                        }
+                    } else if (bestEntity != entt::null) {
+                        auto it = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), bestNetId);
+                        if (it != m_SelectedUnits.end()) {
+                            m_SelectedUnits.erase(it);
+                            view.get<UnitComponent>(bestEntity).selected = false;
+                        } else {
+                            m_SelectedUnits.push_back(bestNetId);
+                            view.get<UnitComponent>(bestEntity).selected = true;
+                        }
                     }
-                } else if (bestEntity != entt::null) {
-                    // Shift+click: toggle just the clicked unit in/out of the selection.
-                    auto it = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), bestNetId);
-                    if (it != m_SelectedUnits.end()) {
-                        m_SelectedUnits.erase(it);
-                        view.get<UnitComponent>(bestEntity).selected = false;
-                    } else {
-                        m_SelectedUnits.push_back(bestNetId);
-                        view.get<UnitComponent>(bestEntity).selected = true;
+                } else {
+                    // --- Drag: circle-select everything inside the radius ---
+                    if (!shiftHeld) {
+                        for (auto entity : view) view.get<UnitComponent>(entity).selected = false;
+                        m_SelectedUnits.clear();
+                    }
+                    for (auto entity : view) {
+                        const auto& tf = view.get<TransformComponent>(entity);
+                        const auto& nc = view.get<NetworkedComponent>(entity);
+                        auto&       uc = view.get<UnitComponent>(entity);
+                        if (uc.teamId != m_MyPlayerId) continue;
+                        glm::vec2 d2 = glm::vec2(tf.position.x - center.x, tf.position.z - center.y);
+                        bool inside = glm::length(d2) <= radius;
+                        if (inside) {
+                            if (shiftHeld) {
+                                auto it = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId);
+                                if (it != m_SelectedUnits.end()) {
+                                    m_SelectedUnits.erase(it);
+                                    uc.selected = false;
+                                } else {
+                                    m_SelectedUnits.push_back(nc.netId);
+                                    uc.selected = true;
+                                }
+                            } else {
+                                m_SelectedUnits.push_back(nc.netId);
+                                uc.selected = true;
+                            }
+                        }
                     }
                 }
                 spdlog::info("Commander: selected {} unit(s)", m_SelectedUnits.size());
@@ -1877,13 +2051,80 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                     }
                 }
             }
+
+            // Tier 1 to 5 quick spawn debug buttons
+            ImGui::Separator();
+            ImGui::Text("Cheat-Einheit (Tier 1-5) an der Hauptbasis:");
+            glm::vec3 sp{};
+            bool found = false;
+            auto mbView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+            for (auto mb : mbView) {
+                const auto& mbBc = mbView.get<BuildingComponent>(mb);
+                if (mbBc.teamId == m_MyPlayerId && mbBc.type == BuildingType::Main && !mbBc.destroyed) {
+                    sp = mbView.get<TransformComponent>(mb).position;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                BugClass playerClass = BugClass::Ants;
+                auto pView = ctx.serverRegistry.view<PlayerComponent>();
+                for (auto pe : pView) {
+                    auto& pc = pView.get<PlayerComponent>(pe);
+                    if (pc.playerId == m_MyPlayerId) {
+                        if (pc.bugClass != BugClass::None)
+                            playerClass = pc.bugClass;
+                        break;
+                    }
+                }
+                for (int t = 1; t <= 5; ++t) {
+                    std::string label = "Tier " + std::to_string(t);
+                    if (ImGui::Button(label.c_str())) {
+                        SpawnUnit(ctx, m_MyPlayerId, sp + glm::vec3(3.f, 0.f, (float)t * 1.5f), playerClass, t);
+                    }
+                    if (t < 5) ImGui::SameLine();
+                }
+            }
         }
     }
 
     if (m_CameraMode == CameraMode::Commander) {
         ImGui::Separator();
-        ImGui::Text("Ausgewaehlte Einheiten: %zu", m_SelectedUnits.size());
-        ImGui::TextDisabled("LKlick: Einheit waehlen  RKlick: Bewegungsbefehl");
+        if (m_DirectControlActive && m_DirectControlNetId != 0) {
+            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.f), "DIREKTE STEUERUNG AKTIV");
+            ImGui::Text("Einheit NetID: %u", m_DirectControlNetId);
+            auto it = m_ClientNetMap.find(m_DirectControlNetId);
+            if (it != m_ClientNetMap.end()) {
+                auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+                if (cc) {
+                    if (cc->attackCooldown > 0.f) {
+                        ImGui::Text("Angriffs-Cooldown: %.1fs / %.1fs", cc->attackCooldown, cc->attackRate);
+                        ImGui::ProgressBar(1.f - (cc->attackCooldown / cc->attackRate), ImVec2(-1, 0), "Nachladen...");
+                    } else {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.f), "BEREIT ZUM ANGRIFF! [LEERTASTE]");
+                    }
+                }
+            }
+            ImGui::TextDisabled("C-Taste: Steuerung beenden");
+        } else {
+            ImGui::Text("Ausgewaehlte Einheiten: %zu", m_SelectedUnits.size());
+            if (!m_SelectedUnits.empty()) {
+                int autoAttackCount = 0;
+                for (uint32_t netId : m_SelectedUnits) {
+                    auto it = m_ClientNetMap.find(netId);
+                    if (it != m_ClientNetMap.end()) {
+                        auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+                        if (cc && cc->autoAttack) {
+                            autoAttackCount++;
+                        }
+                    }
+                }
+                ImGui::Text("Auto-Angriff: %d von %zu aktiv", autoAttackCount, m_SelectedUnits.size());
+                ImGui::TextDisabled("G-Taste: Auto-Angriff umschalten");
+                ImGui::TextDisabled("C-Taste: Erste Einheit direkt steuern");
+            }
+        }
+        ImGui::TextDisabled("LKlick: Einheit waehlen | RKlick: Befehl");
     }
 
     if (m_CameraMode == CameraMode::Building) {
@@ -2061,34 +2302,6 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             }
             if (!anyBarracks) {
                 ImGui::TextDisabled("  Keine Brutkammer gebaut. (Bauen -> Brutkammer)");
-                if (ImGui::Button("Test-Einheit am MainBase spawnen")) {
-                    // Fallback: spawn near the team's Main Base so the user can
-                    // try Commander mode without first placing a Barracks.
-                    glm::vec3 sp{};
-                    bool found = false;
-                    auto mbView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
-                    for (auto mb : mbView) {
-                        const auto& mbBc = mbView.get<BuildingComponent>(mb);
-                        if (mbBc.teamId == myTeam && mbBc.type == BuildingType::Main && !mbBc.destroyed) {
-                            sp = mbView.get<TransformComponent>(mb).position;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (found) {
-                        BugClass playerClass = BugClass::Ants;
-                        auto pView = ctx.serverRegistry.view<PlayerComponent>();
-                        for (auto pe : pView) {
-                            auto& pc = pView.get<PlayerComponent>(pe);
-                            if (pc.playerId == myTeam) {
-                                if (pc.bugClass != BugClass::None)
-                                    playerClass = pc.bugClass;
-                                break;
-                            }
-                        }
-                        SpawnUnit(ctx, myTeam, sp + glm::vec3(3.f, 0.f, 0.f), playerClass);
-                    }
-                }
             }
         }
     }
@@ -2122,15 +2335,57 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         ResourceHUD::DrawInventory(invToShow ? *invToShow : empty);
     }
 
-    // Map overlay (available to all clients with synced data)
+    // Map overlay + auto-attack (available to all clients with synced data)
     {
         ImGui::Begin("Game");
         if (ImGui::Button(m_ShowMapOverlay ? "Karte schliessen" : "Karte [M]"))
             m_ShowMapOverlay = !m_ShowMapOverlay;
+        ImGui::SameLine();
+
+        // Toggle auto-attack on selected units.
+        auto toggleAutoAttack = [&]() {
+            // Toggle client-side immediately for responsiveness
+            for (uint32_t netId : m_SelectedUnits) {
+                auto cit = m_ClientNetMap.find(netId);
+                if (cit != m_ClientNetMap.end()) {
+                    auto* cc = ctx.clientRegistry.try_get<CombatComponent>(cit->second);
+                    if (cc) {
+                        cc->autoAttack = !cc->autoAttack;
+                        if (!cc->autoAttack) {
+                            cc->commandedTarget = false;
+                            cc->target = entt::null;
+                        }
+                    }
+                }
+            }
+            // Send to server
+            CommanderOrderPacket pkt;
+            pkt.playerId = m_MyPlayerId;
+            pkt.orderType = 3; // ToggleAutoAttack
+            pkt.selectedCount = std::min(static_cast<uint32_t>(m_SelectedUnits.size()), 32u);
+            for (uint32_t i = 0; i < pkt.selectedCount; ++i)
+                pkt.selectedNetIds[i] = m_SelectedUnits[i];
+            ctx.network.Send(pkt);
+        };
+
+        bool anySelectedAuto = false;
+        for (uint32_t netId : m_SelectedUnits) {
+            auto it = m_ClientNetMap.find(netId);
+            if (it == m_ClientNetMap.end()) continue;
+            auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+            if (cc && cc->autoAttack) { anySelectedAuto = true; break; }
+        }
+        if (ImGui::Button(anySelectedAuto ? "Auto-Angriff: AN" : "Auto-Angriff: AUS"))
+            toggleAutoAttack();
+
+        // Keyboard shortcut: G for auto-attack toggle.
+        if ((ImGui::IsKeyPressed(ImGuiKey_G) || Input::IsKeyPressed(SDLK_G)) && !m_SelectedUnits.empty())
+            toggleAutoAttack();
+
         ImGui::End();
 
-        // Keyboard shortcut M
-        if (ImGui::IsKeyPressed(ImGuiKey_M))
+        // Keyboard shortcuts
+        if (ImGui::IsKeyPressed(ImGuiKey_M) || Input::IsKeyPressed(SDLK_M))
             m_ShowMapOverlay = !m_ShowMapOverlay;
     }
 
@@ -2276,6 +2531,49 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         DrawUnitHPBars(ctx);
     }
 
+    // Selection circle visual (Pikmin-style drag)
+    if (m_SelectDragging && m_Camera) {
+        int winW, winH;
+        SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
+        if (winW > 0 && winH > 0) {
+            float aspect = (float)winW / (float)winH;
+            glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
+
+            glm::vec2 center = m_SelectStartWorld;
+            float radius = glm::length(m_SelectEndWorld - center);
+            radius = std::min(radius, m_SelectMaxRadius);
+
+            static auto worldToScreen = [&](glm::vec3 pos, int w, int h) -> ImVec2 {
+                glm::vec4 clip = vp * glm::vec4(pos, 1.f);
+                if (clip.w <= 0.f) return {-1.f, -1.f};
+                clip /= clip.w;
+                float sx = (clip.x * 0.5f + 0.5f) * (float)w;
+                float sy = (1.f - (clip.y * 0.5f + 0.5f)) * (float)h;
+                return {sx, sy};
+            };
+
+            // Project a few points around the circle to screen space.
+            float groundY = GroundHeightAt(m_World, center.x, center.y);
+            constexpr int kSegments = 48;
+            std::vector<ImVec2> screenPts;
+            screenPts.reserve(kSegments + 1);
+            for (int i = 0; i <= kSegments; ++i) {
+                float a = (float)i / (float)kSegments * 6.283185f;
+                float wx = center.x + std::cos(a) * radius;
+                float wz = center.y + std::sin(a) * radius;
+                float wy = GroundHeightAt(m_World, wx, wz);
+                screenPts.push_back(worldToScreen({wx, wy, wz}, winW, winH));
+            }
+
+            ImDrawList* dl = ImGui::GetBackgroundDrawList();
+            // Semi-transparent fill
+            dl->AddConvexPolyFilled(screenPts.data(), kSegments + 1, IM_COL32(100, 180, 255, 40));
+            // Outline
+            dl->AddPolyline(screenPts.data(), kSegments + 1, IM_COL32(100, 180, 255, 200),
+                            ImDrawFlags_None, 2.f);
+        }
+    }
+
     if (DebugUI::IsVisible()) {
         ImGui::Begin("Shadow Debug");
         ImGui::SliderFloat("Bias Constant", &m_ShadowBiasConstant, 0.0f, 10.0f);
@@ -2340,7 +2638,22 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
             glm::vec3 dest{pkt.x, pkt.y, pkt.z};
             uint32_t count = std::min(pkt.selectedCount, 32u);
 
-            if (pkt.orderType != 0) {
+            if (pkt.orderType == 3) {
+                // Toggle auto-attack order
+                for (uint32_t i = 0; i < count; ++i) {
+                    auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
+                    if (it == m_ServerNetMap.end()) continue;
+                    entt::entity unit = it->second;
+                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
+                    if (cc) {
+                        cc->autoAttack = !cc->autoAttack;
+                        if (!cc->autoAttack) {
+                            cc->commandedTarget = false;
+                            cc->target = entt::null;
+                        }
+                    }
+                }
+            } else if (pkt.orderType != 0) {
                 // Attack order
                 entt::entity targetEntity = entt::null;
                 {
@@ -2361,6 +2674,10 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                     auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
                     if (it == m_ServerNetMap.end()) continue;
                     entt::entity unit = it->second;
+
+                    // Skip if unit is currently directly controlled
+                    auto* uc = ctx.serverRegistry.try_get<UnitComponent>(unit);
+                    if (uc && uc->directControl) continue;
 
                     auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
                     if (cc) {
@@ -2386,6 +2703,10 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                     auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
                     if (it == m_ServerNetMap.end()) continue;
                     entt::entity unit = it->second;
+
+                    // Skip if unit is currently directly controlled
+                    auto* uc = ctx.serverRegistry.try_get<UnitComponent>(unit);
+                    if (uc && uc->directControl) continue;
 
                     auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
                     if (cc) {
@@ -2661,6 +2982,17 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
 }
 
 void GameScene::PollClientPackets(SceneContext& ctx) {
+    // Reset directControl flags and inputDir on all units at start of tick
+    {
+        auto uView = ctx.serverRegistry.view<MovementComponent, UnitComponent>();
+        for (auto ue : uView) {
+            auto& uc = uView.get<UnitComponent>(ue);
+            auto& mv = uView.get<MovementComponent>(ue);
+            uc.directControl = false;
+            mv.inputDir = glm::vec3(0.f);
+        }
+    }
+
     while (true) {
         auto result = ctx.network.ReceiveFromClient<PlayerInputPacket>(PacketType::PLAYER_INPUT);
         if (!result) break;
@@ -2669,6 +3001,80 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
         if (peerIt == m_PeerToNetId.end()) continue;
         auto entIt = m_ServerNetMap.find(peerIt->second);
         if (entIt == m_ServerNetMap.end()) continue;
+
+        // If packet has controlNetId, it's directing a unit!
+        if (packet.controlNetId != 0) {
+            auto unitIt = m_ServerNetMap.find(packet.controlNetId);
+            if (unitIt != m_ServerNetMap.end()) {
+                entt::entity unitEntity = unitIt->second;
+                // Verify ownership
+                auto* uc = ctx.serverRegistry.try_get<UnitComponent>(unitEntity);
+                auto* pc = ctx.serverRegistry.try_get<PlayerComponent>(entIt->second);
+                if (uc && pc && uc->teamId == pc->playerId) {
+                    uc->directControl = true;
+                    auto* mv = ctx.serverRegistry.try_get<MovementComponent>(unitEntity);
+                    if (mv) {
+                        mv->inputDir = {packet.dx, packet.dy, packet.dz};
+                    }
+
+                    // Clear A* pathfinding and normal orders for this unit
+                    auto* mo = ctx.serverRegistry.try_get<MovementOrderComponent>(unitEntity);
+                    if (mo) mo->active = false;
+                    auto* path = ctx.serverRegistry.try_get<PathComponent>(unitEntity);
+                    if (path) path->waypoints.clear();
+
+                    // Handle attacking!
+                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unitEntity);
+                    if (cc) {
+                        if (packet.attackActive) {
+                            // Look for nearest enemy (unit or building) to the target cursor coordinates in 2D (XZ)
+                            float bestDist = 5.f; // Pick radius: only target if within 5 units of the cursor
+                            entt::entity bestTarget = entt::null;
+
+                            // 1. Check enemy units
+                            auto uView = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+                            for (auto ue : uView) {
+                                auto& targetUc = uView.get<UnitComponent>(ue);
+                                if (targetUc.teamId == uc->teamId) continue;
+                                auto& targetHc = uView.get<HealthComponent>(ue);
+                                if (targetHc.dead) continue;
+                                auto& targetTf = uView.get<TransformComponent>(ue);
+                                
+                                float d = glm::length(glm::vec2(targetTf.position.x - packet.targetX, targetTf.position.z - packet.targetZ));
+                                if (d < bestDist) {
+                                    bestDist = d;
+                                    bestTarget = ue;
+                                }
+                            }
+
+                            // 2. Check enemy buildings
+                            auto bView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+                            for (auto be : bView) {
+                                auto& targetBc = bView.get<BuildingComponent>(be);
+                                if (targetBc.teamId == uc->teamId || targetBc.destroyed) continue;
+                                auto& targetTf = bView.get<TransformComponent>(be);
+
+                                float d = glm::length(glm::vec2(targetTf.position.x - packet.targetX, targetTf.position.z - packet.targetZ));
+                                if (d < bestDist) {
+                                    bestDist = d;
+                                    bestTarget = be;
+                                }
+                            }
+
+                            // Set target if found, otherwise clear target if clicked on empty ground
+                            if (bestTarget != entt::null) {
+                                cc->target = bestTarget;
+                                cc->commandedTarget = true;
+                            } else {
+                                cc->target = entt::null;
+                                cc->commandedTarget = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         auto* movement = ctx.serverRegistry.try_get<MovementComponent>(entIt->second);
         if (movement) movement->inputDir = {packet.dx, packet.dy, packet.dz};
         auto* transform = ctx.serverRegistry.try_get<TransformComponent>(entIt->second);
@@ -2694,6 +3100,23 @@ void GameScene::SendSnapshots(SceneContext& ctx) {
             pkt.vx = m->velocity.x; pkt.vy = m->velocity.y; pkt.vz = m->velocity.z;
         } else {
             pkt.vx = pkt.vy = pkt.vz = 0.f;
+        }
+        auto* cc = ctx.serverRegistry.try_get<CombatComponent>(entity);
+        if (cc) {
+            pkt.autoAttack     = cc->autoAttack ? 1 : 0;
+            pkt.attackCooldown = cc->attackCooldown;
+            pkt.attackRate     = cc->attackRate;
+            if (cc->target != entt::null && ctx.serverRegistry.valid(cc->target)) {
+                auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc->target);
+                pkt.targetNetId = tnc ? tnc->netId : 0;
+            } else {
+                pkt.targetNetId = 0;
+            }
+        } else {
+            pkt.autoAttack     = 0;
+            pkt.attackCooldown = 0.f;
+            pkt.attackRate     = 1.f;
+            pkt.targetNetId    = 0;
         }
         ctx.network.BroadcastToAll(pkt);
     }
@@ -2753,6 +3176,22 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
             t->scale = glm::vec3{pkt->sx, pkt->sy, pkt->sz};
         }
         if (m) m->velocity = {pkt->vx, pkt->vy, pkt->vz};
+
+        auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+        if (!cc) {
+            cc = &ctx.clientRegistry.emplace<CombatComponent>(it->second);
+        }
+        if (cc) {
+            cc->autoAttack = (pkt->autoAttack != 0);
+            cc->attackCooldown = pkt->attackCooldown;
+            cc->attackRate     = pkt->attackRate;
+            if (pkt->targetNetId != 0) {
+                auto targetIt = m_ClientNetMap.find(pkt->targetNetId);
+                cc->target = (targetIt != m_ClientNetMap.end()) ? targetIt->second : entt::null;
+            } else {
+                cc->target = entt::null;
+            }
+        }
     }
 
     while (true) {
@@ -2774,16 +3213,38 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (m_ClientNetMap.count(pkt->netId)) continue;
         const UnitRole role = (pkt->role == 1) ? UnitRole::Worker : UnitRole::Combat;
         auto entity = ctx.clientRegistry.create();
-        auto& tf = ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
-        if (role == UnitRole::Worker) tf.scale = glm::vec3(0.6f); // visibly smaller than combat units
+
+        // Tier-scaled unit visuals (BeesWasps have their own tier sizing).
+        glm::vec3 unitScale(1.f);
+        BugClass bc = static_cast<BugClass>(pkt->bugClass);
+        if (bc == BugClass::BeesWasps) {
+            if (pkt->tier == 1)      unitScale = glm::vec3(0.4f);
+            else if (pkt->tier == 2) unitScale = glm::vec3(1.2f);
+            else if (pkt->tier == 3) unitScale = glm::vec3(0.7f);
+            else if (pkt->tier == 4) unitScale = glm::vec3(0.6f);
+            else if (pkt->tier == 5) unitScale = glm::vec3(1.6f);
+        } else {
+            if (pkt->tier == 1)      unitScale = glm::vec3(0.8f);
+            else if (pkt->tier == 2) unitScale = glm::vec3(1.0f);
+            else if (pkt->tier == 3) unitScale = glm::vec3(1.2f);
+            else if (pkt->tier == 4) unitScale = glm::vec3(1.4f);
+            else if (pkt->tier == 5) unitScale = glm::vec3(1.8f);
+        }
+        // Workers are visibly smaller than combat units of the same tier.
+        if (role == UnitRole::Worker) unitScale *= 0.6f;
+
+        TransformComponent tf{glm::vec3{pkt->x, pkt->y, pkt->z}};
+        tf.scale = unitScale;
+        ctx.clientRegistry.emplace<TransformComponent>(entity, tf);
         ctx.clientRegistry.emplace<MovementComponent>(entity);
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
         ctx.clientRegistry.emplace<UnitComponent>(entity,
-            UnitComponent{pkt->teamId, static_cast<BugClass>(pkt->bugClass), false, role});
+            UnitComponent{pkt->teamId, bc, pkt->tier, false, false, role});
         ctx.clientRegistry.emplace<HealthComponent>(entity,
             HealthComponent{pkt->maxHp});
         ctx.clientRegistry.emplace<MovementOrderComponent>(entity);
+        ctx.clientRegistry.emplace<CombatComponent>(entity);
         m_ClientNetMap[pkt->netId] = entity;
     }
 
@@ -2793,7 +3254,43 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (!pkt) break;
         auto it = m_ClientNetMap.find(pkt->netId);
         if (it == m_ClientNetMap.end()) continue;
-        ctx.clientRegistry.destroy(it->second);
+
+        auto entity = it->second;
+        auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
+        auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
+        if (uc && tf) {
+            if (uc->bugClass == BugClass::BeesWasps && uc->tier == 1) {
+                VisualExplosion expl;
+                expl.position = tf->position;
+                expl.timer = 0.f;
+                expl.maxDuration = 0.5f;
+                expl.maxRadius = 2.5f;
+                m_VisualExplosions.push_back(expl);
+            }
+            else if (uc->tier == 1) {
+                // Check if devoured by a nearby Tigerschnegel (Snails Tier 3)
+                auto snailView = ctx.clientRegistry.view<TransformComponent, UnitComponent>();
+                for (auto sEnt : snailView) {
+                    auto& sUc = snailView.get<UnitComponent>(sEnt);
+                    if (sUc.bugClass == BugClass::Snails && sUc.tier == 3) {
+                        auto& sTf = snailView.get<TransformComponent>(sEnt);
+                        float d = glm::length(glm::vec2(sTf.position.x - tf->position.x, sTf.position.z - tf->position.z));
+                        if (d <= 2.2f) {
+                            VisualExplosion expl;
+                            expl.position = tf->position;
+                            expl.timer = 0.f;
+                            expl.maxDuration = 0.4f;
+                            expl.maxRadius = 1.8f;
+                            expl.type = 1; // Reuse toxic purple splash for devour!
+                            m_VisualExplosions.push_back(expl);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        ctx.clientRegistry.destroy(entity);
         m_ClientNetMap.erase(it);
         // Remove from selection if present
         m_SelectedUnits.erase(std::remove(m_SelectedUnits.begin(), m_SelectedUnits.end(), pkt->netId),
@@ -2806,8 +3303,58 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (!pkt) break;
         auto it = m_ClientNetMap.find(pkt->netId);
         if (it == m_ClientNetMap.end()) continue;
-        auto* hc = ctx.clientRegistry.try_get<HealthComponent>(it->second);
-        if (hc) hc->hp = pkt->hp;
+        auto entity = it->second;
+        auto* hc = ctx.clientRegistry.try_get<HealthComponent>(entity);
+        if (hc) {
+            // Visual triggers on health changes
+            if (pkt->hp < hc->hp) {
+                auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
+                auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
+                if (uc && tf) {
+                    if (uc->bugClass == BugClass::ButterfliesMoths && uc->tier == 3) {
+                        // Brennhaar-Raupe toxic hairs visual explosion
+                        VisualExplosion expl;
+                        expl.position = tf->position;
+                        expl.timer = 0.f;
+                        expl.maxDuration = 0.5f;
+                        expl.maxRadius = 3.0f;
+                        expl.type = 1; // type 1 = Toxic Hairs (purple/green)
+                        m_VisualExplosions.push_back(expl);
+                    }
+                }
+            }
+            
+            // Check for Totenkopfschwärmer triggering a heal or pollen visual
+            auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
+            auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
+            if (uc && tf && uc->bugClass == BugClass::ButterfliesMoths && uc->tier == 5) {
+                // Determine whether it healed allies or stunned enemies
+                bool anyDamagedAlly = false;
+                auto allyView = ctx.clientRegistry.view<UnitComponent, HealthComponent, TransformComponent>();
+                for (auto fEnt : allyView) {
+                    auto& fUc = allyView.get<UnitComponent>(fEnt);
+                    auto& fHc = allyView.get<HealthComponent>(fEnt);
+                    if (fUc.teamId == uc->teamId && fHc.hp < fHc.maxHp) {
+                        auto& fTf = allyView.get<TransformComponent>(fEnt);
+                        float dist = glm::length(glm::vec2(fTf.position.x - tf->position.x, fTf.position.z - tf->position.z));
+                        if (dist <= 4.0f) {
+                            anyDamagedAlly = true;
+                            break;
+                        }
+                    }
+                }
+
+                VisualExplosion expl;
+                expl.position = tf->position;
+                expl.timer = 0.f;
+                expl.maxDuration = 0.6f;
+                expl.maxRadius = 4.0f;
+                expl.type = anyDamagedAlly ? 3 : 2; // Type 3 = Heal (emerald green), Type 2 = Sleep Pollen (blue/cyan)
+                m_VisualExplosions.push_back(expl);
+            }
+
+            hc->hp = pkt->hp;
+        }
     }
 
     // Territory snapshot
@@ -2972,7 +3519,11 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
 }
 
 void GameScene::SendLocalInput(SceneContext& ctx) {
-    if (!ctx.network.IsConnected() || !Input::IsRelativeMouseMode() || !m_Camera) return;
+    if (!ctx.network.IsConnected() || !m_Camera) return;
+
+    bool directControl = m_DirectControlActive && m_DirectControlNetId != 0;
+    if (!directControl && !Input::IsRelativeMouseMode()) return;
+
     glm::vec3 forward = m_Camera->m_Front;
     forward.y = 0.f;
     if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
@@ -2984,13 +3535,34 @@ void GameScene::SendLocalInput(SceneContext& ctx) {
     if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
     if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
     if (Input::IsKeyDown(SDLK_D)) moveDir += right;
-    if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
-    if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
+    if (!directControl) {
+        if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
+        if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
+    }
     if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
 
     PlayerInputPacket pkt;
     pkt.dx = moveDir.x; pkt.dy = moveDir.y; pkt.dz = moveDir.z;
     pkt.yaw = m_Camera->m_Yaw; pkt.pitch = m_Camera->m_Pitch;
+
+    if (directControl) {
+        pkt.controlNetId = m_DirectControlNetId;
+        pkt.attackActive = Input::IsKeyDown(SDLK_SPACE) ? 1 : 0;
+
+        // Project cursor to world XZ
+        glm::vec2 mpos = Input::GetMousePosition();
+        int winW, winH;
+        SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
+        glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+        pkt.targetX = worldPos.x;
+        pkt.targetZ = worldPos.z;
+    } else {
+        pkt.controlNetId = 0;
+        pkt.attackActive = 0;
+        pkt.targetX = 0.f;
+        pkt.targetZ = 0.f;
+    }
+
     ctx.network.Send(pkt);
 }
 
@@ -3086,67 +3658,218 @@ void GameScene::LoadSceneMeshCollision(
  *   Omnivores  (Ants, Roaches, Beetles, CentipedesWorms) → medium (12)
  *   Rest       → low (7)
  */
-void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bc, float hp)
+void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bc, int tier, float hp)
 {
     if (!ctx.network.IsHosting()) return;
 
+    // Add a tiny random offset to avoid exact clumping on spawn
+    static std::mt19937 spawnRng{std::random_device{}()};
+    std::uniform_real_distribution<float> spawnOffset(-0.25f, 0.25f);
+    pos.x += spawnOffset(spawnRng);
+    pos.z += spawnOffset(spawnRng);
+
     // Position: ground units sit on terrain, flying units hover above it.
     pos.y = GroundHeightAt(m_World, pos.x, pos.z);
-    if (IsFlying(bc))
+    if (IsFlying(bc, tier))
         pos.y += 4.f;
 
-    // Damage by diet archetype
-    float dmg = 7.f;
-    if (bc == BugClass::Mantis || bc == BugClass::Dragonflies || bc == BugClass::Scorpions)
-        dmg = 20.f;
-    else if (bc == BugClass::Ants || bc == BugClass::Roaches || bc == BugClass::Beetles ||
-             bc == BugClass::CentipedesWorms)
-        dmg = 12.f;
+    // Define unit properties based on bugClass and tier
+    float dmg = 10.f;
+    float speed = 10.f;
+    float attackRange = 1.5f;
+    float attackRate = 1.5f;
+    float unitScale = 1.0f;
 
-    // Debuffs
-    if (IsFlying(bc))
-        hp *= 0.75f;
-    float speed = IsClimber(bc) ? 6.f : 10.f;
+    if (bc == BugClass::BeesWasps) {
+        if (tier == 1) { // Honigbiene
+            if (hp < 0.f) hp = 60.f;
+            dmg = 40.f;
+            speed = 11.f;
+            attackRange = 1.8f;
+            attackRate = 1.0f;
+            unitScale = 0.4f;
+        } else if (tier == 2) { // Hummel
+            if (hp < 0.f) hp = 250.f;
+            dmg = 8.f;
+            speed = 4.5f;
+            attackRange = 1.8f;
+            attackRate = 1.6f;
+            unitScale = 1.2f;
+        } else if (tier == 3) { // Feldwespe
+            if (hp < 0.f) hp = 95.f;
+            dmg = 16.f;
+            speed = 9.f;
+            attackRange = 1.8f;
+            attackRate = 1.1f;
+            unitScale = 0.7f;
+        } else if (tier == 4) { // Gelbwest-Wespe
+            if (hp < 0.f) hp = 80.f;
+            dmg = 25.f;
+            speed = 7.5f;
+            attackRange = 6.0f; // Ranged
+            attackRate = 1.5f;
+            unitScale = 0.6f;
+        } else if (tier == 5) { // Hornisse
+            if (hp < 0.f) hp = 210.f;
+            dmg = 35.f;
+            speed = 12.f;
+            attackRange = 2.0f;
+            attackRate = 1.2f;
+            unitScale = 1.6f;
+        }
+    } else if (bc == BugClass::Snails) {
+        if (tier == 1) { // Nacktschnecke (crawling melee, leaves slime slow trail)
+            if (hp < 0.f) hp = 100.f;
+            dmg = 8.f;
+            speed = 3.5f;
+            attackRange = 1.3f;
+            attackRate = 1.5f;
+            unitScale = 0.6f;
+        } else if (tier == 2) { // Hain-Bänderschnecke (crawling light tank, retreats to shell at low HP)
+            if (hp < 0.f) hp = 170.f;
+            dmg = 12.f;
+            speed = 2.8f;
+            attackRange = 1.4f;
+            attackRate = 1.8f;
+            unitScale = 0.9f;
+        } else if (tier == 3) { // Tigerschnegel (surprisingly fast, devours T1 units)
+            if (hp < 0.f) hp = 140.f;
+            dmg = 18.f;
+            speed = 8.5f;
+            attackRange = 1.4f;
+            attackRate = 1.4f;
+            unitScale = 0.8f;
+        } else if (tier == 4) { // Turmdeckelschnecke (crawling front-shield barricade)
+            if (hp < 0.f) hp = 240.f;
+            dmg = 14.f;
+            speed = 2.0f;
+            attackRange = 1.3f;
+            attackRate = 1.9f;
+            unitScale = 1.1f;
+        } else if (tier == 5) { // Weinbergschnecke (gigantic rolling siege tank, ignores small hits, 3x structure dmg)
+            if (hp < 0.f) hp = 450.f;
+            dmg = 35.f;
+            speed = 1.8f;
+            attackRange = 1.8f;
+            attackRate = 2.2f;
+            unitScale = 1.8f;
+        }
+    } else if (bc == BugClass::ButterfliesMoths) {
+        if (tier == 1) { // Blattraupe (melee meat shield, slow, high HP, cheap)
+            if (hp < 0.f) hp = 120.f;
+            dmg = 5.f;
+            speed = 3.5f;
+            attackRange = 1.3f;
+            attackRate = 1.8f;
+            unitScale = 0.5f;
+        } else if (tier == 2) { // Tagfalter (scout, flying, fast, no damage)
+            if (hp < 0.f) hp = 55.f;
+            dmg = 1.f;
+            speed = 14.f;
+            attackRange = 1.5f;
+            attackRate = 2.0f;
+            unitScale = 0.8f;
+        } else if (tier == 3) { // Brennhaar-Raupe (defensive crawler, releases toxic hairs when hit)
+            if (hp < 0.f) hp = 160.f;
+            dmg = 12.f;
+            speed = 4.5f;
+            attackRange = 1.5f;
+            attackRate = 1.6f;
+            unitScale = 0.6f;
+        } else if (tier == 4) { // Nachtfalter / Motte (flying support stealth shroud)
+            if (hp < 0.f) hp = 90.f;
+            dmg = 8.f;
+            speed = 8.0f;
+            attackRange = 4.0f; // Ranged dust spit
+            attackRate = 1.8f;
+            unitScale = 0.8f;
+        } else if (tier == 5) { // Totenkopfschwärmer (flying magical elite: heal / stun area burst)
+            if (hp < 0.f) hp = 240.f;
+            dmg = 10.f;
+            speed = 9.5f;
+            attackRange = 4.5f;
+            attackRate = 2.5f;
+            unitScale = 1.4f;
+        }
+    } else {
+        // Fallback scaling for other factions
+        if (tier == 1) {
+            if (hp < 0.f) hp = 100.f;
+            dmg = 10.f; speed = 10.f; attackRange = 1.5f; attackRate = 1.5f; unitScale = 0.8f;
+        } else if (tier == 2) {
+            if (hp < 0.f) hp = 150.f;
+            dmg = 15.f; speed = 8.f; attackRange = 1.5f; attackRate = 1.5f; unitScale = 1.0f;
+        } else if (tier == 3) {
+            if (hp < 0.f) hp = 200.f;
+            dmg = 20.f; speed = 7.f; attackRange = 1.5f; attackRate = 1.5f; unitScale = 1.2f;
+        } else if (tier == 4) {
+            if (hp < 0.f) hp = 250.f;
+            dmg = 25.f; speed = 6.f; attackRange = 5.0f; attackRate = 1.5f; unitScale = 1.4f;
+        } else if (tier == 5) {
+            if (hp < 0.f) hp = 400.f;
+            dmg = 40.f; speed = 5.f; attackRange = 2.0f; attackRate = 1.5f; unitScale = 1.8f;
+        }
+    }
+
+    if (IsClimber(bc)) {
+        speed *= 0.6f;
+    }
 
     const uint32_t netId = m_NextNetId++;
     auto e = ctx.serverRegistry.create();
-    ctx.serverRegistry.emplace<TransformComponent>(e, pos);
+    
+    TransformComponent tf{pos};
+    tf.scale = glm::vec3(unitScale);
+    ctx.serverRegistry.emplace<TransformComponent>(e, tf);
     ctx.serverRegistry.emplace<MovementComponent>(e, MovementComponent{glm::vec3(0.f), speed});
     ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
     ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
-    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false});
+    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, tier, false, false, UnitRole::Combat});
     ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
     ctx.serverRegistry.emplace<CombatComponent>(e,
-        CombatComponent{/*range=*/6.f, /*dmg=*/dmg, /*cd=*/0.f, /*rate=*/1.5f, entt::null, false});
+        CombatComponent{attackRange, dmg, /*cd=*/0.f, attackRate, entt::null, false});
     ctx.serverRegistry.emplace<MovementOrderComponent>(e);
     m_ServerNetMap[netId] = e;
+
+    // Dynamic box for ground units
+    if (!IsFlying(bc, tier) && ctx.physics) {
+        uint32_t physicsId = ctx.world->GetNextPhysicsID();
+        PhysicsBodyHandle bh = ctx.physics->AddUnitBox(
+            physicsId,
+            JPH::RVec3(pos.x, pos.y, pos.z),
+            JPH::Vec3(0.4f * unitScale, 0.3f * unitScale, 0.4f * unitScale));
+        if (bh.IsValid()) {
+            ctx.world->RegisterPhysicsEntity(physicsId, e);
+            ctx.serverRegistry.emplace<PhysicsBodyComponent>(e, bh);
+        }
+    }
 
     UnitSpawnedPacket pkt;
     pkt.netId    = netId;
     pkt.teamId   = teamId;
     pkt.bugClass = static_cast<uint8_t>(bc);
+    pkt.tier     = static_cast<uint8_t>(tier);
     pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
     pkt.hp = hp; pkt.maxHp = hp;
     ctx.network.BroadcastToAll(pkt);
 
-    // Also create the client-side entity directly when hosting, because
-    // BroadcastToAll doesn't loop back to the host's local client — so
-    // without this the host never sees its own freshly spawned units.
-    // Mirrors the same fallback that SpawnBuilding uses.
+    // Also create the client-side entity directly when hosting
     if (!m_ClientNetMap.count(netId)) {
         auto ce = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(ce, pos);
+        TransformComponent cTf{pos};
+        cTf.scale = glm::vec3(unitScale);
+        ctx.clientRegistry.emplace<TransformComponent>(ce, cTf);
         ctx.clientRegistry.emplace<MovementComponent>(ce, MovementComponent{glm::vec3(0.f), speed});
         ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
         ctx.clientRegistry.emplace<ModelComponent>(ce, std::string("assets/cube.glb"));
-        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, false});
+        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, tier, false, false, UnitRole::Combat});
         ctx.clientRegistry.emplace<HealthComponent>(ce, HealthComponent{hp});
         ctx.clientRegistry.emplace<MovementOrderComponent>(ce);
         m_ClientNetMap[netId] = ce;
     }
 
-    spdlog::info("GameScene: spawned unit netId={} team={} class={} hp={:.0f}",
-                 netId, teamId, (int)bc, hp);
+    spdlog::info("GameScene: spawned unit netId={} team={} class={} tier={} hp={:.0f}",
+                 netId, teamId, (int)bc, tier, hp);
 }
 
 // ---------------------------------------------------------------------------
@@ -3175,7 +3898,7 @@ void GameScene::SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, B
     ctx.serverRegistry.emplace<MovementComponent>(e, MovementComponent{glm::vec3(0.f), speed});
     ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
     ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
-    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false, UnitRole::Worker});
+    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, /*tier=*/1, false, false, UnitRole::Worker});
     ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
     // Workers can defend themselves but hit weakly — they're economic units, not soldiers.
     ctx.serverRegistry.emplace<CombatComponent>(e,
@@ -3190,6 +3913,7 @@ void GameScene::SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, B
     pkt.teamId   = teamId;
     pkt.bugClass = static_cast<uint8_t>(bc);
     pkt.role     = 1; // Worker
+    pkt.tier     = 1; // Workers are always tier 1
     pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
     pkt.hp = hp; pkt.maxHp = hp;
     ctx.network.BroadcastToAll(pkt);
@@ -3202,7 +3926,7 @@ void GameScene::SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, B
         ctx.clientRegistry.emplace<MovementComponent>(ce, MovementComponent{glm::vec3(0.f), speed});
         ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
         ctx.clientRegistry.emplace<ModelComponent>(ce, std::string("assets/cube.glb"));
-        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, false, UnitRole::Worker});
+        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, /*tier=*/1, false, false, UnitRole::Worker});
         ctx.clientRegistry.emplace<HealthComponent>(ce, HealthComponent{hp});
         ctx.clientRegistry.emplace<MovementOrderComponent>(ce);
         m_ClientNetMap[netId] = ce;
@@ -3309,6 +4033,15 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
     }
     m_ServerNetMap[netId] = e;
 
+    // Static box body so units collide with this building.
+    if (ctx.physics) {
+        PhysicsBodyHandle bh = ctx.physics->AddStaticBox(
+            JPH::RVec3(pos.x, pos.y, pos.z),
+            JPH::Vec3(1.0f, 0.5f, 1.0f));
+        if (bh.IsValid())
+            ctx.serverRegistry.emplace<PhysicsBodyComponent>(e, bh);
+    }
+
     BuildingSpawnedPacket pkt;
     pkt.netId        = netId;
     pkt.teamId       = teamId;
@@ -3366,6 +4099,12 @@ void GameScene::ApplyUpgrade(SceneContext& ctx, uint32_t teamId, UpgradePathID p
 void GameScene::HandleBuildingDeath(SceneContext& ctx, entt::entity entity, uint32_t netId)
 {
     if (!ctx.serverRegistry.valid(entity)) return;
+
+    // Remove Jolt physics body (static box) before destroying the entity.
+    if (auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(entity)) {
+        if (physComp->handle.IsValid() && ctx.physics)
+            ctx.physics->RemoveBody(physComp->handle);
+    }
 
     // Broadcast destruction
     BuildingDestroyedPacket pkt;
@@ -3457,6 +4196,33 @@ glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
  */
 void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 {
+    struct KillRec { entt::entity dead; uint32_t netId; uint32_t killerTeam; };
+    std::vector<KillRec> toKillMovement;
+
+    // Drop and update server-side slime trails
+    m_SlimeDropAccum += dt;
+    if (m_SlimeDropAccum >= 0.3f) {
+        m_SlimeDropAccum = 0.f;
+        auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent>();
+        for (auto se : view) {
+            auto& uc = view.get<UnitComponent>(se);
+            if (uc.bugClass == BugClass::Snails && uc.tier == 1) {
+                auto& tf = view.get<TransformComponent>(se);
+                m_ServerSlimeNodes.push_back({tf.position, uc.teamId, 5.0f});
+            }
+        }
+    }
+
+    // Tick server slime nodes
+    for (auto it = m_ServerSlimeNodes.begin(); it != m_ServerSlimeNodes.end(); ) {
+        it->timer -= dt;
+        if (it->timer <= 0.f) {
+            it = m_ServerSlimeNodes.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Build a per‑tile occupancy grid from buildings (2×2 blocks).
     const int gs = m_World.GetGridSize();
     std::vector<bool> occupiedTiles(static_cast<size_t>(gs) * gs, false);
@@ -3492,21 +4258,212 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         auto& mv = view.get<MovementComponent>(e);
         auto& mo = view.get<MovementOrderComponent>(e);
         auto& uc = view.get<UnitComponent>(e);
-        bool isFlying  = IsFlying(uc.bugClass);
+        bool isFlying  = IsFlying(uc.bugClass, uc.tier);
         bool isClimber = IsClimber(uc.bugClass);
+
+        // Apply slow debuffs if any
+        float currentSpeed = mv.speed;
+
+        // Apply shell retreat movement freeze
+        if (ctx.serverRegistry.any_of<ShellRetreatComponent>(e)) {
+            currentSpeed = 0.f;
+        }
+
+        // Apply slime slow if on an enemy slime trail
+        bool onEnemySlime = false;
+        for (const auto& node : m_ServerSlimeNodes) {
+            if (node.teamId != uc.teamId) {
+                float dist = glm::length(glm::vec2(node.position.x - tf.position.x, node.position.z - tf.position.z));
+                if (dist <= 1.5f) {
+                    onEnemySlime = true;
+                    break;
+                }
+            }
+        }
+
+        if (onEnemySlime) {
+            auto& slow = ctx.serverRegistry.get_or_emplace<SlowDebuffComponent>(e);
+            slow.timer = 0.5f;
+            slow.speedMultiplier = 0.3f; // Drastic slow!
+            slow.damagePerSecond = 0.f;
+        }
+
+        // Apply stun debuffs if any
+        if (auto* stun = ctx.serverRegistry.try_get<StunDebuffComponent>(e)) {
+            stun->timer -= dt;
+            if (stun->timer > 0.f) {
+                currentSpeed = 0.f;
+            } else {
+                ctx.serverRegistry.remove<StunDebuffComponent>(e);
+            }
+        }
+        if (auto* slow = ctx.serverRegistry.try_get<SlowDebuffComponent>(e)) {
+            slow->timer -= dt;
+            if (slow->timer > 0.f) {
+                currentSpeed *= slow->speedMultiplier;
+
+                // Tick acid DOT if any
+                if (slow->damagePerSecond > 0.f) {
+                    if (auto* hc = ctx.serverRegistry.try_get<HealthComponent>(e)) {
+                        if (!hc->dead) {
+                            hc->hp -= slow->damagePerSecond * dt;
+
+                            // Broadcast HP update
+                            if (auto* nc = ctx.serverRegistry.try_get<NetworkedComponent>(e)) {
+                                UnitHpUpdatePacket hp_pkt;
+                                hp_pkt.netId = nc->netId;
+                                hp_pkt.hp = hc->hp;
+                                ctx.network.BroadcastToAll(hp_pkt);
+                            }
+
+                            if (hc->hp <= 0.f) {
+                                hc->hp = 0.f;
+                                hc->dead = true;
+                                if (auto* nc = ctx.serverRegistry.try_get<NetworkedComponent>(e)) {
+                                    uint32_t killerTeam = uc.teamId == 0 ? 1 : 0;
+                                    toKillMovement.push_back({e, nc->netId, killerTeam});
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                ctx.serverRegistry.remove<SlowDebuffComponent>(e);
+            }
+        }
+
+        auto* cc = ctx.serverRegistry.try_get<CombatComponent>(e);
+
+        if (uc.directControl) {
+            // Direct Control Movement
+            glm::vec2 dir{0.f};
+            if (glm::length(glm::vec2(mv.inputDir.x, mv.inputDir.z)) > 0.0001f) {
+                dir = glm::normalize(glm::vec2(mv.inputDir.x, mv.inputDir.z));
+            }
+            glm::vec2 step = dir * (currentSpeed * dt);
+
+            auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e);
+            bool hasPhysics = (physComp && physComp->handle.IsValid() && ctx.physics);
+
+            if (isFlying) {
+                tf.position.x += step.x;
+                tf.position.z += step.y;
+                float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
+                tf.position.y  = glm::mix(tf.position.y, targetY, 10.f * dt);
+                mv.velocity    = glm::vec3(step.x, 0.f, step.y) / dt;
+
+                // Face movement or attack target
+                if (glm::length(dir) > 0.0001f) {
+                    float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                    float currentYaw = tf.rotation.y;
+                    float diff = targetYaw - currentYaw;
+                    while (diff < -180.f) diff += 360.f;
+                    while (diff > 180.f) diff -= 360.f;
+                    tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+                } else if (cc && cc->target != entt::null && ctx.serverRegistry.valid(cc->target)) {
+                    auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
+                    if (ttf) {
+                        glm::vec2 toTarget(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z);
+                        if (glm::length(toTarget) > 0.0001f) {
+                            float targetYaw = glm::degrees(std::atan2(toTarget.x, toTarget.y));
+                            float currentYaw = tf.rotation.y;
+                            float diff = targetYaw - currentYaw;
+                            while (diff < -180.f) diff += 360.f;
+                            while (diff > 180.f) diff -= 360.f;
+                            tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+                        }
+                    }
+                }
+            } else {
+                glm::vec2 curXZ = glm::vec2(tf.position.x, tf.position.z);
+                int curTx, curTz;
+                m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
+                int currentTier = (int)m_World.GetTile(curTx, curTz).tier;
+
+                glm::vec2 chosen{0.f};
+                if (glm::length(step) > 0.0001f) {
+                    if      (canStand(curXZ + step,                       currentTier, isClimber)) chosen = step;
+                    else if (canStand(curXZ + glm::vec2(step.x, 0.f),     currentTier, isClimber)) chosen = {step.x, 0.f};
+                    else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier, isClimber)) chosen = {0.f,    step.y};
+                }
+
+                if (chosen.x == 0.f && chosen.y == 0.f) {
+                    mv.velocity = {0.f, 0.f, 0.f};
+                    if (hasPhysics)
+                        ctx.physics->SetLinearVelocity(physComp->handle, JPH::Vec3::sZero());
+                } else {
+                    if (hasPhysics) {
+                        JPH::Vec3 vel(chosen.x / dt, 0.f, chosen.y / dt);
+                        ctx.physics->SetLinearVelocity(physComp->handle, vel);
+                        JPH::RVec3 curJolt = ctx.physics->GetPosition(physComp->handle);
+                        float groundY = GroundHeightAt(m_World, curJolt.GetX(), curJolt.GetZ());
+                        if (std::abs(curJolt.GetY() - groundY) > 0.01f) {
+                            ctx.physics->SetPosition(physComp->handle,
+                                JPH::RVec3(curJolt.GetX(), groundY, curJolt.GetZ()));
+                        }
+                        tf.position = glm::vec3(curJolt.GetX(), groundY, curJolt.GetZ());
+                        mv.velocity = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+                    } else {
+                        tf.position.x += chosen.x;
+                        tf.position.z += chosen.y;
+                        tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+                        mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+                    }
+                }
+
+                // Face movement or attack target
+                if (glm::length(dir) > 0.0001f) {
+                    float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                    float currentYaw = tf.rotation.y;
+                    float diff = targetYaw - currentYaw;
+                    while (diff < -180.f) diff += 360.f;
+                    while (diff > 180.f) diff -= 360.f;
+                    tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+
+                    if (hasPhysics) {
+                        JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(),
+                            glm::radians(tf.rotation.y));
+                        ctx.physics->SetRotation(physComp->handle, rot);
+                    }
+                } else if (cc && cc->target != entt::null && ctx.serverRegistry.valid(cc->target)) {
+                    auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
+                    if (ttf) {
+                        glm::vec2 toTarget(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z);
+                        if (glm::length(toTarget) > 0.0001f) {
+                            float targetYaw = glm::degrees(std::atan2(toTarget.x, toTarget.y));
+                            float currentYaw = tf.rotation.y;
+                            float diff = targetYaw - currentYaw;
+                            while (diff < -180.f) diff += 360.f;
+                            while (diff > 180.f) diff -= 360.f;
+                            tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+
+                            if (hasPhysics) {
+                                JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(),
+                                    glm::radians(tf.rotation.y));
+                                ctx.physics->SetRotation(physComp->handle, rot);
+                            }
+                        }
+                    }
+                }
+            }
+
+            continue;
+        }
 
         // Combat target pursuit: if this unit has a commanded attack target
         // that is out of range, keep moving toward it each tick.
-        auto* cc = ctx.serverRegistry.try_get<CombatComponent>(e);
         if (cc && cc->commandedTarget && cc->target != entt::null &&
             ctx.serverRegistry.valid(cc->target)) {
             auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
             if (ttf) {
-                float distToTarget = glm::length(ttf->position - tf.position);
-                if (distToTarget > cc->attackRange + 0.5f) {
+                float distToTarget = glm::length(glm::vec2(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z));
+                bool isBuilding = ctx.serverRegistry.any_of<BuildingComponent>(cc->target);
+                float effectiveRange = cc->attackRange + (isBuilding ? 1.5f : 0.f);
+
+                if (distToTarget > effectiveRange) {
                     // Out of range: chase.
                     mo.active = true;
-                    if (glm::length(mo.destination - ttf->position) > 0.5f) {
+                    if (glm::length(glm::vec2(mo.destination.x - ttf->position.x, mo.destination.z - ttf->position.z)) > 0.5f) {
                         mo.destination = ttf->position;
                         // Mark path dirty so it recomputes next tick.
                         auto& path = ctx.serverRegistry.get_or_emplace<PathComponent>(e);
@@ -3516,6 +4473,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                     // In attack range — stop moving; UpdateCombat handles firing.
                     mo.active = false;
                     mv.velocity = {0.f, 0.f, 0.f};
+                    if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                        if (phys->handle.IsValid() && ctx.physics)
+                            ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                     continue;
                 }
             } else {
@@ -3527,6 +4487,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
         if (!mo.active) {
             mv.velocity = {0.f, 0.f, 0.f};
+            if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                if (phys->handle.IsValid() && ctx.physics)
+                    ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
             continue;
         }
 
@@ -3594,6 +4557,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                              (uint32_t)e, mo.destination.x, mo.destination.z);
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                    if (phys->handle.IsValid() && ctx.physics)
+                        ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                 continue;
             }
         }
@@ -3619,6 +4585,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             if (path.waypoints.empty()) {
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                    if (phys->handle.IsValid() && ctx.physics)
+                        ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                 continue;
             }
         }
@@ -3635,6 +4604,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 // All waypoints reached — order complete.
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                    if (phys->handle.IsValid() && ctx.physics)
+                        ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                 if (isFlying) {
                     float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
                     tf.position.y = glm::mix(tf.position.y, targetY, 10.f * dt);
@@ -3649,7 +4621,55 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         }
 
         glm::vec2 dir = distToWp > 0.001f ? toWp / distToWp : glm::vec2(0.f);
-        glm::vec2 step = dir * (mv.speed * dt);
+        glm::vec2 step = dir * (currentSpeed * dt);
+
+        // Blend the waypoint direction with unit‑unit repulsion so
+        // units spread apart.
+        if (distToWp > 0.001f) {
+            // Collect repulsion from every nearby unit.
+            glm::vec2 rep{0.f};
+            constexpr float kRepRadius = 2.5f;
+            auto sepView = ctx.serverRegistry.view<TransformComponent, UnitComponent>();
+            for (auto other : sepView) {
+                if (other == e) continue;
+                const auto& otherUc = sepView.get<UnitComponent>(other);
+                if (IsFlying(otherUc.bugClass, otherUc.tier) != isFlying) continue;
+
+                const auto& otf = sepView.get<TransformComponent>(other);
+                glm::vec2 d(curXZ.x - otf.position.x, curXZ.y - otf.position.z);
+                float dist = glm::length(d);
+                if (dist < kRepRadius) {
+                    if (dist < 0.01f) {
+                        // Point away from other. We can use the entity ID to create a deterministic angle.
+                        // To ensure entity 'e' and 'other' push in opposite directions:
+                        float angle = ((int)other % 360) * 3.14159265f / 180.f;
+                        glm::vec2 dirFromOther(std::cos(angle), std::sin(angle));
+                        if (e > other) {
+                            d = dirFromOther;
+                        } else {
+                            d = -dirFromOther;
+                        }
+                        dist = 0.01f;
+                    }
+                    // Quadratic falloff: stronger close-up, zero at radius.
+                    float t = 1.f - dist / kRepRadius;
+                    rep += (d / dist) * (t * t);
+                }
+            }
+            float repLen = glm::length(rep);
+            if (repLen > 0.001f) {
+                // Blend weight grows with repulsion urgency (more
+                // neighbours / closer neighbours → stronger steer).
+                float repWeight = glm::clamp(repLen * 0.2f, 0.3f, 0.6f);
+                glm::vec2 blended = dir * (1.f - repWeight)
+                                  + (rep / repLen) * repWeight;
+                float blen = glm::length(blended);
+                if (blen > 0.001f) {
+                    dir = blended / blen;
+                    step = dir * (currentSpeed * dt);
+                }
+            }
+        }
 
         if (isFlying) {
             // Flying units move freely — no terrain sliding, no ground snap.
@@ -3658,6 +4678,18 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
             tf.position.y  = glm::mix(tf.position.y, targetY, 10.f * dt);
             mv.velocity    = glm::vec3(step.x, 0.f, step.y) / dt;
+            // Flying units face final destination (stable diagonal heading) smoothly.
+            glm::vec2 toDest = glm::vec2(mo.destination.x, mo.destination.z) - curXZ;
+            float distToDest = glm::length(toDest);
+            if (distToDest > 0.15f) {
+                glm::vec2 destDir = toDest / distToDest;
+                float targetYaw = glm::degrees(std::atan2(destDir.x, destDir.y));
+                float currentYaw = tf.rotation.y;
+                float diff = targetYaw - currentYaw;
+                while (diff < -180.f) diff += 360.f;
+                while (diff > 180.f) diff -= 360.f;
+                tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+            }
         } else {
             int curTx, curTz;
             m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
@@ -3670,30 +4702,57 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier, isClimber)) chosen = {0.f,    step.y};
             else                                                                           chosen = {0.f, 0.f};
 
+            auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e);
+            bool hasPhysics = (physComp && physComp->handle.IsValid() && ctx.physics);
+
             if (chosen.x == 0.f && chosen.y == 0.f) {
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (hasPhysics)
+                    ctx.physics->SetLinearVelocity(physComp->handle, JPH::Vec3::sZero());
                 continue;
             }
 
-            tf.position.x += chosen.x;
-            tf.position.z += chosen.y;
-            tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
-            mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
-        }
-
-        if (isFlying) {
-            // Face the final destination so flying units don't jitter between
-            // stair-stepped waypoints (the A* pathfinder only uses 4 cardinal
-            // directions).
-            glm::vec2 toDest = glm::vec2(mo.destination.x, mo.destination.z) - curXZ;
-            float distToDest = glm::length(toDest);
-            if (distToDest > 0.001f) {
-                glm::vec2 destDir = toDest / distToDest;
-                tf.rotation.y = glm::degrees(std::atan2(destDir.x, destDir.y));
+            if (hasPhysics) {
+                JPH::Vec3 vel(chosen.x / dt, 0.f, chosen.y / dt);
+                ctx.physics->SetLinearVelocity(physComp->handle, vel);
+                JPH::RVec3 curJolt = ctx.physics->GetPosition(physComp->handle);
+                float groundY = GroundHeightAt(m_World, curJolt.GetX(), curJolt.GetZ());
+                // Only teleport the body if Y actually changes to avoid invalidating contact caches
+                if (std::abs(curJolt.GetY() - groundY) > 0.01f) {
+                    ctx.physics->SetPosition(physComp->handle,
+                        JPH::RVec3(curJolt.GetX(), groundY, curJolt.GetZ()));
+                }
+                tf.position = glm::vec3(curJolt.GetX(), groundY, curJolt.GetZ());
+                mv.velocity = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+            } else {
+                tf.position.x += chosen.x;
+                tf.position.z += chosen.y;
+                tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+                mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
             }
-        } else if (distToWp > 0.001f) {
-            tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.y));
+
+            // Ground units face the current waypoint direction smoothly.
+            if (distToWp > 0.15f) {
+                float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                float currentYaw = tf.rotation.y;
+                float diff = targetYaw - currentYaw;
+                while (diff < -180.f) diff += 360.f;
+                while (diff > 180.f) diff -= 360.f;
+                tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+
+                if (hasPhysics) {
+                    JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(),
+                        glm::radians(tf.rotation.y));
+                    ctx.physics->SetRotation(physComp->handle, rot);
+                }
+            }
         }
+    }
+
+    // Process kills from movement tick (e.g. acid DOT)
+    for (auto& kr : toKillMovement) {
+        UpgradeSystem::AddKill(kr.killerTeam);
+        HandleUnitDeath(ctx, kr.dead, kr.netId);
     }
 }
 
@@ -3713,6 +4772,57 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
  */
 void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 {
+    // Update Hain-Bänderschnecke shell retreat state
+    {
+        auto view = ctx.serverRegistry.view<UnitComponent, HealthComponent>();
+        for (auto unitEnt : view) {
+            auto& uc = view.get<UnitComponent>(unitEnt);
+            auto& hc = view.get<HealthComponent>(unitEnt);
+            if (uc.bugClass == BugClass::Snails && uc.tier == 2 && !hc.dead) {
+                bool hasShell = ctx.serverRegistry.any_of<ShellRetreatComponent>(unitEnt);
+                if (!hasShell && hc.hp < hc.maxHp * 0.3f) {
+                    ctx.serverRegistry.emplace<ShellRetreatComponent>(unitEnt);
+                    spdlog::debug("Hain-Bänderschnecke: Entered shell retreat!");
+                } else if (hasShell) {
+                    // Regenerate HP while in shell
+                    hc.hp = glm::min(hc.hp + 12.f * dt, hc.maxHp);
+                    
+                    // Broadcast HP update
+                    auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(unitEnt);
+                    if (tnc) {
+                        UnitHpUpdatePacket hp_pkt;
+                        hp_pkt.netId = tnc->netId;
+                        hp_pkt.hp    = hc.hp;
+                        ctx.network.BroadcastToAll(hp_pkt);
+                    }
+
+                    if (hc.hp >= hc.maxHp * 0.9f) {
+                        ctx.serverRegistry.remove<ShellRetreatComponent>(unitEnt);
+                        spdlog::debug("Hain-Bänderschnecke: Exited shell retreat!");
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper to check if a unit is stealthed under a friendly Motte (ButterfliesMoths Tier 4)
+    auto IsUnitStealthed = [&](entt::entity unitEnt, uint32_t teamId, const glm::vec3& unitPos) -> bool {
+        auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+        for (auto mothEnt : view) {
+            if (mothEnt == unitEnt) continue;
+            auto& mUc = view.get<UnitComponent>(mothEnt);
+            auto& mHc = view.get<HealthComponent>(mothEnt);
+            if (mUc.teamId == teamId && !mHc.dead && mUc.bugClass == BugClass::ButterfliesMoths && mUc.tier == 4) {
+                auto& mTf = view.get<TransformComponent>(mothEnt);
+                float dist = glm::length(glm::vec2(mTf.position.x - unitPos.x, mTf.position.z - unitPos.z));
+                if (dist <= 5.0f) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
     // Collect all units with health for target queries
     struct UnitInfo { entt::entity e; glm::vec3 pos; uint32_t team; float hp; };
     std::vector<UnitInfo> unitInfos;
@@ -3743,15 +4853,41 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 
         if (hc.dead) continue;
 
+        // Freeze combat actions if unit is currently stunned
+        if (ctx.serverRegistry.any_of<StunDebuffComponent>(e)) {
+            continue;
+        }
+
+        // Freeze combat actions if Hain-Bänderschnecke is in shell retreat
+        if (ctx.serverRegistry.any_of<ShellRetreatComponent>(e)) {
+            continue;
+        }
+
         // Tick attack cooldown
         if (cc.attackCooldown > 0.f) cc.attackCooldown -= dt;
 
         // Validate current target
         bool targetValid = (cc.target != entt::null) &&
                            ctx.serverRegistry.valid(cc.target);
+        bool targetIsBuilding = false;
         if (targetValid) {
             auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
-            if (!thc || thc->dead) {
+            auto* tbc = ctx.serverRegistry.try_get<BuildingComponent>(cc.target);
+            if (thc) {
+                if (thc->dead) {
+                    targetValid = false;
+                    cc.target = entt::null;
+                    cc.commandedTarget = false;
+                }
+            } else if (tbc) {
+                if (tbc->destroyed) {
+                    targetValid = false;
+                    cc.target = entt::null;
+                    cc.commandedTarget = false;
+                } else {
+                    targetIsBuilding = true;
+                }
+            } else {
                 targetValid = false;
                 cc.target = entt::null;
                 cc.commandedTarget = false;
@@ -3759,12 +4895,82 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
         }
 
         // Find nearest enemy if no valid target (only for auto-acquire, not commanded)
-        if (!targetValid && !cc.commandedTarget) {
+        if (!targetValid && !cc.commandedTarget && !uc.directControl) {
+            // 1. Check if there is any enemy within immediate attack range (so we don't chase if we can already hit something!)
             float bestDist = cc.attackRange;
+            entt::entity bestImmediate = entt::null;
+            bool immediateIsBuilding = false;
+
+            // Check immediate units
             for (const auto& info : unitInfos) {
                 if (info.team == uc.teamId) continue;
-                float d = glm::length(info.pos - tf.position);
-                if (d < bestDist) { bestDist = d; cc.target = info.e; targetValid = true; }
+                if (IsUnitStealthed(info.e, info.team, info.pos)) continue;
+                float d = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestImmediate = info.e;
+                    immediateIsBuilding = false;
+                }
+            }
+
+            // Check immediate buildings (include footprint tolerance)
+            auto bView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+            for (auto be : bView) {
+                auto& bc = bView.get<BuildingComponent>(be);
+                if (bc.teamId == uc.teamId || bc.destroyed) continue;
+                auto& btf = bView.get<TransformComponent>(be);
+                float d = glm::length(glm::vec2(btf.position.x - tf.position.x, btf.position.z - tf.position.z));
+                float effectiveBldRange = cc.attackRange + 1.5f;
+                if (d < effectiveBldRange && d < bestDist + 1.5f) {
+                    bestDist = d - 1.5f; // Normalized building distance
+                    bestImmediate = be;
+                    immediateIsBuilding = true;
+                }
+            }
+
+            if (bestImmediate != entt::null) {
+                cc.target = bestImmediate;
+                targetValid = true;
+                cc.commandedTarget = false; // Stay in place, just fight what is close
+                targetIsBuilding = immediateIsBuilding;
+            } else if (cc.autoAttack) {
+                // No immediate target, but auto-attack is enabled: search within COMBAT_SIGHT_RADIUS (10.0f)
+                float bestSightDist = FogOfWarSystem::COMBAT_SIGHT_RADIUS;
+                entt::entity bestSightTarget = entt::null;
+                bool sightIsBuilding = false;
+
+                // Check units in sight range
+                for (const auto& info : unitInfos) {
+                    if (info.team == uc.teamId) continue;
+                    if (IsUnitStealthed(info.e, info.team, info.pos)) continue;
+                    float d = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
+                    if (d < bestSightDist) {
+                        bestSightDist = d;
+                        bestSightTarget = info.e;
+                        sightIsBuilding = false;
+                    }
+                }
+
+                // Check buildings in sight range
+                for (auto be : bView) {
+                    auto& bc = bView.get<BuildingComponent>(be);
+                    if (bc.teamId == uc.teamId || bc.destroyed) continue;
+                    auto& btf = bView.get<TransformComponent>(be);
+                    float d = glm::length(glm::vec2(btf.position.x - tf.position.x, btf.position.z - tf.position.z));
+                    float bDist = d - 1.5f;
+                    if (bDist < bestSightDist) {
+                        bestSightDist = bDist;
+                        bestSightTarget = be;
+                        sightIsBuilding = true;
+                    }
+                }
+
+                if (bestSightTarget != entt::null) {
+                    cc.target = bestSightTarget;
+                    targetValid = true;
+                    cc.commandedTarget = true; // Chase the target
+                    targetIsBuilding = sightIsBuilding;
+                }
             }
         }
 
@@ -3773,36 +4979,263 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
         // Check range
         auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
         if (!ttf) { cc.target = entt::null; cc.commandedTarget = false; continue; }
-        float dist = glm::length(ttf->position - tf.position);
+        float dist = glm::length(glm::vec2(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z));
 
-        if (dist <= cc.attackRange) {
+        float effectiveRange = cc.attackRange + (targetIsBuilding ? 1.5f : 0.f);
+
+        if (dist <= effectiveRange) {
             // Pause movement while in combat
             mo.active = false;
 
             if (cc.attackCooldown <= 0.f) {
-                cc.attackCooldown = cc.attackRate;
+                // SPECIAL LOGIC: Lepidoptera Tier 5 (Totenkopfschwärmer) area heal or sleep pollen (stun)
+                if (uc.bugClass == BugClass::ButterfliesMoths && uc.tier == 5) {
+                    cc.attackCooldown = cc.attackRate; // Put on cooldown
 
-                auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
-                if (thc && !thc->dead) {
-                    thc->hp -= cc.attackDamage;
-                    spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
-                                  (uint32_t)e, (uint32_t)cc.target, cc.attackDamage, thc->hp);
-
-                    // Broadcast HP update
-                    auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
-                    if (tnc) {
-                        UnitHpUpdatePacket hp_pkt;
-                        hp_pkt.netId = tnc->netId;
-                        hp_pkt.hp    = thc->hp;
-                        ctx.network.BroadcastToAll(hp_pkt);
+                    // 1. Try to find damaged friendly units in 4.0f XZ radius
+                    std::vector<entt::entity> friendliesToHeal;
+                    auto view = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+                    for (auto fEnt : view) {
+                        auto& fUc = view.get<UnitComponent>(fEnt);
+                        auto& fHc = view.get<HealthComponent>(fEnt);
+                        if (fUc.teamId == uc.teamId && !fHc.dead && fHc.hp < fHc.maxHp) {
+                            auto& fTf = view.get<TransformComponent>(fEnt);
+                            float dist = glm::length(glm::vec2(fTf.position.x - tf.position.x, fTf.position.z - tf.position.z));
+                            if (dist <= 4.0f) {
+                                friendliesToHeal.push_back(fEnt);
+                            }
+                        }
                     }
 
-                    if (thc->hp <= 0.f) {
-                        thc->dead = true;
-                        auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
-                        uint32_t dnetId = dnc ? dnc->netId : 0;
-                        toKill.push_back({cc.target, dnetId, uc.teamId});
-                        cc.target = entt::null;
+                    if (!friendliesToHeal.empty()) {
+                        // Healing Burst!
+                        for (auto fEnt : friendliesToHeal) {
+                            auto& fHc = view.get<HealthComponent>(fEnt);
+                            fHc.hp = glm::min(fHc.hp + 20.f, fHc.maxHp);
+
+                            // Broadcast HP update
+                            auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(fEnt);
+                            if (tnc) {
+                                UnitHpUpdatePacket hp_pkt;
+                                hp_pkt.netId = tnc->netId;
+                                hp_pkt.hp    = fHc.hp;
+                                ctx.network.BroadcastToAll(hp_pkt);
+                            }
+                        }
+
+                        // Broadcast self HP update to trigger visual heal explosion on client
+                        auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                        if (enc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = enc->netId;
+                            hp_pkt.hp    = hc.hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
+                        spdlog::debug("Totenkopfschwärmer: Casted Healing Burst on {} units", friendliesToHeal.size());
+                        continue; // Done with this tick's action
+                    }
+
+                    // 2. If no friendlies to heal, try to find enemies in 4.0f XZ radius to Stun!
+                    std::vector<entt::entity> enemiesToStun;
+                    for (const auto& info : unitInfos) {
+                        if (info.team == uc.teamId) continue;
+                        float dist = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
+                        if (dist <= 4.0f) {
+                            enemiesToStun.push_back(info.e);
+                        }
+                    }
+
+                    if (!enemiesToStun.empty()) {
+                        // Drop sleep pollen!
+                        for (auto enemyEnt : enemiesToStun) {
+                            auto& stun = ctx.serverRegistry.get_or_emplace<StunDebuffComponent>(enemyEnt);
+                            stun.timer = 2.0f; // Stun for 2 seconds
+                        }
+
+                        // Broadcast self HP update to trigger visual pollen explosion on client
+                        auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                        if (enc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = enc->netId;
+                            hp_pkt.hp    = hc.hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
+                        spdlog::debug("Totenkopfschwärmer: Dropped Sleep Pollen on {} enemies", enemiesToStun.size());
+                        continue;
+                    }
+                    
+                    continue; // No targets at all, do nothing
+                }
+
+                cc.attackCooldown = cc.attackRate;
+
+                if (!targetIsBuilding) {
+                    auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
+                    if (thc && !thc->dead) {
+                        float dmgDealt = cc.attackDamage;
+                        auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
+                        if (uc.bugClass == BugClass::BeesWasps) {
+                            if (uc.tier == 1) { // Honigbiene: Kamikaze
+                                hc.hp = 0.f;
+                                hc.dead = true;
+                                auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                                uint32_t enetId = enc ? enc->netId : 0;
+                                uint32_t killerTeam = uc.teamId == 0 ? 1 : 0;
+                                if (targetUc) killerTeam = targetUc->teamId;
+                                toKill.push_back({e, enetId, killerTeam});
+                                spdlog::debug("Honigbiene: Kamikaze hit against unit!");
+                            }
+                            else if (uc.tier == 4) { // Gelbwest-Wespe: Slow acid
+                                if (targetUc && !IsFlying(targetUc->bugClass, targetUc->tier)) {
+                                    auto& slow = ctx.serverRegistry.get_or_emplace<SlowDebuffComponent>(cc.target);
+                                    slow.timer = 3.f;
+                                    slow.speedMultiplier = 0.5f;
+                                    slow.damagePerSecond = 10.f; // 10 acid damage per second
+                                    spdlog::debug("Gelbwest-Wespe: Applied slow and acid DOT to target unit!");
+                                }
+                            }
+                            else if (uc.tier == 5) { // Hornisse: Boss-Killer
+                                if (targetUc && (targetUc->tier == 1 || targetUc->tier == 2)) {
+                                    dmgDealt *= 3.f;
+                                    spdlog::debug("Hornisse: Triple bite damage against Tier {} target!", targetUc->tier);
+                                }
+                            }
+                        }
+
+                        // Hain-Bänderschnecke shell retreat damage reduction (80%)
+                        if (ctx.serverRegistry.any_of<ShellRetreatComponent>(cc.target)) {
+                            dmgDealt *= 0.2f;
+                        }
+
+                        // Turmdeckelschnecke frontal shield (85% reduction)
+                        if (targetUc && targetUc->bugClass == BugClass::Snails && targetUc->tier == 4) {
+                            auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
+                            if (ttf) {
+                                glm::vec2 targetToAttacker = glm::normalize(glm::vec2(tf.position.x - ttf->position.x, tf.position.z - ttf->position.z));
+                                float yawRad = glm::radians(ttf->rotation.y);
+                                glm::vec2 targetForward = glm::normalize(glm::vec2(std::sin(yawRad), std::cos(yawRad)));
+                                float dotProd = glm::dot(targetToAttacker, targetForward);
+                                if (dotProd > 0.5f) { // Facing within ~60 degrees
+                                    dmgDealt *= 0.15f;
+                                    spdlog::debug("Turmdeckelschnecke: Blocked frontal damage!");
+                                }
+                            }
+                        }
+
+                        // Weinbergschnecke ignores small damage (< 15)
+                        if (targetUc && targetUc->bugClass == BugClass::Snails && targetUc->tier == 5) {
+                            if (dmgDealt < 15.f) {
+                                dmgDealt = 0.f;
+                                spdlog::debug("Weinbergschnecke: Ignored minor damage!");
+                            }
+                        }
+
+                        thc->hp -= dmgDealt;
+                        spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
+                                      (uint32_t)e, (uint32_t)cc.target, dmgDealt, thc->hp);
+
+                        // Tigerschnegel devour Tier 1 units (Insta-kill)
+                        if (uc.bugClass == BugClass::Snails && uc.tier == 3) {
+                            if (targetUc && targetUc->tier == 1) {
+                                thc->hp = 0.f; // Instant devour!
+                                spdlog::debug("Tigerschnegel: Devoured Tier 1 enemy!");
+                            }
+                        }
+
+                        // Brennhaar-Raupe retaliatory toxic hair release when hit
+                        if (targetUc && targetUc->bugClass == BugClass::ButterfliesMoths && targetUc->tier == 3) {
+                            auto* targetTf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
+                            if (targetTf) {
+                                auto enemyView = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+                                for (auto enemyEnt : enemyView) {
+                                    auto& eUc = enemyView.get<UnitComponent>(enemyEnt);
+                                    if (eUc.teamId != targetUc->teamId) {
+                                        auto& eTf = enemyView.get<TransformComponent>(enemyEnt);
+                                        float d = glm::length(glm::vec2(eTf.position.x - targetTf->position.x, eTf.position.z - targetTf->position.z));
+                                        if (d <= 3.0f) {
+                                            auto& eHc = enemyView.get<HealthComponent>(enemyEnt);
+                                            if (!eHc.dead) {
+                                                eHc.hp -= 12.f; // Toxic retaliatory damage
+                                                
+                                                // Broadcast HP update
+                                                auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(enemyEnt);
+                                                if (tnc) {
+                                                    UnitHpUpdatePacket hp_pkt;
+                                                    hp_pkt.netId = tnc->netId;
+                                                    hp_pkt.hp    = eHc.hp;
+                                                    ctx.network.BroadcastToAll(hp_pkt);
+                                                }
+
+                                                if (eHc.hp <= 0.f) {
+                                                    eHc.hp = 0.f;
+                                                    eHc.dead = true;
+                                                    auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(enemyEnt);
+                                                    uint32_t dnetId = dnc ? dnc->netId : 0;
+                                                    toKill.push_back({enemyEnt, dnetId, targetUc->teamId});
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Broadcast HP update
+                        auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                        if (tnc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = tnc->netId;
+                            hp_pkt.hp    = thc->hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
+
+                        if (thc->hp <= 0.f) {
+                            thc->dead = true;
+                            auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                            uint32_t dnetId = dnc ? dnc->netId : 0;
+                            toKill.push_back({cc.target, dnetId, uc.teamId});
+                            cc.target = entt::null;
+                        }
+                    }
+                } else {
+                    auto* tbc = ctx.serverRegistry.try_get<BuildingComponent>(cc.target);
+                    if (tbc && !tbc->destroyed) {
+                        float dmgDealt = cc.attackDamage;
+                        // Weinbergschnecke deals 3x damage against buildings
+                        if (uc.bugClass == BugClass::Snails && uc.tier == 5) {
+                            dmgDealt *= 3.f;
+                        }
+                        if (uc.bugClass == BugClass::BeesWasps) {
+                            if (uc.tier == 1) { // Honigbiene: Kamikaze
+                                hc.hp = 0.f;
+                                hc.dead = true;
+                                auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                                uint32_t enetId = enc ? enc->netId : 0;
+                                toKill.push_back({e, enetId, tbc->teamId});
+                                spdlog::debug("Honigbiene: Kamikaze hit against building!");
+                            }
+                        }
+
+                        tbc->hp -= dmgDealt;
+                        spdlog::debug("Combat: unit {} hits building {} for {:.0f} dmg (hp={:.0f})",
+                                      (uint32_t)e, (uint32_t)cc.target, dmgDealt, tbc->hp);
+
+                        // Broadcast building HP update
+                        auto* bnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                        if (bnc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = bnc->netId;
+                            hp_pkt.hp    = tbc->hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
+
+                        if (tbc->hp <= 0.f) {
+                            tbc->hp = 0.f;
+                            tbc->destroyed = true;
+                            uint32_t bnetId = bnc ? bnc->netId : 0;
+                            HandleBuildingDeath(ctx, cc.target, bnetId);
+                            cc.target = entt::null;
+                        }
                     }
                 }
             }
@@ -3816,13 +5249,13 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
             auto* cc2 = ctx.serverRegistry.try_get<CombatComponent>(info.e);
             if (!cc2 || cc2->target != entt::null) continue;
 
-            float bestDist = cc2->attackRange;
+            float bestDist = cc2->attackRange + 1.5f;
             entt::entity bestBld = entt::null;
             for (auto be : bldView) {
                 auto& btf = bldView.get<TransformComponent>(be);
                 auto& bc  = bldView.get<BuildingComponent>(be);
                 if (bc.teamId == info.team || bc.destroyed) continue;
-                float d = glm::length(btf.position - info.pos);
+                float d = glm::length(glm::vec2(btf.position.x - info.pos.x, btf.position.z - info.pos.z));
                 if (d < bestDist) { bestDist = d; bestBld = be; }
             }
             if (bestBld == entt::null) continue;
@@ -3830,9 +5263,30 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
             if (cc2->attackCooldown <= 0.f) {
                 cc2->attackCooldown = cc2->attackRate;
                 auto& bc = bldView.get<BuildingComponent>(bestBld);
-                bc.hp -= cc2->attackDamage;
+
+                float dmgDealt = cc2->attackDamage;
+                auto* uc = ctx.serverRegistry.try_get<UnitComponent>(info.e);
+                // Weinbergschnecke deals 3x damage against buildings
+                if (uc && uc->bugClass == BugClass::Snails && uc->tier == 5) {
+                    dmgDealt *= 3.f;
+                }
+                if (uc && uc->bugClass == BugClass::BeesWasps) {
+                    if (uc->tier == 1) { // Honigbiene: Kamikaze
+                        auto* hc = ctx.serverRegistry.try_get<HealthComponent>(info.e);
+                        if (hc) {
+                            hc->hp = 0.f;
+                            hc->dead = true;
+                        }
+                        auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(info.e);
+                        uint32_t enetId = enc ? enc->netId : 0;
+                        toKill.push_back({info.e, enetId, bc.teamId});
+                        spdlog::debug("Honigbiene: Kamikaze hit against building!");
+                    }
+                }
+
+                bc.hp -= dmgDealt;
                 spdlog::debug("Combat: unit {} hits building {} for {:.0f} dmg (hp={:.0f})",
-                              (uint32_t)info.e, (uint32_t)bestBld, cc2->attackDamage, bc.hp);
+                              (uint32_t)info.e, (uint32_t)bestBld, dmgDealt, bc.hp);
 
                 // Broadcast building HP update
                 auto* bnc = ctx.serverRegistry.try_get<NetworkedComponent>(bestBld);
@@ -3867,6 +5321,16 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 void GameScene::HandleUnitDeath(SceneContext& ctx, entt::entity entity, uint32_t netId)
 {
     if (!ctx.serverRegistry.valid(entity)) return;
+
+    // Remove Jolt physics body before destroying the entity.
+    if (auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(entity)) {
+        if (physComp->handle.IsValid() && ctx.physics) {
+            uint32_t physicsId = static_cast<uint32_t>(
+                ctx.physics->GetSystem().GetBodyInterface().GetUserData(physComp->handle.id));
+            ctx.world->UnregisterPhysicsEntity(physicsId);
+            ctx.physics->RemoveBody(physComp->handle);
+        }
+    }
 
     auto* tf = ctx.serverRegistry.try_get<TransformComponent>(entity);
     if (tf) {
@@ -4044,6 +5508,75 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
     float aspect = (float)winW / (float)winH;
     glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
 
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+
+    // Draw visual explosions
+    for (const auto& expl : m_VisualExplosions) {
+        float progress = glm::clamp(expl.timer / expl.maxDuration, 0.f, 1.f);
+        float currentRadiusWorld = expl.maxRadius * progress;
+
+        glm::vec4 centerClip = vp * glm::vec4(expl.position, 1.f);
+        if (centerClip.w <= 0.f) continue;
+        centerClip /= centerClip.w;
+        if (centerClip.x < -1.1f || centerClip.x > 1.1f || centerClip.y < -1.1f || centerClip.y > 1.1f) continue;
+
+        float cx = (centerClip.x * 0.5f + 0.5f) * (float)winW;
+        float cy = (1.f - (centerClip.y * 0.5f + 0.5f)) * (float)winH;
+
+        glm::vec4 edgeClip = vp * glm::vec4(expl.position + glm::vec3(currentRadiusWorld, 0.f, 0.f), 1.f);
+        float rScreen = 10.f;
+        if (edgeClip.w > 0.f) {
+            edgeClip /= edgeClip.w;
+            float ex = (edgeClip.x * 0.5f + 0.5f) * (float)winW;
+            rScreen = glm::abs(ex - cx);
+        }
+
+        // Draw expanding fading outer ring
+        int alphaOuter = static_cast<int>((1.f - progress) * 200);
+        int alphaInner = static_cast<int>((1.f - progress) * 255);
+
+        ImU32 colOuter = IM_COL32(255, 100, 0, alphaOuter);
+        ImU32 colInner = IM_COL32(255, 230, 100, alphaInner);
+
+        if (expl.type == 1) { // Toxic Hairs
+            colOuter = IM_COL32(180, 50, 255, alphaOuter);
+            colInner = IM_COL32(100, 255, 100, alphaInner);
+        } else if (expl.type == 2) { // Sleep Pollen
+            colOuter = IM_COL32(0, 100, 255, alphaOuter);
+            colInner = IM_COL32(150, 240, 255, alphaInner);
+        } else if (expl.type == 3) { // Healing Burst
+            colOuter = IM_COL32(0, 255, 100, alphaOuter);
+            colInner = IM_COL32(200, 255, 200, alphaInner);
+        }
+
+        dl->AddCircle(ImVec2(cx, cy), rScreen, colOuter, 0, 4.0f);
+        dl->AddCircleFilled(ImVec2(cx, cy), rScreen * 0.6f, colInner);
+    }
+
+    // Draw client slime trails on the ground
+    for (const auto& node : m_ClientSlimeNodes) {
+        glm::vec4 centerClip = vp * glm::vec4(node.position, 1.f);
+        if (centerClip.w <= 0.f) continue;
+        centerClip /= centerClip.w;
+        if (centerClip.x < -1.1f || centerClip.x > 1.1f || centerClip.y < -1.1f || centerClip.y > 1.1f) continue;
+
+        float cx = (centerClip.x * 0.5f + 0.5f) * (float)winW;
+        float cy = (1.f - (centerClip.y * 0.5f + 0.5f)) * (float)winH;
+
+        glm::vec4 edgeClip = vp * glm::vec4(node.position + glm::vec3(1.2f, 0.f, 0.f), 1.f);
+        float rScreen = 8.f;
+        if (edgeClip.w > 0.f) {
+            edgeClip /= edgeClip.w;
+            float ex = (edgeClip.x * 0.5f + 0.5f) * (float)winW;
+            rScreen = glm::abs(ex - cx);
+        }
+
+        float alphaFrac = glm::clamp(node.timer / 5.0f, 0.f, 1.f);
+        int alpha = static_cast<int>(alphaFrac * 100);
+        dl->AddCircleFilled(ImVec2(cx, cy), rScreen, IM_COL32(50, 220, 50, alpha));
+        dl->AddCircle(ImVec2(cx, cy), rScreen, IM_COL32(80, 255, 80, (int)(alphaFrac * 30)), 0, 1.0f);
+    }
+
     // Fog check: hide HP bars for entities not revealed to the local player
     const FogGrid* fog = nullptr;
     {
@@ -4052,7 +5585,6 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
             fog = &fit->second;
     }
 
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
     constexpr float BAR_W = 40.f, BAR_H = 5.f;
 
     // Units
@@ -4084,11 +5616,178 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
                 : IM_COL32(255, 60, 60, 220);
             dl->AddRectFilled(bmin, ImVec2(bmin.x + BAR_W * frac, bmax.y), col);
 
+            // Nachtfalter stealth check for friendly units
+            bool isStealthed = false;
+            if (uc.teamId == m_MyPlayerId) {
+                auto mothView = ctx.clientRegistry.view<TransformComponent, UnitComponent>();
+                for (auto mothEnt : mothView) {
+                    auto& mUc = mothView.get<UnitComponent>(mothEnt);
+                    if (mUc.teamId == uc.teamId && mUc.bugClass == BugClass::ButterfliesMoths && mUc.tier == 4) {
+                        auto& mTf = mothView.get<TransformComponent>(mothEnt);
+                        float dist = glm::length(glm::vec2(mTf.position.x - tf.position.x, mTf.position.z - tf.position.z));
+                        if (dist <= 5.0f) {
+                            isStealthed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (isStealthed) {
+                // Draw a soft translucent purple stealth indicator dot next to the HP bar
+                dl->AddCircleFilled(ImVec2(bmax.x + 6.f, sy + BAR_H * 0.5f), 3.f, IM_COL32(180, 100, 255, 220));
+            }
+
+            // Draw shell/armor visuals for Snails
+            glm::vec4 groundClip = vp * glm::vec4(tf.position, 1.f);
+            if (groundClip.w > 0.f) {
+                groundClip /= groundClip.w;
+                float gcx = (groundClip.x * 0.5f + 0.5f) * (float)winW;
+                float gcy = (1.f - (groundClip.y * 0.5f + 0.5f)) * (float)winH;
+
+                // Hain-Bänderschnecke shell retreat protective dome
+                if (uc.bugClass == BugClass::Snails && uc.tier == 2 && hc.hp < hc.maxHp * 0.9f) {
+                    dl->AddCircleFilled(ImVec2(gcx, gcy), 22.f, IM_COL32(139, 90, 43, 60)); // brown tint
+                    dl->AddCircle(ImVec2(gcx, gcy), 22.f, IM_COL32(210, 180, 140, 200), 0, 2.0f); // tan border
+                }
+
+                // Turmdeckelschnecke frontal shield arc
+                if (uc.bugClass == BugClass::Snails && uc.tier == 4) {
+                    float yawRad = glm::radians(tf.rotation.y);
+                    float sAngle = -yawRad - 1.57079f - 0.8f;
+                    float eAngle = -yawRad - 1.57079f + 0.8f;
+                    dl->PathArcTo(ImVec2(gcx, gcy), 20.f, sAngle, eAngle);
+                    dl->PathStroke(IM_COL32(255, 215, 0, 220), false, 2.5f);
+                }
+            }
+
+            // Draw a beautiful dusty purple shroud field under the Nachtfalter itself
+            if (uc.bugClass == BugClass::ButterfliesMoths && uc.tier == 4) {
+                float worldR = 5.0f;
+                glm::vec4 centerClip = vp * glm::vec4(tf.position, 1.f);
+                if (centerClip.w > 0.f) {
+                    centerClip /= centerClip.w;
+                    float cx = (centerClip.x * 0.5f + 0.5f) * (float)winW;
+                    float cy = (1.f - (centerClip.y * 0.5f + 0.5f)) * (float)winH;
+
+                    glm::vec4 edgeClip = vp * glm::vec4(tf.position + glm::vec3(worldR, 0.f, 0.f), 1.f);
+                    float rScreen = 25.f;
+                    if (edgeClip.w > 0.f) {
+                        edgeClip /= edgeClip.w;
+                        float ex = (edgeClip.x * 0.5f + 0.5f) * (float)winW;
+                        rScreen = glm::abs(ex - cx);
+                    }
+
+                    dl->AddCircle(ImVec2(cx, cy), rScreen, IM_COL32(180, 100, 255, 90), 0, 1.5f);
+                    dl->AddCircleFilled(ImVec2(cx, cy), rScreen, IM_COL32(180, 100, 255, 20));
+                }
+            }
+
             bool selected = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId)
                             != m_SelectedUnits.end();
             if (selected)
                 dl->AddRect(ImVec2(bmin.x - 1, bmin.y - 1), ImVec2(bmax.x + 1, bmax.y + 1),
                             IM_COL32(255, 255, 0, 255), 0.f, 0, 1.5f);
+
+            auto* cc = ctx.clientRegistry.try_get<CombatComponent>(e);
+            if (cc) {
+                if (cc->autoAttack) {
+                    dl->AddCircleFilled(ImVec2(bmin.x - 6.f, sy + BAR_H * 0.5f), 3.f, IM_COL32(0, 255, 0, 255));
+                }
+                
+                // Attack Cooldown Bar
+                if (cc->attackCooldown > 0.f && cc->attackRate > 0.f) {
+                    float cdFrac = glm::clamp(cc->attackCooldown / cc->attackRate, 0.f, 1.f);
+                    ImVec2 cmin{bmin.x, bmax.y + 1.f};
+                    ImVec2 cmax{bmax.x, bmax.y + 3.f};
+                    dl->AddRectFilled(cmin, cmax, IM_COL32(30, 30, 30, 200));
+                    dl->AddRectFilled(cmin, ImVec2(cmin.x + BAR_W * cdFrac, cmax.y), IM_COL32(0, 191, 255, 220)); // DeepSkyBlue
+                }
+
+                if (cc->target != entt::null && ctx.clientRegistry.valid(cc->target)) {
+                    auto* ttf = ctx.clientRegistry.try_get<TransformComponent>(cc->target);
+                    if (ttf) {
+                        glm::vec4 srcClip = vp * glm::vec4(tf.position, 1.f);
+                        glm::vec4 dstClip = vp * glm::vec4(ttf->position, 1.f);
+                        if (srcClip.w > 0.f && dstClip.w > 0.f) {
+                            srcClip /= srcClip.w;
+                            dstClip /= dstClip.w;
+                            float srcX = (srcClip.x * 0.5f + 0.5f) * (float)winW;
+                            float srcY = (1.f - (srcClip.y * 0.5f + 0.5f)) * (float)winH;
+                            float dstX = (dstClip.x * 0.5f + 0.5f) * (float)winW;
+                            float dstY = (1.f - (dstClip.y * 0.5f + 0.5f)) * (float)winH;
+
+                            // 1. Draw a very faint target line showing current unit target
+                            ImU32 faintCol = (uc.teamId == m_MyPlayerId) 
+                                ? IM_COL32(255, 200, 0, 45)   // friendly
+                                : IM_COL32(255, 50, 50, 45);    // hostile
+                            dl->AddLine(ImVec2(srcX, srcY), ImVec2(dstX, dstY), faintCol, 1.0f);
+
+                            // Define colors for the attack effect
+                            ImU32 glow1 = IM_COL32(255, 50, 50, 60);
+                            ImU32 glow2 = IM_COL32(255, 50, 50, 130);
+                            ImU32 core  = IM_COL32(255, 200, 200, 255);
+                            if (uc.teamId == m_MyPlayerId) {
+                                glow1 = IM_COL32(255, 200, 0, 60);
+                                glow2 = IM_COL32(255, 200, 0, 130);
+                                core  = IM_COL32(255, 255, 200, 255);
+                            }
+
+                            // Check if ranged vs melee
+                            bool isRanged = (cc->attackRange > 3.0f);
+                            float elapsed = cc->attackRate - cc->attackCooldown;
+
+                            if (isRanged) {
+                                // Projectile flies for the first 0.35s of the attack cooldown
+                                float travelDuration = glm::min(0.35f, cc->attackRate);
+                                if (cc->attackCooldown > 0.f && elapsed >= 0.f && elapsed <= travelDuration) {
+                                    float t = elapsed / travelDuration;
+                                    float projX = srcX + (dstX - srcX) * t;
+                                    float projY = srcY + (dstY - srcY) * t;
+                                    ImVec2 projPos{projX, projY};
+
+                                    if (uc.bugClass == BugClass::BeesWasps && uc.tier == 4) {
+                                        // Gelbwest-Wespe: Bright green acid projectile & trail
+                                        ImU32 acidGlow1 = IM_COL32(0, 255, 0, 60);
+                                        ImU32 acidGlow2 = IM_COL32(0, 255, 0, 140);
+                                        ImU32 acidCore  = IM_COL32(180, 255, 180, 255);
+
+                                        // Trail from attacker to projectile
+                                        dl->AddLine(ImVec2(srcX, srcY), projPos, IM_COL32(0, 255, 0, 80), 1.5f);
+
+                                        // Outer acid blob glow
+                                        dl->AddCircleFilled(projPos, 7.f, acidGlow1);
+                                        dl->AddCircleFilled(projPos, 4.5f, acidGlow2);
+                                        dl->AddCircleFilled(projPos, 2.f, acidCore);
+                                    } else {
+                                        // Generic ranged projectile with glow trail
+                                        dl->AddLine(ImVec2(srcX, srcY), projPos, glow1, 3.f);
+                                        dl->AddLine(ImVec2(srcX, srcY), projPos, core, 1.f);
+
+                                        dl->AddCircleFilled(projPos, 5.f, glow2);
+                                        dl->AddCircleFilled(projPos, 2.f, IM_COL32(255, 255, 255, 255));
+                                    }
+                                }
+                            } else {
+                                // Melee unit: draw a quick slash / flash on target when hitting
+                                float strikeDuration = 0.15f;
+                                if (cc->attackCooldown > 0.f && elapsed >= 0.f && elapsed <= strikeDuration) {
+                                    float t = elapsed / strikeDuration; // 0 to 1
+                                    float alpha = 1.0f - t;
+                                    
+                                    // Melee hit flash/circle on target
+                                    ImU32 strikeGlow = IM_COL32(255, 255, 255, (int)(150 * alpha));
+                                    dl->AddCircleFilled(ImVec2(dstX, dstY), 12.f * (0.5f + t * 0.5f), strikeGlow);
+
+                                    // Melee strike slash line
+                                    dl->AddLine(ImVec2(srcX, srcY), ImVec2(dstX, dstY), glow2, 5.f);
+                                    dl->AddLine(ImVec2(srcX, srcY), ImVec2(dstX, dstY), core, 2.f);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -203,6 +203,24 @@ public:
         JPH::RVec3 position,
         JPH::Vec3  halfExtents);
 
+    /**
+     * @brief Adds a dynamic box for a game unit with gravity disabled,
+     *        zero friction, and no sleeping so that units collide with
+     *        each other and buildings via Jolt but do not fall or stick.
+     *
+     * Use this instead of AddKinematicBox for units that need to push
+     * apart via physics without interacting with a terrain mesh shape.
+     *
+     * @param entityID    ID of the associated game entity.
+     * @param position    World position.
+     * @param halfExtents Half-extents of the box shape.
+     * @return PhysicsBodyHandle Handle to the created body.
+     */
+    PhysicsBodyHandle AddUnitBox(
+        uint32_t   entityID,
+        JPH::RVec3 position,
+        JPH::Vec3  halfExtents);
+
     /** @brief Removes and destroys a physics body from the world. */
     void RemoveBody(PhysicsBodyHandle handle);
 
@@ -217,6 +235,12 @@ public:
     void SetLinearVelocity(PhysicsBodyHandle h, JPH::Vec3 vel);
     /** @brief Applies an instantaneous linear impulse to a body. */
     void AddImpulse       (PhysicsBodyHandle h, JPH::Vec3 impulse);
+    /** @brief Sets only the position of a body (no rotation change). */
+    void SetPosition      (PhysicsBodyHandle h, JPH::RVec3 pos);
+
+    /** @brief Sets only the rotation of a body (no position change). */
+    void SetRotation      (PhysicsBodyHandle h, JPH::Quat rot);
+
     /** @brief Instantly teleports a body to a new position and rotation. */
     void Teleport         (PhysicsBodyHandle h, JPH::RVec3 pos, JPH::Quat rot);
 

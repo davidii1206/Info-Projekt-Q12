@@ -161,12 +161,17 @@ inline const char* DietTypeName(DietType d) {
 /**
  * @brief Returns true if the bug class can fly (ignores terrain height limits in pathfinding).
  */
-inline bool IsFlying(BugClass bc) {
+inline bool IsFlying(BugClass bc, int tier = -1) {
+    if (bc == BugClass::ButterfliesMoths) {
+        if (tier == 1 || tier == 3) {
+            return false; // Blattraupe (T1) and Brennhaar-Raupe (T3) are ground units
+        }
+        return true; // Tagfalter (T2), Nachtfalter (T4), and Totenkopfschwärmer (T5) fly
+    }
     switch (bc) {
         case BugClass::Dragonflies:
         case BugClass::MosquitosTicks:
         case BugClass::Fireflies:
-        case BugClass::ButterfliesMoths:
         case BugClass::BeesWasps:
             return true;
         default:

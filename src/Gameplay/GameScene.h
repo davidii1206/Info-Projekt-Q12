@@ -163,7 +163,7 @@ private:
     // -----------------------------------------------------------------------
 
     /** @brief Spawns a unit entity on the server and broadcasts to clients. */
-    void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, float hp = 100.f);
+    void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, int tier = 1, float hp = -1.f);
 
     /** @brief Spawns a worker (scaled-down collector unit) on the server and broadcasts to clients. */
     void SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, float hp = 50.f);
@@ -261,6 +261,12 @@ private:
     /// Toggled by the "Karte" button in the Game window.
     bool m_ShowMapOverlay = false;
 
+    // --- Selection circle drag state (Pikmin-style) ---
+    bool     m_SelectDragging = false;       ///< Left mouse held during drag.
+    glm::vec2 m_SelectStartWorld{0.f, 0.f}; ///< World XZ at drag start.
+    glm::vec2 m_SelectEndWorld{0.f, 0.f};   ///< World XZ at current mouse.
+    float    m_SelectMaxRadius = 40.f;       ///< Cap the selection circle at this size.
+
     // --- Camera Modes ---
     /// @brief Active camera/control mode.
     enum class CameraMode { Commander, Building };
@@ -303,6 +309,28 @@ private:
     // --- Unit system ---
     /// Network IDs of units currently selected by this client's Commander.
     std::vector<uint32_t> m_SelectedUnits;
+
+    struct VisualExplosion {
+        glm::vec3 position;
+        float timer = 0.f;
+        float maxDuration = 0.5f;
+        float maxRadius = 2.0f;
+        int type = 0; // 0 = Fire/Kamikaze, 1 = Toxic Hairs (purple/green), 2 = Sleep Pollen (blue/cyan), 3 = Healing (emerald green)
+    };
+    std::vector<VisualExplosion> m_VisualExplosions;
+
+    struct SlimeNode {
+        glm::vec3 position;
+        uint32_t teamId;
+        float timer;
+    };
+    std::vector<SlimeNode> m_ServerSlimeNodes;
+    std::vector<SlimeNode> m_ClientSlimeNodes;
+    float m_SlimeDropAccum = 0.f;
+    /// Direct control mode status
+    bool                  m_DirectControlActive = false;
+    /// Network ID of the unit under direct control
+    uint32_t              m_DirectControlNetId  = 0;
     /// Whether the game has ended.
     bool     m_GameOver      = false;
     uint32_t m_WinnerTeam    = 0xFFFFFFFFu; ///< Winning team once the game is over (0xFFFFFFFF = none).
