@@ -23,6 +23,64 @@ namespace ResourceHUD
 {
 
 /**
+ * @brief Renders the resource stockpile HUD from a directly-supplied inventory.
+ *
+ * Used by the joined-client path, which mirrors the host's per-base inventory
+ * via INVENTORY_UPDATE packets into a local map. The host can keep calling the
+ * registry overload below; both share the same drawing code.
+ */
+inline void DrawInventory(const ResourceInventory& inv, int activeMeatDrops = 0)
+{
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoDecoration      |
+        ImGuiWindowFlags_AlwaysAutoResize  |
+        ImGuiWindowFlags_NoSavedSettings   |
+        ImGuiWindowFlags_NoFocusOnAppearing|
+        ImGuiWindowFlags_NoNav             |
+        ImGuiWindowFlags_NoMove;
+
+    const float PAD = 10.f;
+    ImGuiIO& io = ImGui::GetIO();
+    ImVec2 windowPos(io.DisplaySize.x - PAD, PAD);
+    ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always, ImVec2(1.f, 0.f));
+    ImGui::SetNextWindowBgAlpha(0.72f);
+
+    if (ImGui::Begin("##ResourceHUD", nullptr, kFlags))
+    {
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "Ressourcen");
+        ImGui::Separator();
+
+        auto Row = [](const char* emoji, const char* label, int amount,
+                      ImVec4 colour = ImVec4(1,1,1,1))
+        {
+            ImGui::TextColored(colour, "%s %-10s", emoji, label);
+            ImGui::SameLine(130.f);
+            ImGui::Text("%d", amount);
+        };
+
+        // Universal upgrade currency — listed first so it stands out.
+        Row(u8"\U0001FAB5", "Holz",     inv.holz,
+            ImVec4(0.78f, 0.55f, 0.30f, 1.f));
+        ImGui::Separator();
+        Row(u8"\U0001F344", "Pilze",    inv.pilze);
+        Row(u8"\U0001F353", "Beeren",   inv.beeren);
+        Row(u8"\U0001F33C", "Nektar",   inv.nektar);
+        Row(u8"\U0001F33E", "Samen",    inv.samen);
+        Row(u8"\U0001F41B", "Insekten", inv.insekten);
+        Row(u8"\U0001F969", "Fleisch",  inv.fleisch,
+            ImVec4(1.f, 0.5f, 0.5f, 1.f));
+
+        if (activeMeatDrops > 0) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("  (%d Drop%s in der Welt)",
+                                activeMeatDrops,
+                                activeMeatDrops == 1 ? "" : "s");
+        }
+    }
+    ImGui::End();
+}
+
+/**
  * @brief Renders the resource stockpile HUD for a given team.
  *
  * Finds the base entity whose BaseComponent::teamId matches `teamId`,
@@ -73,53 +131,8 @@ inline void Draw(entt::registry& registry, uint32_t teamId)
         }
     }
 
-    // --- ImGui overlay window ---
-    constexpr ImGuiWindowFlags kFlags =
-        ImGuiWindowFlags_NoDecoration      |
-        ImGuiWindowFlags_AlwaysAutoResize  |
-        ImGuiWindowFlags_NoSavedSettings   |
-        ImGuiWindowFlags_NoFocusOnAppearing|
-        ImGuiWindowFlags_NoNav             |
-        ImGuiWindowFlags_NoMove;
-
-    // Anchor to top-right corner with a small margin
-    const float PAD = 10.f;
-    ImGuiIO& io = ImGui::GetIO();
-    ImVec2 windowPos(io.DisplaySize.x - PAD, PAD);
-    ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always, ImVec2(1.f, 0.f));
-    ImGui::SetNextWindowBgAlpha(0.72f);
-
-    if (ImGui::Begin("##ResourceHUD", nullptr, kFlags))
-    {
-        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "Ressourcen");
-        ImGui::Separator();
-
-        // Helper lambda: one row per resource
-        auto Row = [](const char* emoji, const char* label, int amount,
-                      ImVec4 colour = ImVec4(1,1,1,1))
-        {
-            ImGui::TextColored(colour, "%s %-10s", emoji, label);
-            ImGui::SameLine(130.f);
-            ImGui::Text("%d", amount);
-        };
-
-        Row(u8"\U0001F344", "Pilze",    inv->pilze);
-        Row(u8"\U0001F353", "Beeren",   inv->beeren);
-        Row(u8"\U0001F33C", "Nektar",   inv->nektar);
-        Row(u8"\U0001F33E", "Samen",    inv->samen);
-        Row(u8"\U0001F41B", "Insekten", inv->insekten);
-        Row(u8"\U0001F969", "Fleisch",  inv->fleisch,
-            ImVec4(1.f, 0.5f, 0.5f, 1.f));
-
-        // Show how many meat drops are currently lying in the world
-        if (activeMeatDrops > 0) {
-            ImGui::Spacing();
-            ImGui::TextDisabled("  (%d Drop%s in der Welt)",
-                                activeMeatDrops,
-                                activeMeatDrops == 1 ? "" : "s");
-        }
-    }
-    ImGui::End();
+    // Delegate to the inventory-only renderer.
+    DrawInventory(*inv, activeMeatDrops);
 }
 
 } // namespace ResourceHUD

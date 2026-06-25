@@ -6,6 +6,7 @@
 #include "ResourceManager.h"
 #include "Components.h"
 #include <spdlog/spdlog.h>
+#include <random>
 
 // ---------------------------------------------------------------------------
 // Init – define all permanent spawn points for the map
@@ -48,6 +49,49 @@ void ResourceManager::Init()
 
     spdlog::info("[ResourceManager] Initialized with {} permanent spawn points.",
                  m_SpawnPoints.size());
+}
+
+// ---------------------------------------------------------------------------
+// GenerateForWorld – procedurally distribute spawn points across the map
+// ---------------------------------------------------------------------------
+
+void ResourceManager::GenerateForWorld(float worldExtent, uint32_t seed)
+{
+    m_SpawnPoints.clear();
+
+    // Per-type counts and respawn timings. Holz is the heaviest because it
+    // drives universal base upgrades; cooldown is short so workers can keep
+    // chopping. Insekten is rare/slow on purpose (high-value carnivore food).
+    struct TypeSpec {
+        ResourceType type;
+        int          count;
+        int          amount;
+        float        respawn;
+    };
+    const TypeSpec specs[] = {
+        { ResourceType::Holz,     90, 5, 10.f },
+        { ResourceType::Pilze,    35, 3, 25.f },
+        { ResourceType::Beeren,   35, 4, 25.f },
+        { ResourceType::Nektar,   25, 3, 30.f },
+        { ResourceType::Samen,    35, 4, 20.f },
+        { ResourceType::Insekten, 20, 2, 45.f },
+    };
+
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(-worldExtent, worldExtent);
+
+    for (const auto& s : specs) {
+        for (int i = 0; i < s.count; ++i) {
+            // Y is finalised when the node spawns (snapped to terrain there).
+            m_SpawnPoints.push_back({
+                glm::vec3{ dist(rng), 0.f, dist(rng) },
+                s.type, s.amount, s.respawn
+            });
+        }
+    }
+
+    spdlog::info("[ResourceManager] Generated {} spawn points across {}x{} map.",
+                 m_SpawnPoints.size(), (int)(worldExtent * 2), (int)(worldExtent * 2));
 }
 
 // ---------------------------------------------------------------------------

@@ -165,6 +165,9 @@ private:
     /** @brief Spawns a unit entity on the server and broadcasts to clients. */
     void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, float hp = 100.f);
 
+    /** @brief Spawns a worker (scaled-down collector unit) on the server and broadcasts to clients. */
+    void SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, float hp = 50.f);
+
     /** @brief Spawns a building on the server and broadcasts to clients. */
     entt::entity SpawnBuilding(SceneContext& ctx, BuildingType type, uint32_t teamId,
                                glm::vec3 pos, uint32_t tier = 1,
@@ -194,6 +197,9 @@ private:
 
     /** @brief Server: broadcast fog-of-war grid to all clients. */
     void SendFogSnapshot(SceneContext& ctx);
+
+    /** @brief Server: broadcast per-base resource inventory snapshots to all clients. */
+    void SendInventoryUpdates(SceneContext& ctx);
 
     /** @brief Server: assign netIds to resource nodes and broadcast spawns. */
     void SyncResourceSpawns(SceneContext& ctx);
@@ -340,6 +346,14 @@ private:
     /// Accumulator for fog delta broadcasting (now used for FOG_DELTA packets).
     float m_FogSnapAccum = 0.f;
     static constexpr float FOG_SNAP_RATE = 1.f / 4.f; ///< Fog delta rate (4 Hz).
+
+    /// Accumulator for inventory snapshot broadcasting (2 Hz, per-base stockpile).
+    float m_InventorySnapAccum = 0.f;
+    static constexpr float INVENTORY_SNAP_RATE = 1.f / 2.f; ///< Inventory snap rate (2 Hz).
+
+    /// Per-base inventory mirror, populated from INVENTORY_UPDATE packets on
+    /// every recipient (host included, so the HUD has one read path).
+    std::unordered_map<uint32_t, ResourceInventory> m_ClientBaseInventories;
 
     // --- Client-side synced state ---
     /// Client-side fog grid copy (updated from server snapshot).

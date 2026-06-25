@@ -153,6 +153,19 @@ struct EntityIDComponent {
 #include "Bug_classes.h"
 
 /**
+ * @enum UnitRole
+ * @brief Distinguishes combat units from resource workers.
+ *
+ * Combat units fight; Workers gather resources via CollectorComponent.
+ * Workers can still defend themselves (they keep CombatComponent at reduced
+ * stats), but the gameplay AI/UI treats them very differently.
+ */
+enum class UnitRole : uint8_t {
+    Combat = 0, ///< Standard combat unit.
+    Worker = 1, ///< Resource gatherer; smaller scale, weaker stats, holds inventory.
+};
+
+/**
  * @struct UnitComponent
  * @brief Tags an entity as a controllable unit belonging to a team.
  */
@@ -160,6 +173,7 @@ struct UnitComponent {
     uint32_t teamId   = 0;                    ///< Owning team.
     BugClass bugClass = BugClass::Ants;       ///< Unit type / faction.
     bool     selected = false;                ///< Currently selected by Commander.
+    UnitRole role     = UnitRole::Combat;     ///< Combat vs Worker.
 };
 
 /**

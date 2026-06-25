@@ -28,6 +28,7 @@ enum class ResourceType : uint8_t {
     Samen   = 4,  ///< Seeds      – grass patches
     Insekten= 5,  ///< Insects    – anywhere, rare
     Fleisch = 6,  ///< Meat       – dropped by killed enemies/bosses
+    Holz    = 7,  ///< Wood       – universal currency for building upgrades; every faction can chop.
 };
 
 /**
@@ -41,6 +42,7 @@ inline const char* ResourceTypeName(ResourceType t) {
         case ResourceType::Samen:    return "Samen";
         case ResourceType::Insekten: return "Insekten";
         case ResourceType::Fleisch:  return "Fleisch";
+        case ResourceType::Holz:     return "Holz";
         default:                     return "Unbekannt";
     }
 }
@@ -108,6 +110,7 @@ struct ResourceInventory {
     int samen    = 0; ///< Seeds held.
     int insekten = 0; ///< Insects held.
     int fleisch  = 0; ///< Meat held.
+    int holz     = 0; ///< Wood held. Universal upgrade currency.
 
     /// Adds `amount` of the given type.
     void Add(ResourceType t, int amount) {
@@ -118,6 +121,7 @@ struct ResourceInventory {
             case ResourceType::Samen:    samen    += amount; break;
             case ResourceType::Insekten: insekten += amount; break;
             case ResourceType::Fleisch:  fleisch  += amount; break;
+            case ResourceType::Holz:     holz     += amount; break;
             default: break;
         }
     }
@@ -131,6 +135,7 @@ struct ResourceInventory {
             case ResourceType::Samen:    return samen;
             case ResourceType::Insekten: return insekten;
             case ResourceType::Fleisch:  return fleisch;
+            case ResourceType::Holz:     return holz;
             default:                     return 0;
         }
     }

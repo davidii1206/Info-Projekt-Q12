@@ -498,9 +498,22 @@ void GameScene::OnEnter(SceneContext& ctx) {
         spdlog::info("GameScene: skipping terrain MeshShape build (too expensive on chunked terrain)");
         (void)terrainMesh;
 
-        // Initialize resource system
-        m_ResourceManager.Init();
+        // Initialize resource system. The default placeholder spawn points
+        // would all cluster around the origin; instead, procedurally scatter
+        // ~240 nodes (Holz-heavy) across the full map extent so workers have
+        // somewhere to walk to from their respective MainBase.
+        m_ResourceManager.GenerateForWorld(m_World.GetConfig().worldExtent, m_WorldSeed);
         m_ResourceManager.SpawnPermanentResources(ctx.serverRegistry);
+
+        // Snap every freshly-spawned resource node onto the terrain surface
+        // (the generator left Y=0 since it doesn't know the WorldManager).
+        {
+            auto rView = ctx.serverRegistry.view<TransformComponent, ResourceComponent>();
+            for (auto e : rView) {
+                auto& tf = rView.get<TransformComponent>(e);
+                tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+            }
+        }
 
         // Assign netIds to all permanent resources and broadcast to clients
         SyncResourceSpawns(ctx);
@@ -562,6 +575,18 @@ void GameScene::OnEnter(SceneContext& ctx) {
 
                 spdlog::info("GameScene: spawned MainBase for player {} team {} bugClass {} at ({:.1f}, {:.1f})",
                              playerId, playerId, (int)pc.bugClass, sp.x, sp.y);
+
+                // Initial worker grant: 5 free workers per player, scattered in a
+                // small ring around the base so they don't all overlap at spawn.
+                constexpr int kInitialWorkers = 5;
+                constexpr float kSpawnRingRadius = 4.f;
+                for (int w = 0; w < kInitialWorkers; ++w) {
+                    float ang = (float)w * (6.2831853f / kInitialWorkers);
+                    glm::vec3 wp{sp.x + std::cos(ang) * kSpawnRingRadius,
+                                 0.f,
+                                 sp.y + std::sin(ang) * kSpawnRingRadius};
+                    SpawnWorker(ctx, playerId, wp, pc.bugClass);
+                }
             }
         }
 
@@ -775,6 +800,8 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_ClientTerritories.clear();
     m_TerritorySnapAccum = 0.f;
     m_FogSnapAccum       = 0.f;
+    m_InventorySnapAccum = 0.f;
+    m_ClientBaseInventories.clear();
     m_ResourceNetMap.clear();
 
     // HUD-Texturen freigeben
@@ -2058,9 +2085,25 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     }
     ImGui::End();
 
-    // Resource stockpile HUD (top-right overlay) – always visible on host.
-    if (ctx.network.IsHosting()) {
-        ResourceHUD::Draw(ctx.serverRegistry, m_MyPlayerId);
+    // Resource stockpile HUD (top-right overlay). Both host and client read
+    // from m_ClientBaseInventories — the host populates it locally during
+    // SendInventoryUpdates, the client receives it via INVENTORY_UPDATE.
+    // Find this player's main base by walking the client registry.
+    {
+        const ResourceInventory* invToShow = nullptr;
+        auto bView = ctx.clientRegistry.view<BuildingComponent, NetworkedComponent>();
+        for (auto e : bView) {
+            const auto& bc = bView.get<BuildingComponent>(e);
+            if (bc.teamId != m_MyPlayerId || bc.type != BuildingType::Main || bc.destroyed) continue;
+            const auto& nc = bView.get<NetworkedComponent>(e);
+            auto it = m_ClientBaseInventories.find(nc.netId);
+            if (it != m_ClientBaseInventories.end()) {
+                invToShow = &it->second;
+                break;
+            }
+        }
+        ResourceInventory empty{};
+        ResourceHUD::DrawInventory(invToShow ? *invToShow : empty);
     }
 
     // Map overlay (available to all clients with synced data)
@@ -2288,6 +2331,15 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         if (m_FogSnapAccum >= FOG_SNAP_RATE) {
             SendFogSnapshot(ctx);
             m_FogSnapAccum -= FOG_SNAP_RATE;
+        }
+
+        // Per-base resource inventory snapshots (2 Hz). Also mirrored to the
+        // host's own m_ClientBaseInventories map so the HUD reads from one
+        // place on both host and joined clients.
+        m_InventorySnapAccum += dt;
+        if (m_InventorySnapAccum >= INVENTORY_SNAP_RATE) {
+            SendInventoryUpdates(ctx);
+            m_InventorySnapAccum -= INVENTORY_SNAP_RATE;
         }
     }
 
@@ -2571,13 +2623,15 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
 
         if (!pkt) break;
         if (m_ClientNetMap.count(pkt->netId)) continue;
+        const UnitRole role = (pkt->role == 1) ? UnitRole::Worker : UnitRole::Combat;
         auto entity = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
+        auto& tf = ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
+        if (role == UnitRole::Worker) tf.scale = glm::vec3(0.6f); // visibly smaller than combat units
         ctx.clientRegistry.emplace<MovementComponent>(entity);
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
         ctx.clientRegistry.emplace<UnitComponent>(entity,
-            UnitComponent{pkt->teamId, static_cast<BugClass>(pkt->bugClass), false});
+            UnitComponent{pkt->teamId, static_cast<BugClass>(pkt->bugClass), false, role});
         ctx.clientRegistry.emplace<HealthComponent>(entity,
             HealthComponent{pkt->maxHp});
         ctx.clientRegistry.emplace<MovementOrderComponent>(entity);
@@ -2646,10 +2700,24 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         auto pkt = ctx.network.ReceiveFromServer<ResourceSpawnedPacket>(PacketType::RESOURCE_SPAWNED);
         if (!pkt) break;
         if (m_ClientNetMap.count(pkt->netId)) continue;
+        // Per-type visual: use one of the already-loaded scatter GLBs so each
+        // resource type reads at a glance instead of all being identical cubes.
+        const auto rtype = static_cast<ResourceType>(pkt->resourceType);
+        std::string modelPath = "assets/cube.glb";
+        switch (rtype) {
+            case ResourceType::Pilze:    modelPath = "assets/Mushroom_2.glb";     break;
+            case ResourceType::Beeren:   modelPath = "assets/Watermelon_1.glb";   break;
+            case ResourceType::Nektar:   modelPath = "assets/Plant_5.glb";        break;
+            case ResourceType::Samen:    modelPath = "assets/Wheat_2.glb";        break;
+            case ResourceType::Insekten: modelPath = "assets/prim_sphere_red.glb";break;
+            case ResourceType::Fleisch:  modelPath = "assets/prim_sphere_red.glb";break;
+            case ResourceType::Holz:     modelPath = "assets/WoodLog.glb";        break;
+            default: break;
+        }
         auto entity = ctx.clientRegistry.create();
         ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
-        ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
+        ctx.clientRegistry.emplace<ModelComponent>(entity, modelPath);
         m_ClientNetMap[pkt->netId] = entity;
     }
 
@@ -2662,6 +2730,20 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
             ctx.clientRegistry.destroy(it->second);
             m_ClientNetMap.erase(it);
         }
+    }
+
+    // Inventory snapshots (per-base resource stockpile, host → clients @ 2 Hz)
+    while (true) {
+        auto pkt = ctx.network.ReceiveFromServer<InventoryUpdatePacket>(PacketType::INVENTORY_UPDATE);
+        if (!pkt) break;
+        ResourceInventory& inv = m_ClientBaseInventories[pkt->baseNetId];
+        inv.pilze    = pkt->pilze;
+        inv.beeren   = pkt->beeren;
+        inv.nektar   = pkt->nektar;
+        inv.samen    = pkt->samen;
+        inv.insekten = pkt->insekten;
+        inv.fleisch  = pkt->fleisch;
+        inv.holz     = pkt->holz;
     }
 
     // Game over
@@ -2917,6 +2999,69 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
 }
 
 // ---------------------------------------------------------------------------
+// SpawnWorker — a scaled-down combat unit specialised for resource gathering.
+// Same model as a normal unit (faction's base unit), inherits the bug class's
+// movement archetype (flyer / climber / walker), but with:
+//   * Transform.scale = 0.6 so it's visibly distinct
+//   * CombatComponent at reduced damage (workers can defend themselves)
+//   * CollectorComponent + ResourceInventory so the existing ResourceSystem
+//     state machine picks it up
+//   * UnitRole::Worker so the UI, AI and pricing code can branch on it
+// ---------------------------------------------------------------------------
+void GameScene::SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bc, float hp)
+{
+    if (!ctx.network.IsHosting()) return;
+
+    pos.y = GroundHeightAt(m_World, pos.x, pos.z);
+    if (IsFlying(bc)) pos.y += 4.f;
+
+    float speed = IsClimber(bc) ? 6.f : 10.f;
+
+    const uint32_t netId = m_NextNetId++;
+    auto e = ctx.serverRegistry.create();
+    auto& tf = ctx.serverRegistry.emplace<TransformComponent>(e, pos);
+    tf.scale = glm::vec3(0.6f);
+    ctx.serverRegistry.emplace<MovementComponent>(e, MovementComponent{glm::vec3(0.f), speed});
+    ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
+    ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
+    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false, UnitRole::Worker});
+    ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
+    // Workers can defend themselves but hit weakly — they're economic units, not soldiers.
+    ctx.serverRegistry.emplace<CombatComponent>(e,
+        CombatComponent{/*range=*/4.f, /*dmg=*/3.f, /*cd=*/0.f, /*rate=*/2.0f, entt::null, false});
+    ctx.serverRegistry.emplace<MovementOrderComponent>(e);
+    ctx.serverRegistry.emplace<CollectorComponent>(e);
+    ctx.serverRegistry.emplace<ResourceInventory>(e);
+    m_ServerNetMap[netId] = e;
+
+    UnitSpawnedPacket pkt;
+    pkt.netId    = netId;
+    pkt.teamId   = teamId;
+    pkt.bugClass = static_cast<uint8_t>(bc);
+    pkt.role     = 1; // Worker
+    pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
+    pkt.hp = hp; pkt.maxHp = hp;
+    ctx.network.BroadcastToAll(pkt);
+
+    // Host-local client mirror (BroadcastToAll doesn't loop back to host).
+    if (!m_ClientNetMap.count(netId)) {
+        auto ce = ctx.clientRegistry.create();
+        auto& ctf = ctx.clientRegistry.emplace<TransformComponent>(ce, pos);
+        ctf.scale = glm::vec3(0.6f);
+        ctx.clientRegistry.emplace<MovementComponent>(ce, MovementComponent{glm::vec3(0.f), speed});
+        ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
+        ctx.clientRegistry.emplace<ModelComponent>(ce, std::string("assets/cube.glb"));
+        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, false, UnitRole::Worker});
+        ctx.clientRegistry.emplace<HealthComponent>(ce, HealthComponent{hp});
+        ctx.clientRegistry.emplace<MovementOrderComponent>(ce);
+        m_ClientNetMap[netId] = ce;
+    }
+
+    spdlog::info("GameScene: spawned WORKER netId={} team={} class={} hp={:.0f}",
+                 netId, teamId, (int)bc, hp);
+}
+
+// ---------------------------------------------------------------------------
 // SpawnBuilding
 // ---------------------------------------------------------------------------
 
@@ -2981,11 +3126,21 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
     // Attach type-specific components
     switch (type) {
         case BuildingType::Main:
-        case BuildingType::Storage:
-            ctx.serverRegistry.emplace<ResourceInventory>(e);
+        case BuildingType::Storage: {
+            auto& inv = ctx.serverRegistry.emplace<ResourceInventory>(e);
+            // Tag the Main (and Storage) as a deposit destination for collectors.
+            ctx.serverRegistry.emplace<BaseComponent>(e, BaseComponent{teamId});
+            if (type == BuildingType::Main) {
+                // Starting stockpile: 20 Holz + 20 of the team's signature resource.
+                // 20 Holz lets the player upgrade their base once before chopping;
+                // 20 signature lets them buy 4 extra workers right away (cost 5 each).
+                inv.holz = 20;
+                inv.Add(GetSignatureResource(ownerClass), 20);
+            }
             if (type == BuildingType::Storage)
                 ctx.serverRegistry.emplace<StorageComponent>(e);
             break;
+        }
         case BuildingType::Barracks:
             ctx.serverRegistry.emplace<BarracksComponent>(e);
             break;
@@ -3868,6 +4023,42 @@ void GameScene::SendFogSnapshot(SceneContext& ctx)
             ctx.network.SendToClient(peerId, dpkt);
             sent += chunk;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-base inventory broadcast (server, 2 Hz).
+// Iterates every server entity that has BOTH BaseComponent and ResourceInventory
+// (currently the MainBase + any Storage building), packs the stockpile into an
+// InventoryUpdatePacket, broadcasts to every client, AND writes the same data
+// to the host's own m_ClientBaseInventories mirror — so the HUD reads from one
+// place regardless of host/client.
+// ---------------------------------------------------------------------------
+void GameScene::SendInventoryUpdates(SceneContext& ctx)
+{
+    if (!ctx.network.IsHosting()) return;
+
+    auto view = ctx.serverRegistry.view<BaseComponent, ResourceInventory, NetworkedComponent>();
+    for (auto e : view) {
+        const auto& bc  = view.get<BaseComponent>(e);
+        const auto& inv = view.get<ResourceInventory>(e);
+        const auto& nc  = view.get<NetworkedComponent>(e);
+
+        InventoryUpdatePacket pkt;
+        pkt.baseNetId = nc.netId;
+        pkt.teamId    = bc.teamId;
+        pkt.pilze     = inv.pilze;
+        pkt.beeren    = inv.beeren;
+        pkt.nektar    = inv.nektar;
+        pkt.samen     = inv.samen;
+        pkt.insekten  = inv.insekten;
+        pkt.fleisch   = inv.fleisch;
+        pkt.holz      = inv.holz;
+        ctx.network.BroadcastToAll(pkt);
+
+        // Host-local mirror — BroadcastToAll doesn't loop back to host's client.
+        ResourceInventory& mirror = m_ClientBaseInventories[nc.netId];
+        mirror = inv;
     }
 }
 

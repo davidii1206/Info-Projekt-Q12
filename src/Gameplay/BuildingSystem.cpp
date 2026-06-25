@@ -60,7 +60,8 @@ bool TryStartUpgrade(entt::registry& registry, entt::entity buildingEntity, entt
         inventory->nektar < req.cost.nektar ||
         inventory->samen < req.cost.samen ||
         inventory->insekten < req.cost.insekten ||
-        inventory->fleisch < req.cost.fleisch)
+        inventory->fleisch < req.cost.fleisch ||
+        inventory->holz < req.cost.holz)
     {
         return false;
     }
@@ -72,6 +73,7 @@ bool TryStartUpgrade(entt::registry& registry, entt::entity buildingEntity, entt
     inventory->samen -= req.cost.samen;
     inventory->insekten -= req.cost.insekten;
     inventory->fleisch -= req.cost.fleisch;
+    inventory->holz -= req.cost.holz;
 
     // Start upgrade
     building->isUpgrading = true;

@@ -48,6 +48,7 @@ enum class PacketType : uint8_t {
     LOBBY_STATE        = 21, /**< Server→Client: full lobby player list with states. */
     GAME_START         = 22, /**< Server→Client: host started the game. */
     RETURN_TO_LOBBY   = 23, /**< Server→Client: host is returning everyone to lobby. */
+    INVENTORY_UPDATE  = 25, /**< Server→Client: per-base resource stockpile sync. */
 };
 
 /**
@@ -147,6 +148,7 @@ struct UnitSpawnedPacket {
     uint32_t   netId   = 0;                        /**< Network ID of the unit. */
     uint32_t   teamId  = 0;                        /**< Owning team. */
     uint8_t    bugClass = 0;                       /**< BugClass enum value (faction/type). */
+    uint8_t    role    = 0;                        /**< UnitRole: 0=Combat, 1=Worker. */
     float      x = 0.f;                            /**< Spawn position X. */
     float      y = 0.f;                            /**< Spawn position Y. */
     float      z = 0.f;                            /**< Spawn position Z. */
@@ -262,6 +264,27 @@ struct ResourceSpawnedPacket {
 struct ResourceDepletedPacket {
     PacketType type  = PacketType::RESOURCE_DEPLETED; /**< Packet type identifier. */
     uint32_t   netId = 0;                             /**< Network ID of the depleted node. */
+};
+
+/**
+ * @struct InventoryUpdatePacket
+ * @brief Server → Client: per-base resource stockpile snapshot.
+ *
+ * Sent at 2 Hz for every base entity that has a ResourceInventory. The client
+ * mirrors these into a small map keyed by baseNetId so HUDs and UI on the
+ * joined player can display the same numbers the server sees.
+ */
+struct InventoryUpdatePacket {
+    PacketType type      = PacketType::INVENTORY_UPDATE; /**< Packet type identifier. */
+    uint32_t   baseNetId = 0;  /**< Network ID of the base entity holding this inventory. */
+    uint32_t   teamId    = 0;  /**< Team that owns the base (for HUD filtering). */
+    int32_t    pilze     = 0;
+    int32_t    beeren    = 0;
+    int32_t    nektar    = 0;
+    int32_t    samen     = 0;
+    int32_t    insekten  = 0;
+    int32_t    fleisch   = 0;
+    int32_t    holz      = 0;
 };
 
 /**

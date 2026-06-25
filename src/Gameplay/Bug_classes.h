@@ -89,20 +89,58 @@ inline DietType GetBugClassDiet(BugClass bc) {
  * Sammler ignorieren Ressourcen außerhalb dieser Liste.
  */
 inline std::vector<ResourceType> GetEdibleResources(BugClass bc) {
+    // Holz is a UNIVERSAL resource: every faction's workers chop wood for
+    // base upgrades, regardless of diet. The diet-specific list is added on
+    // top so each faction also collects food matching its biology.
     switch (GetBugClassDiet(bc)) {
         case DietType::Herbivore:
-            return {ResourceType::Nektar, ResourceType::Beeren, ResourceType::Samen};
+            return {ResourceType::Holz, ResourceType::Nektar, ResourceType::Beeren, ResourceType::Samen};
         case DietType::Carnivore:
-            return {ResourceType::Insekten, ResourceType::Fleisch};
+            return {ResourceType::Holz, ResourceType::Insekten, ResourceType::Fleisch};
         case DietType::Omnivore:
-            return {ResourceType::Pilze, ResourceType::Beeren, ResourceType::Nektar,
+            return {ResourceType::Holz, ResourceType::Pilze, ResourceType::Beeren, ResourceType::Nektar,
                     ResourceType::Samen, ResourceType::Insekten, ResourceType::Fleisch};
         case DietType::Decomposer:
-            return {ResourceType::Pilze, ResourceType::Samen, ResourceType::Beeren};
+            return {ResourceType::Holz, ResourceType::Pilze, ResourceType::Samen, ResourceType::Beeren};
         case DietType::Parasite:
-            return {ResourceType::Fleisch};
+            return {ResourceType::Holz, ResourceType::Fleisch};
         default:
-            return {};
+            return {ResourceType::Holz};
+    }
+}
+
+/**
+ * @brief Returns the SIGNATURE resource for a faction — the single primary
+ *        food/material that defines that faction. Used as:
+ *          * the currency to buy additional workers (cost = 5 signature)
+ *          * a +50% gather-speed bonus when collecting this type
+ *          * the starting stockpile granted at game start
+ */
+inline ResourceType GetSignatureResource(BugClass bc) {
+    switch (bc) {
+        // Nektar-Sammler
+        case BugClass::BeesWasps:        return ResourceType::Nektar;
+        case BugClass::ButterfliesMoths: return ResourceType::Nektar;
+        case BugClass::Snails:           return ResourceType::Nektar; // Pflanzensaefte → Nektar
+        case BugClass::Bugs:             return ResourceType::Nektar; // Blattlaeuse → Pflanzensaefte → Nektar
+        // Insekten-Jaeger
+        case BugClass::Mantis:           return ResourceType::Insekten;
+        case BugClass::Spiders:          return ResourceType::Insekten;
+        case BugClass::Fireflies:        return ResourceType::Insekten;
+        case BugClass::Dragonflies:      return ResourceType::Insekten;
+        case BugClass::Scorpions:        return ResourceType::Insekten;
+        // Allesfresser → Samen (most accessible / abundant)
+        case BugClass::Ants:             return ResourceType::Samen;
+        case BugClass::Roaches:          return ResourceType::Samen;
+        case BugClass::Beetles:          return ResourceType::Samen;
+        // Holz-Spezialist
+        case BugClass::Termites:         return ResourceType::Holz;
+        // Sonstige Zersetzer
+        case BugClass::CentipedesWorms:  return ResourceType::Pilze;
+        case BugClass::Woodlice:         return ResourceType::Pilze;
+        // Blutsauger
+        case BugClass::MosquitosTicks:   return ResourceType::Fleisch;
+        default:                         return ResourceType::Pilze;
     }
 }
 
