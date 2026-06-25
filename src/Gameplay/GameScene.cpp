@@ -1610,40 +1610,56 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
 
         // Commander mode: unit selection + orders (not in Building mode)
         if (m_CameraMode == CameraMode::Commander) {
-            // Left-click: select units near cursor (pick by proximity to XZ ray)
+            // Left-click: pick the single NEAREST own-team unit under the cursor.
+            // Hold SHIFT to add/remove that one unit from the existing selection
+            // (multi-select still possible, just one click = one unit).
             if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT)) {
                 glm::vec2 mpos = Input::GetMousePosition();
                 glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
-                constexpr float SELECT_RADIUS = 5.f;
+                // Generous-enough hit radius for small worker units without grabbing
+                // a whole cluster — picks one unit per click.
+                constexpr float SELECT_HIT_RADIUS = 1.8f;
 
                 bool shiftHeld = Input::IsKeyDown(SDLK_LSHIFT) || Input::IsKeyDown(SDLK_RSHIFT);
-                if (!shiftHeld)
-                    m_SelectedUnits.clear();
 
+                // Find the SINGLE nearest own-team unit within the hit radius.
+                entt::entity bestEntity = entt::null;
+                uint32_t     bestNetId  = 0;
+                float        bestDist2  = SELECT_HIT_RADIUS * SELECT_HIT_RADIUS;
                 auto view = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, UnitComponent>();
                 for (auto entity : view) {
-                    auto& tf  = view.get<TransformComponent>(entity);
-                    auto& nc  = view.get<NetworkedComponent>(entity);
-                    auto& uc  = view.get<UnitComponent>(entity);
+                    const auto& tf = view.get<TransformComponent>(entity);
+                    const auto& uc = view.get<UnitComponent>(entity);
                     if (uc.teamId != m_MyPlayerId) continue;
-                    glm::vec2 d2 = glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z);
-                    if (glm::length(d2) <= SELECT_RADIUS) {
-                        if (shiftHeld) {
-                            // Toggle the clicked unit in/out of the selection.
-                            auto it = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId);
-                            if (it != m_SelectedUnits.end()) {
-                                m_SelectedUnits.erase(it);
-                                uc.selected = false;
-                            } else {
-                                m_SelectedUnits.push_back(nc.netId);
-                                uc.selected = true;
-                            }
-                        } else {
-                            m_SelectedUnits.push_back(nc.netId);
-                            uc.selected = true;
-                        }
-                    } else if (!shiftHeld) {
-                        uc.selected = false;
+                    float dx = tf.position.x - worldPos.x;
+                    float dz = tf.position.z - worldPos.z;
+                    float d2 = dx * dx + dz * dz;
+                    if (d2 <= bestDist2) {
+                        bestDist2  = d2;
+                        bestEntity = entity;
+                        bestNetId  = view.get<NetworkedComponent>(entity).netId;
+                    }
+                }
+
+                if (!shiftHeld) {
+                    // Plain click: clear and select that one unit (or clear all if click hit nothing).
+                    for (auto entity : view) {
+                        view.get<UnitComponent>(entity).selected = false;
+                    }
+                    m_SelectedUnits.clear();
+                    if (bestEntity != entt::null) {
+                        m_SelectedUnits.push_back(bestNetId);
+                        view.get<UnitComponent>(bestEntity).selected = true;
+                    }
+                } else if (bestEntity != entt::null) {
+                    // Shift+click: toggle just the clicked unit in/out of the selection.
+                    auto it = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), bestNetId);
+                    if (it != m_SelectedUnits.end()) {
+                        m_SelectedUnits.erase(it);
+                        view.get<UnitComponent>(bestEntity).selected = false;
+                    } else {
+                        m_SelectedUnits.push_back(bestNetId);
+                        view.get<UnitComponent>(bestEntity).selected = true;
                     }
                 }
                 spdlog::info("Commander: selected {} unit(s)", m_SelectedUnits.size());
@@ -3523,21 +3539,59 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             auto fit = m_TeamFogs.find(uc.teamId);
             const FogGrid* fog = (fit != m_TeamFogs.end() && fit->second.IsInitialised())
                                  ? &fit->second : nullptr;
+            const glm::vec2 startXZ(tf.position.x, tf.position.z);
+            glm::vec2       goalXZ (mo.destination.x, mo.destination.z);
+
             path.waypoints = Pathfinding::FindPath(
-                m_World,
-                glm::vec2(tf.position.x, tf.position.z),
-                glm::vec2(mo.destination.x, mo.destination.z),
-                fog,
-                1,
-                &occupiedTiles,
-                isFlying,
-                isClimber);
+                m_World, startXZ, goalXZ, fog, 1, &occupiedTiles, isFlying, isClimber);
+
+            // Fallback 1: drop the fog constraint. Players often click into
+            // uncharted territory; the path is geometrically valid, fog just
+            // hides it from them. Let the unit walk into the unknown.
+            if (path.waypoints.empty() && fog != nullptr) {
+                path.waypoints = Pathfinding::FindPath(
+                    m_World, startXZ, goalXZ, nullptr, 1, &occupiedTiles, isFlying, isClimber);
+            }
+
+            // Fallback 2: the destination tile itself is unreachable (water,
+            // cliff face, building footprint). Snap to the nearest walkable
+            // tile within ~12 tiles and retry. Spiral outward by Chebyshev
+            // distance so the closest valid spot is found first.
+            if (path.waypoints.empty()) {
+                int gx, gz;
+                m_World.WorldToTile(goalXZ.x, goalXZ.y, gx, gz);
+                const int kMax = 12;
+                glm::vec2 snapped = goalXZ;
+                bool found = false;
+                for (int r = 1; r <= kMax && !found; ++r) {
+                    for (int dz = -r; dz <= r && !found; ++dz) {
+                        for (int dx = -r; dx <= r && !found; ++dx) {
+                            if (std::max(std::abs(dx), std::abs(dz)) != r) continue;
+                            int cx = gx + dx, cz = gz + dz;
+                            if (cx < 0 || cx >= gs || cz < 0 || cz >= gs) continue;
+                            if (occupiedTiles[(size_t)cz * gs + (size_t)cx]) continue;
+                            glm::vec2 wxz = m_World.TileToWorld(cx, cz);
+                            if (IsWalkableAt(m_World, wxz.x, wxz.y, /*currentTier=*/-1, isFlying, isClimber)) {
+                                snapped = wxz;
+                                found = true;
+                            }
+                        }
+                    }
+                }
+                if (found) {
+                    mo.destination = glm::vec3(snapped.x, mo.destination.y, snapped.y);
+                    path.waypoints = Pathfinding::FindPath(
+                        m_World, startXZ, snapped, nullptr, 1, &occupiedTiles, isFlying, isClimber);
+                }
+            }
+
             path.current   = 0;
             path.dirty     = false;
             path.recalcTimer = 0.f;
 
             if (path.waypoints.empty()) {
-                spdlog::debug("Pathfinding: no path for entity {}, stopping", (uint32_t)e);
+                spdlog::info("Pathfinding: no path for entity {} to ({:.1f},{:.1f}), stopping",
+                             (uint32_t)e, mo.destination.x, mo.destination.z);
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
                 continue;
