@@ -15,13 +15,16 @@ namespace Pathfinding {
     /// @param end    World XZ destination.
     /// @param fog    Optional fog grid — undiscovered tiles are blocked.
     /// @param maxTierDiff  Maximum tier climb allowed per step (0 = same tier only).
+    /// @param occupiedTiles  Optional per-tile bool array (gridSize², row-major).
+    ///        Tiles marked true are treated as blocked (e.g. by buildings).
     /// @return Waypoints in world XZ (tile centres), empty if no path found.
     std::vector<glm::vec2> FindPath(
         const WorldManager& world,
         glm::vec2 start,
         glm::vec2 end,
         const FogGrid* fog = nullptr,
-        int maxTierDiff = 0);
+        int maxTierDiff = 0,
+        const std::vector<bool>* occupiedTiles = nullptr);
 
     /// Checks whether a tile at (tx, tz) is walkable.
     bool IsTileWalkable(
@@ -29,6 +32,7 @@ namespace Pathfinding {
         int tx, int tz,
         int currentTier,
         int maxTierDiff = 0,
-        const FogGrid* fog = nullptr);
+        const FogGrid* fog = nullptr,
+        const std::vector<bool>* occupiedTiles = nullptr);
 
 } // namespace Pathfinding

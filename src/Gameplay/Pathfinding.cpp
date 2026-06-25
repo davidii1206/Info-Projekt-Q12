@@ -34,10 +34,18 @@ bool IsTileWalkable(
     int tx, int tz,
     int currentTier,
     int maxTierDiff,
-    const FogGrid* fog)
+    const FogGrid* fog,
+    const std::vector<bool>* occupiedTiles)
 {
     const int gs = world.GetGridSize();
     if (tx < 0 || tx >= gs || tz < 0 || tz >= gs) return false;
+
+    // Reject tiles occupied by buildings.
+    if (occupiedTiles) {
+        size_t idx = (size_t)tz * gs + (size_t)tx;
+        if (idx < occupiedTiles->size() && (*occupiedTiles)[idx])
+            return false;
+    }
 
     const auto& tile = world.GetTile(tx, tz);
 
@@ -64,7 +72,8 @@ std::vector<glm::vec2> FindPath(
     glm::vec2 start,
     glm::vec2 end,
     const FogGrid* fog,
-    int maxTierDiff)
+    int maxTierDiff,
+    const std::vector<bool>* occupiedTiles)
 {
     const int gs = world.GetGridSize();
     if (gs <= 0) return {};
@@ -89,7 +98,7 @@ std::vector<glm::vec2> FindPath(
 
     // Check if the destination tile is itself walkable; if not, the path is
     // still allowed to end there (the unit will stop as close as it can).
-    bool destWalkable = IsTileWalkable(world, ex, ez, startTier, maxTierDiff, fog);
+    bool destWalkable = IsTileWalkable(world, ex, ez, startTier, maxTierDiff, fog, occupiedTiles);
 
     // Scratch grids – allocated once, reused across pathfinding calls.
     // visited: 0 = unvisited, 1 = open, 2 = closed
@@ -155,7 +164,7 @@ std::vector<glm::vec2> FindPath(
             size_t ni = idx(nx, nz);
             if (visited[ni] == 2) continue;
 
-            if (!IsTileWalkable(world, nx, nz, curTier, maxTierDiff, fog)) {
+            if (!IsTileWalkable(world, nx, nz, curTier, maxTierDiff, fog, occupiedTiles)) {
                 // Mark as closed so we don't re-evaluate every frame.
                 // But only if it's not the destination tile.
                 if (!(nx == ex && nz == ez) || !destWalkable) {

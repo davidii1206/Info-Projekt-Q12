@@ -3006,30 +3006,31 @@ glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
  */
 void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 {
-    // Collect building obstacles once per tick.
-    constexpr float kBuildingRadius = 1.6f;
-    constexpr float kUnitRadius     = 0.5f;
-    constexpr float kAvoidDist      = kBuildingRadius + kUnitRadius;
-    constexpr float kAvoidDistSq    = kAvoidDist * kAvoidDist;
-
-    struct Obstacle { glm::vec2 pos; };
-    std::vector<Obstacle> obstacles;
+    // Build a per‑tile occupancy grid from buildings (2×2 blocks).
+    const int gs = m_World.GetGridSize();
+    std::vector<bool> occupiedTiles(static_cast<size_t>(gs) * gs, false);
     {
         auto bldView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
-        obstacles.reserve(64);
         for (auto be : bldView) {
             const auto& bc = bldView.get<BuildingComponent>(be);
             if (bc.destroyed) continue;
             const auto& btf = bldView.get<TransformComponent>(be);
-            obstacles.push_back({ glm::vec2(btf.position.x, btf.position.z) });
+            int tx, tz;
+            m_World.WorldToTile(btf.position.x, btf.position.z, tx, tz);
+            // 2×2 building footprint.
+            for (int dz = 0; dz < 2; ++dz) {
+                for (int dx = 0; dx < 2; ++dx) {
+                    int cx = tx + dx;
+                    int cz = tz + dz;
+                    if (cx >= 0 && cx < gs && cz >= 0 && cz < gs)
+                        occupiedTiles[(size_t)cz * gs + (size_t)cx] = true;
+                }
+            }
         }
     }
 
+    // Steering‑level terrain check (building avoidance is handled by the A* pathfinder).
     auto canStand = [&](glm::vec2 np, int currentTier) -> bool {
-        for (const auto& ob : obstacles) {
-            glm::vec2 d = ob.pos - np;
-            if (d.x * d.x + d.y * d.y < kAvoidDistSq) return false;
-        }
         return IsWalkableAt(m_World, np.x, np.y, currentTier);
     };
 
@@ -3060,7 +3061,8 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 glm::vec2(tf.position.x, tf.position.z),
                 glm::vec2(mo.destination.x, mo.destination.z),
                 fog,
-                1);
+                1,
+                &occupiedTiles);
             path.current   = 0;
             path.dirty     = false;
             path.recalcTimer = 0.f;
@@ -3086,7 +3088,8 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 glm::vec2(tf.position.x, tf.position.z),
                 glm::vec2(mo.destination.x, mo.destination.z),
                 fog,
-                1);
+                1,
+                &occupiedTiles);
             path.current   = 0;
             path.recalcTimer = 0.f;
             if (path.waypoints.empty()) {
