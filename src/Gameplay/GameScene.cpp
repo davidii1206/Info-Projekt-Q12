@@ -1410,96 +1410,95 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
     if (!m_Camera) return;
 
     // ------------------------------------------------------------------
-    // TAB: cycle Commander (top-down perspective) ↔ Building (top-down orthographic)
+    // TAB: cycle Commander ↔ Building (same camera, different interactions)
     // ------------------------------------------------------------------
     if (Input::IsKeyPressed(SDLK_TAB)) {
-        switch (m_CameraMode) {
-        case CameraMode::Commander:
-            // Save Commander position before switching to Building
-            m_SavedCommanderPos = m_Camera->m_Position;
-            // Enter Building (isometric orthographic view)
-            m_CameraMode = CameraMode::Building;
-            m_Camera->SetProjectionMode(ProjectionMode::Orthographic);
-            m_Camera->m_OrthoSize = m_BuildOrthoSize;
-            m_Camera->m_Pitch = -55.f;
-            m_Camera->m_Yaw   = m_BuildYaw;
-            // Keep same XZ position but reset to building height
-            m_Camera->m_Position.y = m_TopDownHeight;
-            m_Camera->UpdateVectors();
-            spdlog::info("GameScene: switched to Building mode (isometric orthographic)");
-            break;
-
-        case CameraMode::Building:
+        if (m_CameraMode == CameraMode::Building)
             CancelPlacement(ctx);
-            // Return to Commander
-            m_SavedCommanderPos   = m_Camera->m_Position;
-            m_CameraMode = CameraMode::Commander;
-            m_Camera->SetProjectionMode(ProjectionMode::Perspective);
-            m_Camera->m_Pitch = -89.f;
-            m_Camera->m_Yaw   = -90.f;
-            m_Camera->m_Position = glm::vec3(m_SavedCommanderPos.x, m_TopDownHeight, m_SavedCommanderPos.z);
-            m_Camera->UpdateVectors();
-            spdlog::info("GameScene: switched to Commander mode");
-            break;
-        }
+        m_CameraMode = (m_CameraMode == CameraMode::Commander)
+                       ? CameraMode::Building : CameraMode::Commander;
+        spdlog::info("GameScene: switched to {} mode",
+                      m_CameraMode == CameraMode::Commander ? "Commander" : "Building");
     }
 
     if (m_CameraMode == CameraMode::Commander || m_CameraMode == CameraMode::Building) {
         // ------------------------------------------------------------------
-        // Top-down modes – Commander (perspective) and Building (orthographic)
+        // Isometric orthographic camera – same for both Commander and Building
         // ------------------------------------------------------------------
         int winW, winH;
         SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
 
-        constexpr float TOPDOWN_PAN_SPEED = 25.f;
+        constexpr float TOPDOWN_PAN_SPEED   = 25.f;
+        constexpr float BUILD_ROTATE_SPEED  = 60.f;
 
-        // Camera orientation depends on mode
-        if (m_CameraMode == CameraMode::Commander) {
-            m_Camera->m_Pitch = -89.f;
-            m_Camera->m_Yaw   = -90.f;
-            m_Camera->UpdateVectors();
-
-            // Commander: WASD pans in world space (N/S/E/W)
-            glm::vec3 pan{0.f};
-            if (Input::IsKeyDown(SDLK_W)) pan.z -= TOPDOWN_PAN_SPEED * dt;
-            if (Input::IsKeyDown(SDLK_S)) pan.z += TOPDOWN_PAN_SPEED * dt;
-            if (Input::IsKeyDown(SDLK_A)) pan.x -= TOPDOWN_PAN_SPEED * dt;
-            if (Input::IsKeyDown(SDLK_D)) pan.x += TOPDOWN_PAN_SPEED * dt;
-            m_Camera->m_Position += pan;
-        } else {
-            // Building: isometric view, arrow keys rotate the diagonal
-            constexpr float BUILD_ROTATE_SPEED = 60.f;
-            if (Input::IsKeyDown(SDLK_LEFT))  m_BuildYaw += BUILD_ROTATE_SPEED * dt;
-            if (Input::IsKeyDown(SDLK_RIGHT)) m_BuildYaw -= BUILD_ROTATE_SPEED * dt;
-            m_Camera->m_Pitch = -55.f;
-            m_Camera->m_Yaw   = m_BuildYaw;
-            m_Camera->UpdateVectors();
-
-            // Building: WASD pans relative to the isometric camera view
-            glm::vec3 forward = glm::normalize(glm::vec3(m_Camera->m_Front.x, 0.f, m_Camera->m_Front.z));
-            glm::vec3 right   = m_Camera->m_Right;
-            glm::vec3 pan{0.f};
-            if (Input::IsKeyDown(SDLK_W)) pan += forward * TOPDOWN_PAN_SPEED * dt;
-            if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
-            if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
-            if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
-            m_Camera->m_Position += pan;
+        // Arrow keys snap 90° to the next/previous diagonal isometric view,
+        // orbiting around the ground point at the centre of the screen.
+        constexpr float YAW_ANIM_DURATION = 0.25f;
+        if (Input::IsKeyPressed(SDLK_LEFT) && m_YawAnimT >= 1.f) {
+            // Compute the pivot: the ground-level point at the centre of the view.
+            float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
+            m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            m_CamPosFrom = m_Camera->m_Position;
+            m_BuildYawFrom   = m_BuildYaw;
+            m_BuildYawTarget = m_BuildYawFrom + 90.f;
+            m_YawAnimT = 0.f;
         }
+        if (Input::IsKeyPressed(SDLK_RIGHT) && m_YawAnimT >= 1.f) {
+            float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
+            m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            m_CamPosFrom = m_Camera->m_Position;
+            m_BuildYawFrom   = m_BuildYaw;
+            m_BuildYawTarget = m_BuildYawFrom - 90.f;
+            m_YawAnimT = 0.f;
+        }
+        if (m_YawAnimT < 1.f) {
+            m_YawAnimT = std::min(m_YawAnimT + dt / YAW_ANIM_DURATION, 1.f);
+            // Smoothstep ease-in/ease-out: t * t * (3 - 2 * t)
+            float t = m_YawAnimT;
+            float eased = t * t * (3.f - 2.f * t);
+            m_BuildYaw = glm::mix(m_BuildYawFrom, m_BuildYawTarget, eased);
 
-        // Building mode: scroll to zoom (adjust ortho size)
-        if (m_CameraMode == CameraMode::Building) {
+            // Orbit the camera position around the pivot by (eased) of the 90° arc.
+            float angle  = glm::radians(glm::mix(0.f, m_BuildYawTarget - m_BuildYawFrom, eased));
+            glm::vec3 off = m_CamPosFrom - m_YawPivot;
+            float ca = std::cos(angle);
+            float sa = std::sin(angle);
+            m_Camera->m_Position = m_YawPivot + glm::vec3(
+                off.x * ca - off.z * sa,
+                off.y,
+                off.x * sa + off.z * ca);
+        }
+        (void)BUILD_ROTATE_SPEED;
+
+        m_Camera->m_Pitch = -55.f;
+        m_Camera->m_Yaw   = m_BuildYaw;
+        m_Camera->UpdateVectors();
+
+        // WASD pans relative to the isometric camera view
+        glm::vec3 forward = glm::normalize(glm::vec3(m_Camera->m_Front.x, 0.f, m_Camera->m_Front.z));
+        glm::vec3 right   = m_Camera->m_Right;
+        glm::vec3 pan{0.f};
+        if (Input::IsKeyDown(SDLK_W)) pan += forward * TOPDOWN_PAN_SPEED * dt;
+        if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
+        if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
+        if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
+        m_Camera->m_Position += pan;
+
+        // Scroll to zoom (adjust ortho size) — skip if mouse is over ImGui UI
+        if (!ImGui::GetIO().WantCaptureMouse) {
             float scroll = Input::GetMouseWheelDelta();
             if (scroll != 0.f) {
                 m_BuildOrthoSize = glm::clamp(m_BuildOrthoSize - scroll * 3.f, 5.f, 80.f);
                 m_Camera->m_OrthoSize = m_BuildOrthoSize;
-                spdlog::debug("Building zoom: orthoSize={:.1f}", m_BuildOrthoSize);
+                spdlog::debug("Zoom: orthoSize={:.1f}", m_BuildOrthoSize);
             }
+        }
 
-            // Cursor world position — used for both tree fade (always active)
-            // and building-placement ghost (only when placement active).
+        // Building mode: cursor world position, tree fade, placement
+        if (m_CameraMode == CameraMode::Building) {
             glm::vec2 mpos  = Input::GetMousePosition();
             glm::vec3 rawCursor = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
-            m_FadeCenter = rawCursor; // always updates — trees follow cursor even without a building selected
+            m_FadeCenter = rawCursor;
 
             // Placement ghost follow cursor
             if (m_PlacementActive && m_GhostEntity != entt::null &&

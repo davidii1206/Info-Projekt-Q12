@@ -265,8 +265,18 @@ private:
     float m_TopDownHeight = 40.f;
     /// Orthographic zoom level for Building mode (half-height of frustum).
     float m_BuildOrthoSize = 30.f;
-    /// Yaw angle for isometric building mode (rotated with left/right arrow keys).
+    /// Yaw angle for isometric mode (rotated with left/right arrow keys).
     float m_BuildYaw = -135.f;
+    /// Starting yaw of the current snap animation.
+    float m_BuildYawFrom = -135.f;
+    /// Target yaw of the current snap animation.
+    float m_BuildYawTarget = -135.f;
+    /// Animation progress [0..1] between m_BuildYawFrom and m_BuildYawTarget.
+    float m_YawAnimT = 1.f;
+    /// Camera position at the start of the snap animation.
+    glm::vec3 m_CamPosFrom{0.f};
+    /// World-space pivot (center of screen on ground) for orbit rotation.
+    glm::vec3 m_YawPivot{0.f};
 
     /// Client-side entity for building placement ghost (transparent preview).
     entt::entity m_GhostEntity = entt::null;
