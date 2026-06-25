@@ -1417,8 +1417,48 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
             CancelPlacement(ctx);
         m_CameraMode = (m_CameraMode == CameraMode::Commander)
                        ? CameraMode::Building : CameraMode::Commander;
+        if (m_CameraMode == CameraMode::Building) {
+            m_DirectControlActive = false;
+            m_DirectControlNetId = 0;
+        }
         spdlog::info("GameScene: switched to {} mode",
                       m_CameraMode == CameraMode::Commander ? "Commander" : "Building");
+    }
+
+    // ------------------------------------------------------------------
+    // C: toggle Direct Control of selected unit (only in Commander mode)
+    // ------------------------------------------------------------------
+    if (m_CameraMode == CameraMode::Commander && Input::IsKeyPressed(SDLK_C)) {
+        if (m_DirectControlActive) {
+            m_DirectControlActive = false;
+            m_DirectControlNetId = 0;
+            spdlog::info("Direct control disabled");
+        } else {
+            if (!m_SelectedUnits.empty()) {
+                m_DirectControlNetId = m_SelectedUnits[0];
+                m_DirectControlActive = true;
+                spdlog::info("Direct control enabled for unit netId={}", m_DirectControlNetId);
+            } else {
+                spdlog::info("Cannot enable direct control: no unit selected");
+            }
+        }
+    }
+
+    // Auto-disable direct control if controlled unit dies or is destroyed
+    if (m_DirectControlActive && m_DirectControlNetId != 0) {
+        auto it = m_ClientNetMap.find(m_DirectControlNetId);
+        if (it == m_ClientNetMap.end()) {
+            m_DirectControlActive = false;
+            m_DirectControlNetId = 0;
+            spdlog::info("Direct control disabled (unit no longer exists)");
+        } else {
+            auto* hc = ctx.clientRegistry.try_get<HealthComponent>(it->second);
+            if (hc && hc->dead) {
+                m_DirectControlActive = false;
+                m_DirectControlNetId = 0;
+                spdlog::info("Direct control disabled (unit died)");
+            }
+        }
     }
 
     if (m_CameraMode == CameraMode::Commander || m_CameraMode == CameraMode::Building) {
@@ -1435,17 +1475,39 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         // orbiting around the ground point at the centre of the screen.
         constexpr float YAW_ANIM_DURATION = 0.25f;
         if (Input::IsKeyPressed(SDLK_LEFT) && m_YawAnimT >= 1.f) {
-            // Compute the pivot: the ground-level point at the centre of the view.
-            float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
-            m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            if (m_DirectControlActive && m_DirectControlNetId != 0) {
+                auto it = m_ClientNetMap.find(m_DirectControlNetId);
+                if (it != m_ClientNetMap.end()) {
+                    auto* tf = ctx.clientRegistry.try_get<TransformComponent>(it->second);
+                    if (tf) m_YawPivot = tf->position;
+                    else m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                } else {
+                    m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                }
+            } else {
+                // Compute the pivot: the ground-level point at the centre of the view.
+                float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
+                m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            }
             m_CamPosFrom = m_Camera->m_Position;
             m_BuildYawFrom   = m_BuildYaw;
             m_BuildYawTarget = m_BuildYawFrom + 90.f;
             m_YawAnimT = 0.f;
         }
         if (Input::IsKeyPressed(SDLK_RIGHT) && m_YawAnimT >= 1.f) {
-            float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
-            m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            if (m_DirectControlActive && m_DirectControlNetId != 0) {
+                auto it = m_ClientNetMap.find(m_DirectControlNetId);
+                if (it != m_ClientNetMap.end()) {
+                    auto* tf = ctx.clientRegistry.try_get<TransformComponent>(it->second);
+                    if (tf) m_YawPivot = tf->position;
+                    else m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                } else {
+                    m_YawPivot = m_Camera->m_Position + (-m_Camera->m_Position.y / m_Camera->m_Front.y) * m_Camera->m_Front;
+                }
+            } else {
+                float tPivot = -m_Camera->m_Position.y / m_Camera->m_Front.y;
+                m_YawPivot   = m_Camera->m_Position + tPivot * m_Camera->m_Front;
+            }
             m_CamPosFrom = m_Camera->m_Position;
             m_BuildYawFrom   = m_BuildYaw;
             m_BuildYawTarget = m_BuildYawFrom - 90.f;
@@ -1474,15 +1536,28 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
         m_Camera->m_Yaw   = m_BuildYaw;
         m_Camera->UpdateVectors();
 
-        // WASD pans relative to the isometric camera view
+        // WASD pans relative to the isometric camera view unless directly controlling a unit
         glm::vec3 forward = glm::normalize(glm::vec3(m_Camera->m_Front.x, 0.f, m_Camera->m_Front.z));
         glm::vec3 right   = m_Camera->m_Right;
         glm::vec3 pan{0.f};
-        if (Input::IsKeyDown(SDLK_W)) pan += forward * TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
-        if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
-        m_Camera->m_Position += pan;
+        if (!m_DirectControlActive) {
+            if (Input::IsKeyDown(SDLK_W)) pan += forward * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_S)) pan -= forward * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_A)) pan -= right   * TOPDOWN_PAN_SPEED * dt;
+            if (Input::IsKeyDown(SDLK_D)) pan += right   * TOPDOWN_PAN_SPEED * dt;
+            m_Camera->m_Position += pan;
+        } else {
+            // Camera smoothly follows the directly controlled unit
+            auto it = m_ClientNetMap.find(m_DirectControlNetId);
+            if (it != m_ClientNetMap.end()) {
+                auto* tf = ctx.clientRegistry.try_get<TransformComponent>(it->second);
+                if (tf) {
+                    float t = (tf->position.y - m_TopDownHeight) / m_Camera->m_Front.y;
+                    glm::vec3 targetCamPos = tf->position - t * m_Camera->m_Front;
+                    m_Camera->m_Position = glm::mix(m_Camera->m_Position, targetCamPos, 10.f * dt);
+                }
+            }
+        }
 
         // Scroll to zoom (adjust ortho size) — skip if mouse is over ImGui UI
         if (!ImGui::GetIO().WantCaptureMouse) {
@@ -1856,6 +1931,40 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                     }
                 }
             }
+
+            // Tier 1 to 5 quick spawn debug buttons
+            ImGui::Separator();
+            ImGui::Text("Cheat-Einheit (Tier 1-5) an der Hauptbasis:");
+            glm::vec3 sp{};
+            bool found = false;
+            auto mbView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+            for (auto mb : mbView) {
+                const auto& mbBc = mbView.get<BuildingComponent>(mb);
+                if (mbBc.teamId == m_MyPlayerId && mbBc.type == BuildingType::Main && !mbBc.destroyed) {
+                    sp = mbView.get<TransformComponent>(mb).position;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                BugClass playerClass = BugClass::Ants;
+                auto pView = ctx.serverRegistry.view<PlayerComponent>();
+                for (auto pe : pView) {
+                    auto& pc = pView.get<PlayerComponent>(pe);
+                    if (pc.playerId == m_MyPlayerId) {
+                        if (pc.bugClass != BugClass::None)
+                            playerClass = pc.bugClass;
+                        break;
+                    }
+                }
+                for (int t = 1; t <= 5; ++t) {
+                    std::string label = "Tier " + std::to_string(t);
+                    if (ImGui::Button(label.c_str())) {
+                        SpawnUnit(ctx, m_MyPlayerId, sp + glm::vec3(3.f, 0.f, (float)t * 1.5f), playerClass, t);
+                    }
+                    if (t < 5) ImGui::SameLine();
+                }
+            }
         }
     }
 
@@ -2040,34 +2149,6 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             }
             if (!anyBarracks) {
                 ImGui::TextDisabled("  Keine Brutkammer gebaut. (Bauen -> Brutkammer)");
-                if (ImGui::Button("Test-Einheit am MainBase spawnen")) {
-                    // Fallback: spawn near the team's Main Base so the user can
-                    // try Commander mode without first placing a Barracks.
-                    glm::vec3 sp{};
-                    bool found = false;
-                    auto mbView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
-                    for (auto mb : mbView) {
-                        const auto& mbBc = mbView.get<BuildingComponent>(mb);
-                        if (mbBc.teamId == myTeam && mbBc.type == BuildingType::Main && !mbBc.destroyed) {
-                            sp = mbView.get<TransformComponent>(mb).position;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (found) {
-                        BugClass playerClass = BugClass::Ants;
-                        auto pView = ctx.serverRegistry.view<PlayerComponent>();
-                        for (auto pe : pView) {
-                            auto& pc = pView.get<PlayerComponent>(pe);
-                            if (pc.playerId == myTeam) {
-                                if (pc.bugClass != BugClass::None)
-                                    playerClass = pc.bugClass;
-                                break;
-                            }
-                        }
-                        SpawnUnit(ctx, myTeam, sp + glm::vec3(3.f, 0.f, 0.f), playerClass);
-                    }
-                }
             }
         }
     }
@@ -2414,6 +2495,10 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                     if (it == m_ServerNetMap.end()) continue;
                     entt::entity unit = it->second;
 
+                    // Skip if unit is currently directly controlled
+                    auto* uc = ctx.serverRegistry.try_get<UnitComponent>(unit);
+                    if (uc && uc->directControl) continue;
+
                     auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
                     if (cc) {
                         cc->target          = targetEntity;
@@ -2438,6 +2523,10 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                     auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
                     if (it == m_ServerNetMap.end()) continue;
                     entt::entity unit = it->second;
+
+                    // Skip if unit is currently directly controlled
+                    auto* uc = ctx.serverRegistry.try_get<UnitComponent>(unit);
+                    if (uc && uc->directControl) continue;
 
                     auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
                     if (cc) {
@@ -2704,6 +2793,17 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
 }
 
 void GameScene::PollClientPackets(SceneContext& ctx) {
+    // Reset directControl flags and inputDir on all units at start of tick
+    {
+        auto uView = ctx.serverRegistry.view<MovementComponent, UnitComponent>();
+        for (auto ue : uView) {
+            auto& uc = uView.get<UnitComponent>(ue);
+            auto& mv = uView.get<MovementComponent>(ue);
+            uc.directControl = false;
+            mv.inputDir = glm::vec3(0.f);
+        }
+    }
+
     while (true) {
         auto result = ctx.network.ReceiveFromClient<PlayerInputPacket>(PacketType::PLAYER_INPUT);
         if (!result) break;
@@ -2712,6 +2812,81 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
         if (peerIt == m_PeerToNetId.end()) continue;
         auto entIt = m_ServerNetMap.find(peerIt->second);
         if (entIt == m_ServerNetMap.end()) continue;
+
+        // If packet has controlNetId, it's directing a unit!
+        if (packet.controlNetId != 0) {
+            auto unitIt = m_ServerNetMap.find(packet.controlNetId);
+            if (unitIt != m_ServerNetMap.end()) {
+                entt::entity unitEntity = unitIt->second;
+                // Verify ownership
+                auto* uc = ctx.serverRegistry.try_get<UnitComponent>(unitEntity);
+                auto* pc = ctx.serverRegistry.try_get<PlayerComponent>(entIt->second);
+                if (uc && pc && uc->teamId == pc->playerId) {
+                    uc->directControl = true;
+                    auto* mv = ctx.serverRegistry.try_get<MovementComponent>(unitEntity);
+                    if (mv) {
+                        mv->inputDir = {packet.dx, packet.dy, packet.dz};
+                    }
+
+                    // Clear A* pathfinding and normal orders for this unit
+                    auto* mo = ctx.serverRegistry.try_get<MovementOrderComponent>(unitEntity);
+                    if (mo) mo->active = false;
+                    auto* path = ctx.serverRegistry.try_get<PathComponent>(unitEntity);
+                    if (path) path->waypoints.clear();
+
+                    // Handle attacking!
+                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unitEntity);
+                    if (cc) {
+                        if (packet.attackActive) {
+                            // Look for nearest enemy (unit or building) to the target cursor coordinates
+                            float bestDist = 999999.f;
+                            entt::entity bestTarget = entt::null;
+                            glm::vec3 cursorTargetPos(packet.targetX, 0.f, packet.targetZ);
+
+                            // 1. Check enemy units
+                            auto uView = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
+                            for (auto ue : uView) {
+                                auto& targetUc = uView.get<UnitComponent>(ue);
+                                if (targetUc.teamId == uc->teamId) continue;
+                                auto& targetHc = uView.get<HealthComponent>(ue);
+                                if (targetHc.dead) continue;
+                                auto& targetTf = uView.get<TransformComponent>(ue);
+                                
+                                float d = glm::length(targetTf.position - cursorTargetPos);
+                                if (d < bestDist) {
+                                    bestDist = d;
+                                    bestTarget = ue;
+                                }
+                            }
+
+                            // 2. Check enemy buildings
+                            auto bView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+                            for (auto be : bView) {
+                                auto& targetBc = bView.get<BuildingComponent>(be);
+                                if (targetBc.teamId == uc->teamId || targetBc.destroyed) continue;
+                                auto& targetTf = bView.get<TransformComponent>(be);
+
+                                float d = glm::length(targetTf.position - cursorTargetPos);
+                                if (d < bestDist) {
+                                    bestDist = d;
+                                    bestTarget = be;
+                                }
+                            }
+
+                            // Set target
+                            if (bestTarget != entt::null) {
+                                cc->target = bestTarget;
+                                cc->commandedTarget = true;
+                            }
+                        } else {
+                            cc->target = entt::null;
+                            cc->commandedTarget = false;
+                        }
+                    }
+                }
+            }
+        }
+
         auto* movement = ctx.serverRegistry.try_get<MovementComponent>(entIt->second);
         if (movement) movement->inputDir = {packet.dx, packet.dy, packet.dz};
         auto* transform = ctx.serverRegistry.try_get<TransformComponent>(entIt->second);
@@ -2816,12 +2991,32 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (!pkt) break;
         if (m_ClientNetMap.count(pkt->netId)) continue;
         auto entity = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
+        
+        // Calculate the scale and other client parameters based on bugClass and tier
+        glm::vec3 unitScale(1.f);
+        BugClass bc = static_cast<BugClass>(pkt->bugClass);
+        if (bc == BugClass::BeesWasps) {
+            if (pkt->tier == 1)      unitScale = glm::vec3(0.4f);
+            else if (pkt->tier == 2) unitScale = glm::vec3(1.2f);
+            else if (pkt->tier == 3) unitScale = glm::vec3(0.7f);
+            else if (pkt->tier == 4) unitScale = glm::vec3(0.6f);
+            else if (pkt->tier == 5) unitScale = glm::vec3(1.6f);
+        } else {
+            if (pkt->tier == 1)      unitScale = glm::vec3(0.8f);
+            else if (pkt->tier == 2) unitScale = glm::vec3(1.0f);
+            else if (pkt->tier == 3) unitScale = glm::vec3(1.2f);
+            else if (pkt->tier == 4) unitScale = glm::vec3(1.4f);
+            else if (pkt->tier == 5) unitScale = glm::vec3(1.8f);
+        }
+
+        TransformComponent tf{glm::vec3{pkt->x, pkt->y, pkt->z}};
+        tf.scale = unitScale;
+        ctx.clientRegistry.emplace<TransformComponent>(entity, tf);
         ctx.clientRegistry.emplace<MovementComponent>(entity);
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
         ctx.clientRegistry.emplace<UnitComponent>(entity,
-            UnitComponent{pkt->teamId, static_cast<BugClass>(pkt->bugClass), false});
+            UnitComponent{pkt->teamId, bc, pkt->tier, false});
         ctx.clientRegistry.emplace<HealthComponent>(entity,
             HealthComponent{pkt->maxHp});
         ctx.clientRegistry.emplace<MovementOrderComponent>(entity);
@@ -2985,7 +3180,11 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
 }
 
 void GameScene::SendLocalInput(SceneContext& ctx) {
-    if (!ctx.network.IsConnected() || !Input::IsRelativeMouseMode() || !m_Camera) return;
+    if (!ctx.network.IsConnected() || !m_Camera) return;
+
+    bool directControl = m_DirectControlActive && m_DirectControlNetId != 0;
+    if (!directControl && !Input::IsRelativeMouseMode()) return;
+
     glm::vec3 forward = m_Camera->m_Front;
     forward.y = 0.f;
     if (glm::length(forward) > 0.0001f) forward = glm::normalize(forward);
@@ -2997,13 +3196,34 @@ void GameScene::SendLocalInput(SceneContext& ctx) {
     if (Input::IsKeyDown(SDLK_S)) moveDir -= forward;
     if (Input::IsKeyDown(SDLK_A)) moveDir -= right;
     if (Input::IsKeyDown(SDLK_D)) moveDir += right;
-    if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
-    if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
+    if (!directControl) {
+        if (Input::IsKeyDown(SDLK_SPACE)) moveDir.y += 1.f;
+        if (Input::IsKeyDown(SDLK_LSHIFT)) moveDir.y -= 1.f;
+    }
     if (glm::length(moveDir) > 0.f) moveDir = glm::normalize(moveDir);
 
     PlayerInputPacket pkt;
     pkt.dx = moveDir.x; pkt.dy = moveDir.y; pkt.dz = moveDir.z;
     pkt.yaw = m_Camera->m_Yaw; pkt.pitch = m_Camera->m_Pitch;
+
+    if (directControl) {
+        pkt.controlNetId = m_DirectControlNetId;
+        pkt.attackActive = Input::IsKeyDown(SDLK_SPACE) ? 1 : 0;
+
+        // Project cursor to world XZ
+        glm::vec2 mpos = Input::GetMousePosition();
+        int winW, winH;
+        SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
+        glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+        pkt.targetX = worldPos.x;
+        pkt.targetZ = worldPos.z;
+    } else {
+        pkt.controlNetId = 0;
+        pkt.attackActive = 0;
+        pkt.targetX = 0.f;
+        pkt.targetZ = 0.f;
+    }
+
     ctx.network.Send(pkt);
 }
 
@@ -3099,7 +3319,7 @@ void GameScene::LoadSceneMeshCollision(
  *   Omnivores  (Ants, Roaches, Beetles, CentipedesWorms) → medium (12)
  *   Rest       → low (7)
  */
-void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bc, float hp)
+void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bc, int tier, float hp)
 {
     if (!ctx.network.IsHosting()) return;
 
@@ -3114,44 +3334,97 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
     if (IsFlying(bc))
         pos.y += 4.f;
 
-    // Damage by diet archetype
-    float dmg = 7.f;
-    if (bc == BugClass::Mantis || bc == BugClass::Dragonflies || bc == BugClass::Scorpions)
-        dmg = 20.f;
-    else if (bc == BugClass::Ants || bc == BugClass::Roaches || bc == BugClass::Beetles ||
-             bc == BugClass::CentipedesWorms)
-        dmg = 12.f;
+    // Define unit properties based on bugClass and tier
+    float dmg = 10.f;
+    float speed = 10.f;
+    float attackRange = 1.5f;
+    float attackRate = 1.5f;
+    float unitScale = 1.0f;
 
-    // Debuffs
-    if (IsFlying(bc))
-        hp *= 0.75f;
-    float speed = IsClimber(bc) ? 6.f : 10.f;
+    if (bc == BugClass::BeesWasps) {
+        if (tier == 1) { // Honigbiene
+            if (hp < 0.f) hp = 60.f;
+            dmg = 40.f;
+            speed = 11.f;
+            attackRange = 1.8f;
+            attackRate = 1.0f;
+            unitScale = 0.4f;
+        } else if (tier == 2) { // Hummel
+            if (hp < 0.f) hp = 250.f;
+            dmg = 8.f;
+            speed = 4.5f;
+            attackRange = 1.8f;
+            attackRate = 1.6f;
+            unitScale = 1.2f;
+        } else if (tier == 3) { // Feldwespe
+            if (hp < 0.f) hp = 95.f;
+            dmg = 16.f;
+            speed = 9.f;
+            attackRange = 1.8f;
+            attackRate = 1.1f;
+            unitScale = 0.7f;
+        } else if (tier == 4) { // Gelbwest-Wespe
+            if (hp < 0.f) hp = 80.f;
+            dmg = 10.f;
+            speed = 7.5f;
+            attackRange = 6.0f; // Ranged
+            attackRate = 1.5f;
+            unitScale = 0.6f;
+        } else if (tier == 5) { // Hornisse
+            if (hp < 0.f) hp = 210.f;
+            dmg = 35.f;
+            speed = 12.f;
+            attackRange = 2.0f;
+            attackRate = 1.2f;
+            unitScale = 1.6f;
+        }
+    } else {
+        // Fallback scaling for other factions
+        if (tier == 1) {
+            if (hp < 0.f) hp = 100.f;
+            dmg = 10.f; speed = 10.f; attackRange = 1.5f; attackRate = 1.5f; unitScale = 0.8f;
+        } else if (tier == 2) {
+            if (hp < 0.f) hp = 150.f;
+            dmg = 15.f; speed = 8.f; attackRange = 1.5f; attackRate = 1.5f; unitScale = 1.0f;
+        } else if (tier == 3) {
+            if (hp < 0.f) hp = 200.f;
+            dmg = 20.f; speed = 7.f; attackRange = 1.5f; attackRate = 1.5f; unitScale = 1.2f;
+        } else if (tier == 4) {
+            if (hp < 0.f) hp = 250.f;
+            dmg = 25.f; speed = 6.f; attackRange = 5.0f; attackRate = 1.5f; unitScale = 1.4f;
+        } else if (tier == 5) {
+            if (hp < 0.f) hp = 400.f;
+            dmg = 40.f; speed = 5.f; attackRange = 2.0f; attackRate = 1.5f; unitScale = 1.8f;
+        }
+    }
+
+    if (IsClimber(bc)) {
+        speed *= 0.6f;
+    }
 
     const uint32_t netId = m_NextNetId++;
     auto e = ctx.serverRegistry.create();
-    ctx.serverRegistry.emplace<TransformComponent>(e, pos);
+    
+    TransformComponent tf{pos};
+    tf.scale = glm::vec3(unitScale);
+    ctx.serverRegistry.emplace<TransformComponent>(e, tf);
     ctx.serverRegistry.emplace<MovementComponent>(e, MovementComponent{glm::vec3(0.f), speed});
     ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
     ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
-    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false});
+    ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, tier, false});
     ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
     ctx.serverRegistry.emplace<CombatComponent>(e,
-        CombatComponent{/*range=*/6.f, /*dmg=*/dmg, /*cd=*/0.f, /*rate=*/1.5f, entt::null, false});
+        CombatComponent{attackRange, dmg, /*cd=*/0.f, attackRate, entt::null, false});
     ctx.serverRegistry.emplace<MovementOrderComponent>(e);
     m_ServerNetMap[netId] = e;
 
-    // Dynamic box for ground units (flying units keep direct-position movement).
-    // Dynamic bodies collide with each other AND with static geometry (buildings)
-    // via Jolt, so units automatically push each other apart.  Gravity is
-    // disabled — vertical position is overridden from the tile grid each frame.
-    // Terrain collision is handled by the tile‑based canStand() checks, not by
-    // a Jolt terrain mesh (which was removed as too expensive to build).
+    // Dynamic box for ground units
     if (!IsFlying(bc) && ctx.physics) {
         uint32_t physicsId = ctx.world->GetNextPhysicsID();
         PhysicsBodyHandle bh = ctx.physics->AddUnitBox(
             physicsId,
             JPH::RVec3(pos.x, pos.y, pos.z),
-            JPH::Vec3(0.4f, 0.3f, 0.4f));
+            JPH::Vec3(0.4f * unitScale, 0.3f * unitScale, 0.4f * unitScale));
         if (bh.IsValid()) {
             ctx.world->RegisterPhysicsEntity(physicsId, e);
             ctx.serverRegistry.emplace<PhysicsBodyComponent>(e, bh);
@@ -3162,28 +3435,28 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
     pkt.netId    = netId;
     pkt.teamId   = teamId;
     pkt.bugClass = static_cast<uint8_t>(bc);
+    pkt.tier     = static_cast<uint8_t>(tier);
     pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
     pkt.hp = hp; pkt.maxHp = hp;
     ctx.network.BroadcastToAll(pkt);
 
-    // Also create the client-side entity directly when hosting, because
-    // BroadcastToAll doesn't loop back to the host's local client — so
-    // without this the host never sees its own freshly spawned units.
-    // Mirrors the same fallback that SpawnBuilding uses.
+    // Also create the client-side entity directly when hosting
     if (!m_ClientNetMap.count(netId)) {
         auto ce = ctx.clientRegistry.create();
-        ctx.clientRegistry.emplace<TransformComponent>(ce, pos);
+        TransformComponent cTf{pos};
+        cTf.scale = glm::vec3(unitScale);
+        ctx.clientRegistry.emplace<TransformComponent>(ce, cTf);
         ctx.clientRegistry.emplace<MovementComponent>(ce, MovementComponent{glm::vec3(0.f), speed});
         ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
         ctx.clientRegistry.emplace<ModelComponent>(ce, std::string("assets/cube.glb"));
-        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, false});
+        ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, tier, false});
         ctx.clientRegistry.emplace<HealthComponent>(ce, HealthComponent{hp});
         ctx.clientRegistry.emplace<MovementOrderComponent>(ce);
         m_ClientNetMap[netId] = ce;
     }
 
-    spdlog::info("GameScene: spawned unit netId={} team={} class={} hp={:.0f}",
-                 netId, teamId, (int)bc, hp);
+    spdlog::info("GameScene: spawned unit netId={} team={} class={} tier={} hp={:.0f}",
+                 netId, teamId, (int)bc, tier, hp);
 }
 
 // ---------------------------------------------------------------------------
@@ -3474,9 +3747,137 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         bool isFlying  = IsFlying(uc.bugClass);
         bool isClimber = IsClimber(uc.bugClass);
 
+        // Apply slow debuffs if any
+        float currentSpeed = mv.speed;
+        if (auto* slow = ctx.serverRegistry.try_get<SlowDebuffComponent>(e)) {
+            slow->timer -= dt;
+            if (slow->timer > 0.f) {
+                currentSpeed *= slow->speedMultiplier;
+            } else {
+                ctx.serverRegistry.remove<SlowDebuffComponent>(e);
+            }
+        }
+
+        auto* cc = ctx.serverRegistry.try_get<CombatComponent>(e);
+
+        if (uc.directControl) {
+            // Direct Control Movement
+            glm::vec2 dir{0.f};
+            if (glm::length(glm::vec2(mv.inputDir.x, mv.inputDir.z)) > 0.0001f) {
+                dir = glm::normalize(glm::vec2(mv.inputDir.x, mv.inputDir.z));
+            }
+            glm::vec2 step = dir * (currentSpeed * dt);
+
+            auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e);
+            bool hasPhysics = (physComp && physComp->handle.IsValid() && ctx.physics);
+
+            if (isFlying) {
+                tf.position.x += step.x;
+                tf.position.z += step.y;
+                float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
+                tf.position.y  = glm::mix(tf.position.y, targetY, 10.f * dt);
+                mv.velocity    = glm::vec3(step.x, 0.f, step.y) / dt;
+
+                // Face movement or attack target
+                if (glm::length(dir) > 0.0001f) {
+                    float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                    float currentYaw = tf.rotation.y;
+                    float diff = targetYaw - currentYaw;
+                    while (diff < -180.f) diff += 360.f;
+                    while (diff > 180.f) diff -= 360.f;
+                    tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+                } else if (cc && cc->target != entt::null && ctx.serverRegistry.valid(cc->target)) {
+                    auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
+                    if (ttf) {
+                        glm::vec2 toTarget(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z);
+                        if (glm::length(toTarget) > 0.0001f) {
+                            float targetYaw = glm::degrees(std::atan2(toTarget.x, toTarget.y));
+                            float currentYaw = tf.rotation.y;
+                            float diff = targetYaw - currentYaw;
+                            while (diff < -180.f) diff += 360.f;
+                            while (diff > 180.f) diff -= 360.f;
+                            tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+                        }
+                    }
+                }
+            } else {
+                glm::vec2 curXZ = glm::vec2(tf.position.x, tf.position.z);
+                int curTx, curTz;
+                m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
+                int currentTier = (int)m_World.GetTile(curTx, curTz).tier;
+
+                glm::vec2 chosen{0.f};
+                if (glm::length(step) > 0.0001f) {
+                    if      (canStand(curXZ + step,                       currentTier, isClimber)) chosen = step;
+                    else if (canStand(curXZ + glm::vec2(step.x, 0.f),     currentTier, isClimber)) chosen = {step.x, 0.f};
+                    else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier, isClimber)) chosen = {0.f,    step.y};
+                }
+
+                if (chosen.x == 0.f && chosen.y == 0.f) {
+                    mv.velocity = {0.f, 0.f, 0.f};
+                    if (hasPhysics)
+                        ctx.physics->SetLinearVelocity(physComp->handle, JPH::Vec3::sZero());
+                } else {
+                    if (hasPhysics) {
+                        JPH::Vec3 vel(chosen.x / dt, 0.f, chosen.y / dt);
+                        ctx.physics->SetLinearVelocity(physComp->handle, vel);
+                        JPH::RVec3 curJolt = ctx.physics->GetPosition(physComp->handle);
+                        float groundY = GroundHeightAt(m_World, curJolt.GetX(), curJolt.GetZ());
+                        if (std::abs(curJolt.GetY() - groundY) > 0.01f) {
+                            ctx.physics->SetPosition(physComp->handle,
+                                JPH::RVec3(curJolt.GetX(), groundY, curJolt.GetZ()));
+                        }
+                        tf.position = glm::vec3(curJolt.GetX(), groundY, curJolt.GetZ());
+                        mv.velocity = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+                    } else {
+                        tf.position.x += chosen.x;
+                        tf.position.z += chosen.y;
+                        tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+                        mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+                    }
+                }
+
+                // Face movement or attack target
+                if (glm::length(dir) > 0.0001f) {
+                    float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                    float currentYaw = tf.rotation.y;
+                    float diff = targetYaw - currentYaw;
+                    while (diff < -180.f) diff += 360.f;
+                    while (diff > 180.f) diff -= 360.f;
+                    tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+
+                    if (hasPhysics) {
+                        JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(),
+                            glm::radians(tf.rotation.y));
+                        ctx.physics->SetRotation(physComp->handle, rot);
+                    }
+                } else if (cc && cc->target != entt::null && ctx.serverRegistry.valid(cc->target)) {
+                    auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
+                    if (ttf) {
+                        glm::vec2 toTarget(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z);
+                        if (glm::length(toTarget) > 0.0001f) {
+                            float targetYaw = glm::degrees(std::atan2(toTarget.x, toTarget.y));
+                            float currentYaw = tf.rotation.y;
+                            float diff = targetYaw - currentYaw;
+                            while (diff < -180.f) diff += 360.f;
+                            while (diff > 180.f) diff -= 360.f;
+                            tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+
+                            if (hasPhysics) {
+                                JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(),
+                                    glm::radians(tf.rotation.y));
+                                ctx.physics->SetRotation(physComp->handle, rot);
+                            }
+                        }
+                    }
+                }
+            }
+
+            continue;
+        }
+
         // Combat target pursuit: if this unit has a commanded attack target
         // that is out of range, keep moving toward it each tick.
-        auto* cc = ctx.serverRegistry.try_get<CombatComponent>(e);
         if (cc && cc->commandedTarget && cc->target != entt::null &&
             ctx.serverRegistry.valid(cc->target)) {
             auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
@@ -3605,7 +4006,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         }
 
         glm::vec2 dir = distToWp > 0.001f ? toWp / distToWp : glm::vec2(0.f);
-        glm::vec2 step = dir * (mv.speed * dt);
+        glm::vec2 step = dir * (currentSpeed * dt);
 
         // Blend the waypoint direction with unit‑unit repulsion so
         // units spread apart.
@@ -3650,7 +4051,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 float blen = glm::length(blended);
                 if (blen > 0.001f) {
                     dir = blended / blen;
-                    step = dir * (mv.speed * dt);
+                    step = dir * (currentSpeed * dt);
                 }
             }
         }
@@ -3829,9 +4230,40 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 
                 auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
                 if (thc && !thc->dead) {
-                    thc->hp -= cc.attackDamage;
+                    float dmgDealt = cc.attackDamage;
+                    if (uc.bugClass == BugClass::BeesWasps) {
+                        if (uc.tier == 1) { // Honigbiene: Kamikaze
+                            hc.hp = 0.f;
+                            hc.dead = true;
+                            auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                            uint32_t enetId = enc ? enc->netId : 0;
+                            uint32_t killerTeam = uc.teamId == 0 ? 1 : 0;
+                            auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
+                            if (targetUc) killerTeam = targetUc->teamId;
+                            toKill.push_back({e, enetId, killerTeam});
+                            spdlog::debug("Honigbiene: Kamikaze hit against unit!");
+                        }
+                        else if (uc.tier == 4) { // Gelbwest-Wespe: Slow acid
+                            auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
+                            if (targetUc && !IsFlying(targetUc->bugClass)) {
+                                auto& slow = ctx.serverRegistry.get_or_emplace<SlowDebuffComponent>(cc.target);
+                                slow.timer = 3.f;
+                                slow.speedMultiplier = 0.5f;
+                                spdlog::debug("Gelbwest-Wespe: Applied slow to target unit!");
+                            }
+                        }
+                        else if (uc.tier == 5) { // Hornisse: Boss-Killer
+                            auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
+                            if (targetUc && (targetUc->tier == 1 || targetUc->tier == 2)) {
+                                dmgDealt *= 3.f;
+                                spdlog::debug("Hornisse: Triple bite damage against Tier {} target!", targetUc->tier);
+                            }
+                        }
+                    }
+
+                    thc->hp -= dmgDealt;
                     spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
-                                  (uint32_t)e, (uint32_t)cc.target, cc.attackDamage, thc->hp);
+                                  (uint32_t)e, (uint32_t)cc.target, dmgDealt, thc->hp);
 
                     // Broadcast HP update
                     auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
@@ -3875,9 +4307,26 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
             if (cc2->attackCooldown <= 0.f) {
                 cc2->attackCooldown = cc2->attackRate;
                 auto& bc = bldView.get<BuildingComponent>(bestBld);
-                bc.hp -= cc2->attackDamage;
+
+                float dmgDealt = cc2->attackDamage;
+                auto* uc = ctx.serverRegistry.try_get<UnitComponent>(info.e);
+                if (uc && uc->bugClass == BugClass::BeesWasps) {
+                    if (uc->tier == 1) { // Honigbiene: Kamikaze
+                        auto* hc = ctx.serverRegistry.try_get<HealthComponent>(info.e);
+                        if (hc) {
+                            hc->hp = 0.f;
+                            hc->dead = true;
+                        }
+                        auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(info.e);
+                        uint32_t enetId = enc ? enc->netId : 0;
+                        toKill.push_back({info.e, enetId, bc.teamId});
+                        spdlog::debug("Honigbiene: Kamikaze hit against building!");
+                    }
+                }
+
+                bc.hp -= dmgDealt;
                 spdlog::debug("Combat: unit {} hits building {} for {:.0f} dmg (hp={:.0f})",
-                              (uint32_t)info.e, (uint32_t)bestBld, cc2->attackDamage, bc.hp);
+                              (uint32_t)info.e, (uint32_t)bestBld, dmgDealt, bc.hp);
 
                 // Broadcast building HP update
                 auto* bnc = ctx.serverRegistry.try_get<NetworkedComponent>(bestBld);

@@ -159,7 +159,18 @@ struct EntityIDComponent {
 struct UnitComponent {
     uint32_t teamId   = 0;                    ///< Owning team.
     BugClass bugClass = BugClass::Ants;       ///< Unit type / faction.
+    int      tier     = 1;                    ///< Unit tier (1 to 5).
     bool     selected = false;                ///< Currently selected by Commander.
+    bool     directControl = false;           ///< Currently directly controlled by player.
+};
+
+/**
+ * @struct SlowDebuffComponent
+ * @brief Dynamic movement slow applied to units.
+ */
+struct SlowDebuffComponent {
+    float timer = 0.f;            ///< Remaining duration in seconds.
+    float speedMultiplier = 0.5f; ///< Movement speed multiplier.
 };
 
 /**

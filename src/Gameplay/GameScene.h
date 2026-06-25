@@ -163,7 +163,7 @@ private:
     // -----------------------------------------------------------------------
 
     /** @brief Spawns a unit entity on the server and broadcasts to clients. */
-    void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, float hp = 100.f);
+    void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, int tier = 1, float hp = -1.f);
 
     /** @brief Spawns a building on the server and broadcasts to clients. */
     entt::entity SpawnBuilding(SceneContext& ctx, BuildingType type, uint32_t teamId,
@@ -303,6 +303,10 @@ private:
     // --- Unit system ---
     /// Network IDs of units currently selected by this client's Commander.
     std::vector<uint32_t> m_SelectedUnits;
+    /// Direct control mode status
+    bool                  m_DirectControlActive = false;
+    /// Network ID of the unit under direct control
+    uint32_t              m_DirectControlNetId  = 0;
     /// Whether the game has ended.
     bool     m_GameOver      = false;
     uint32_t m_WinnerTeam    = 0xFFFFFFFFu; ///< Winning team once the game is over (0xFFFFFFFF = none).

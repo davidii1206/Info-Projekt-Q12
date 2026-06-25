@@ -136,6 +136,10 @@ struct PlayerInputPacket {
     float      dz   = 0.f;                       /**< Forward/backward (Z) movement input. */
     float      yaw  = 0.f;                       /**< Current camera yaw. */
     float      pitch = 0.f;                      /**< Current camera pitch. */
+    uint32_t   controlNetId = 0;                 /**< Network ID of directly controlled unit. */
+    uint8_t    attackActive = 0;                 /**< 1 if attack key (Space) is pressed. */
+    float      targetX = 0.f;                    /**< Target world position X (cursor). */
+    float      targetZ = 0.f;                    /**< Target world position Z (cursor). */
 };
 
 /**
@@ -147,6 +151,7 @@ struct UnitSpawnedPacket {
     uint32_t   netId   = 0;                        /**< Network ID of the unit. */
     uint32_t   teamId  = 0;                        /**< Owning team. */
     uint8_t    bugClass = 0;                       /**< BugClass enum value (faction/type). */
+    uint8_t    tier     = 1;                       /**< Unit tier (1 to 5). */
     float      x = 0.f;                            /**< Spawn position X. */
     float      y = 0.f;                            /**< Spawn position Y. */
     float      z = 0.f;                            /**< Spawn position Z. */
