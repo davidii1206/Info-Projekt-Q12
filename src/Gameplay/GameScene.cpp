@@ -1583,26 +1583,48 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
 
         // Commander mode: unit selection + orders (not in Building mode)
         if (m_CameraMode == CameraMode::Commander) {
-            // Left-click: select units near cursor (pick by proximity to XZ ray)
-            if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT)) {
-                glm::vec2 mpos = Input::GetMousePosition();
-                glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
-                constexpr float SELECT_RADIUS = 5.f;
+            // Click-drag circle selection (Pikmin-style).
+            bool leftDown  = Input::IsMouseButtonDown(SDL_BUTTON_LEFT);
+            bool leftUp    = Input::IsMouseButtonReleased(SDL_BUTTON_LEFT);
+            bool leftPress = Input::IsMouseButtonPressed(SDL_BUTTON_LEFT);
+            bool shiftHeld = Input::IsKeyDown(SDLK_LSHIFT) || Input::IsKeyDown(SDLK_RSHIFT);
 
-                bool shiftHeld = Input::IsKeyDown(SDLK_LSHIFT) || Input::IsKeyDown(SDLK_RSHIFT);
+            if (leftPress) {
+                glm::vec2 mpos = Input::GetMousePosition();
+                glm::vec3 wp   = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+                m_SelectStartWorld = {wp.x, wp.z};
+                m_SelectEndWorld   = {wp.x, wp.z};
+                m_SelectDragging   = true;
+
                 if (!shiftHeld)
                     m_SelectedUnits.clear();
+            }
 
+            if (m_SelectDragging && leftDown) {
+                glm::vec2 mpos = Input::GetMousePosition();
+                glm::vec3 wp   = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
+                m_SelectEndWorld = {wp.x, wp.z};
+            }
+
+            if (m_SelectDragging && leftUp) {
+                m_SelectDragging = false;
+
+                glm::vec2 center = m_SelectStartWorld;
+                float radius = glm::length(m_SelectEndWorld - center);
+                radius = std::min(radius, m_SelectMaxRadius);
+
+                // Select all friendly units within the circle.
                 auto view = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, UnitComponent>();
                 for (auto entity : view) {
                     auto& tf  = view.get<TransformComponent>(entity);
                     auto& nc  = view.get<NetworkedComponent>(entity);
                     auto& uc  = view.get<UnitComponent>(entity);
                     if (uc.teamId != m_MyPlayerId) continue;
-                    glm::vec2 d2 = glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z);
-                    if (glm::length(d2) <= SELECT_RADIUS) {
+                    glm::vec2 d2 = glm::vec2(tf.position.x - center.x, tf.position.z - center.y);
+                    bool inside = glm::length(d2) <= radius;
+
+                    if (inside) {
                         if (shiftHeld) {
-                            // Toggle the clicked unit in/out of the selection.
                             auto it = std::find(m_SelectedUnits.begin(), m_SelectedUnits.end(), nc.netId);
                             if (it != m_SelectedUnits.end()) {
                                 m_SelectedUnits.erase(it);
@@ -2063,14 +2085,60 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         ResourceHUD::Draw(ctx.serverRegistry, m_MyPlayerId);
     }
 
-    // Map overlay (available to all clients with synced data)
+    // Map overlay + auto-attack (available to all clients with synced data)
     {
         ImGui::Begin("Game");
         if (ImGui::Button(m_ShowMapOverlay ? "Karte schliessen" : "Karte [M]"))
             m_ShowMapOverlay = !m_ShowMapOverlay;
+        ImGui::SameLine();
+
+        // Toggle auto-attack on selected units.
+        auto toggleAutoAttack = [&]() {
+            for (uint32_t netId : m_SelectedUnits) {
+                // Toggle on the client-side entity (UI).
+                auto cit = m_ClientNetMap.find(netId);
+                if (cit != m_ClientNetMap.end()) {
+                    auto* cc = ctx.clientRegistry.try_get<CombatComponent>(cit->second);
+                    if (cc) {
+                        cc->autoAttack = !cc->autoAttack;
+                        if (!cc->autoAttack) {
+                            cc->commandedTarget = false;
+                            cc->target = entt::null;
+                        }
+                    }
+                }
+                // Mirror to the server-side entity so UpdateCombat sees it.
+                auto sit = m_ServerNetMap.find(netId);
+                if (sit != m_ServerNetMap.end()) {
+                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(sit->second);
+                    if (cc) {
+                        cc->autoAttack = !cc->autoAttack;
+                        if (!cc->autoAttack) {
+                            cc->commandedTarget = false;
+                            cc->target = entt::null;
+                        }
+                    }
+                }
+            }
+        };
+
+        bool anySelectedAuto = false;
+        for (uint32_t netId : m_SelectedUnits) {
+            auto it = m_ClientNetMap.find(netId);
+            if (it == m_ClientNetMap.end()) continue;
+            auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+            if (cc && cc->autoAttack) { anySelectedAuto = true; break; }
+        }
+        if (ImGui::Button(anySelectedAuto ? "Auto-Angriff: AN" : "Auto-Angriff: AUS"))
+            toggleAutoAttack();
+
+        // Keyboard shortcut: G for auto-attack toggle.
+        if (ImGui::IsKeyPressed(ImGuiKey_G) && !m_SelectedUnits.empty())
+            toggleAutoAttack();
+
         ImGui::End();
 
-        // Keyboard shortcut M
+        // Keyboard shortcuts
         if (ImGui::IsKeyPressed(ImGuiKey_M))
             m_ShowMapOverlay = !m_ShowMapOverlay;
     }
@@ -2215,6 +2283,49 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     // HP bars above units (visible in both top-down modes)
     if (m_CameraMode == CameraMode::Commander || m_CameraMode == CameraMode::Building) {
         DrawUnitHPBars(ctx);
+    }
+
+    // Selection circle visual (Pikmin-style drag)
+    if (m_SelectDragging && m_Camera) {
+        int winW, winH;
+        SDL_GetWindowSizeInPixels(ctx.renderer->GetWindow()->handle, &winW, &winH);
+        if (winW > 0 && winH > 0) {
+            float aspect = (float)winW / (float)winH;
+            glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
+
+            glm::vec2 center = m_SelectStartWorld;
+            float radius = glm::length(m_SelectEndWorld - center);
+            radius = std::min(radius, m_SelectMaxRadius);
+
+            static auto worldToScreen = [&](glm::vec3 pos, int w, int h) -> ImVec2 {
+                glm::vec4 clip = vp * glm::vec4(pos, 1.f);
+                if (clip.w <= 0.f) return {-1.f, -1.f};
+                clip /= clip.w;
+                float sx = (clip.x * 0.5f + 0.5f) * (float)w;
+                float sy = (1.f - (clip.y * 0.5f + 0.5f)) * (float)h;
+                return {sx, sy};
+            };
+
+            // Project a few points around the circle to screen space.
+            float groundY = GroundHeightAt(m_World, center.x, center.y);
+            constexpr int kSegments = 48;
+            std::vector<ImVec2> screenPts;
+            screenPts.reserve(kSegments + 1);
+            for (int i = 0; i <= kSegments; ++i) {
+                float a = (float)i / (float)kSegments * 6.283185f;
+                float wx = center.x + std::cos(a) * radius;
+                float wz = center.y + std::sin(a) * radius;
+                float wy = GroundHeightAt(m_World, wx, wz);
+                screenPts.push_back(worldToScreen({wx, wy, wz}, winW, winH));
+            }
+
+            ImDrawList* dl = ImGui::GetBackgroundDrawList();
+            // Semi-transparent fill
+            dl->AddConvexPolyFilled(screenPts.data(), kSegments + 1, IM_COL32(100, 180, 255, 40));
+            // Outline
+            dl->AddPolyline(screenPts.data(), kSegments + 1, IM_COL32(100, 180, 255, 200),
+                            ImDrawFlags_None, 2.f);
+        }
     }
 
     if (DebugUI::IsVisible()) {
@@ -2992,6 +3103,12 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
 {
     if (!ctx.network.IsHosting()) return;
 
+    // Add a tiny random offset to avoid exact clumping on spawn
+    static std::mt19937 spawnRng{std::random_device{}()};
+    std::uniform_real_distribution<float> spawnOffset(-0.25f, 0.25f);
+    pos.x += spawnOffset(spawnRng);
+    pos.z += spawnOffset(spawnRng);
+
     // Position: ground units sit on terrain, flying units hover above it.
     pos.y = GroundHeightAt(m_World, pos.x, pos.z);
     if (IsFlying(bc))
@@ -3022,6 +3139,24 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
         CombatComponent{/*range=*/6.f, /*dmg=*/dmg, /*cd=*/0.f, /*rate=*/1.5f, entt::null, false});
     ctx.serverRegistry.emplace<MovementOrderComponent>(e);
     m_ServerNetMap[netId] = e;
+
+    // Dynamic box for ground units (flying units keep direct-position movement).
+    // Dynamic bodies collide with each other AND with static geometry (buildings)
+    // via Jolt, so units automatically push each other apart.  Gravity is
+    // disabled — vertical position is overridden from the tile grid each frame.
+    // Terrain collision is handled by the tile‑based canStand() checks, not by
+    // a Jolt terrain mesh (which was removed as too expensive to build).
+    if (!IsFlying(bc) && ctx.physics) {
+        uint32_t physicsId = ctx.world->GetNextPhysicsID();
+        PhysicsBodyHandle bh = ctx.physics->AddUnitBox(
+            physicsId,
+            JPH::RVec3(pos.x, pos.y, pos.z),
+            JPH::Vec3(0.4f, 0.3f, 0.4f));
+        if (bh.IsValid()) {
+            ctx.world->RegisterPhysicsEntity(physicsId, e);
+            ctx.serverRegistry.emplace<PhysicsBodyComponent>(e, bh);
+        }
+    }
 
     UnitSpawnedPacket pkt;
     pkt.netId    = netId;
@@ -3138,6 +3273,15 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
     }
     m_ServerNetMap[netId] = e;
 
+    // Static box body so units collide with this building.
+    if (ctx.physics) {
+        PhysicsBodyHandle bh = ctx.physics->AddStaticBox(
+            JPH::RVec3(pos.x, pos.y, pos.z),
+            JPH::Vec3(1.0f, 0.5f, 1.0f));
+        if (bh.IsValid())
+            ctx.serverRegistry.emplace<PhysicsBodyComponent>(e, bh);
+    }
+
     BuildingSpawnedPacket pkt;
     pkt.netId        = netId;
     pkt.teamId       = teamId;
@@ -3195,6 +3339,12 @@ void GameScene::ApplyUpgrade(SceneContext& ctx, uint32_t teamId, UpgradePathID p
 void GameScene::HandleBuildingDeath(SceneContext& ctx, entt::entity entity, uint32_t netId)
 {
     if (!ctx.serverRegistry.valid(entity)) return;
+
+    // Remove Jolt physics body (static box) before destroying the entity.
+    if (auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(entity)) {
+        if (physComp->handle.IsValid() && ctx.physics)
+            ctx.physics->RemoveBody(physComp->handle);
+    }
 
     // Broadcast destruction
     BuildingDestroyedPacket pkt;
@@ -3345,6 +3495,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                     // In attack range — stop moving; UpdateCombat handles firing.
                     mo.active = false;
                     mv.velocity = {0.f, 0.f, 0.f};
+                    if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                        if (phys->handle.IsValid() && ctx.physics)
+                            ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                     continue;
                 }
             } else {
@@ -3356,6 +3509,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
         if (!mo.active) {
             mv.velocity = {0.f, 0.f, 0.f};
+            if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                if (phys->handle.IsValid() && ctx.physics)
+                    ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
             continue;
         }
 
@@ -3385,6 +3541,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 spdlog::debug("Pathfinding: no path for entity {}, stopping", (uint32_t)e);
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                    if (phys->handle.IsValid() && ctx.physics)
+                        ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                 continue;
             }
         }
@@ -3410,6 +3569,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             if (path.waypoints.empty()) {
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                    if (phys->handle.IsValid() && ctx.physics)
+                        ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                 continue;
             }
         }
@@ -3426,6 +3588,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 // All waypoints reached — order complete.
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                    if (phys->handle.IsValid() && ctx.physics)
+                        ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
                 if (isFlying) {
                     float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
                     tf.position.y = glm::mix(tf.position.y, targetY, 10.f * dt);
@@ -3442,6 +3607,54 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         glm::vec2 dir = distToWp > 0.001f ? toWp / distToWp : glm::vec2(0.f);
         glm::vec2 step = dir * (mv.speed * dt);
 
+        // Blend the waypoint direction with unit‑unit repulsion so
+        // units spread apart.
+        if (distToWp > 0.001f) {
+            // Collect repulsion from every nearby unit.
+            glm::vec2 rep{0.f};
+            constexpr float kRepRadius = 2.5f;
+            auto sepView = ctx.serverRegistry.view<TransformComponent, UnitComponent>();
+            for (auto other : sepView) {
+                if (other == e) continue;
+                const auto& otherUc = sepView.get<UnitComponent>(other);
+                if (IsFlying(otherUc.bugClass) != isFlying) continue;
+
+                const auto& otf = sepView.get<TransformComponent>(other);
+                glm::vec2 d(curXZ.x - otf.position.x, curXZ.y - otf.position.z);
+                float dist = glm::length(d);
+                if (dist < kRepRadius) {
+                    if (dist < 0.01f) {
+                        // Point away from other. We can use the entity ID to create a deterministic angle.
+                        // To ensure entity 'e' and 'other' push in opposite directions:
+                        float angle = ((int)other % 360) * 3.14159265f / 180.f;
+                        glm::vec2 dirFromOther(std::cos(angle), std::sin(angle));
+                        if (e > other) {
+                            d = dirFromOther;
+                        } else {
+                            d = -dirFromOther;
+                        }
+                        dist = 0.01f;
+                    }
+                    // Quadratic falloff: stronger close-up, zero at radius.
+                    float t = 1.f - dist / kRepRadius;
+                    rep += (d / dist) * (t * t);
+                }
+            }
+            float repLen = glm::length(rep);
+            if (repLen > 0.001f) {
+                // Blend weight grows with repulsion urgency (more
+                // neighbours / closer neighbours → stronger steer).
+                float repWeight = glm::clamp(repLen * 0.2f, 0.3f, 0.6f);
+                glm::vec2 blended = dir * (1.f - repWeight)
+                                  + (rep / repLen) * repWeight;
+                float blen = glm::length(blended);
+                if (blen > 0.001f) {
+                    dir = blended / blen;
+                    step = dir * (mv.speed * dt);
+                }
+            }
+        }
+
         if (isFlying) {
             // Flying units move freely — no terrain sliding, no ground snap.
             tf.position.x += step.x;
@@ -3449,6 +3662,18 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
             tf.position.y  = glm::mix(tf.position.y, targetY, 10.f * dt);
             mv.velocity    = glm::vec3(step.x, 0.f, step.y) / dt;
+            // Flying units face final destination (stable diagonal heading) smoothly.
+            glm::vec2 toDest = glm::vec2(mo.destination.x, mo.destination.z) - curXZ;
+            float distToDest = glm::length(toDest);
+            if (distToDest > 0.15f) {
+                glm::vec2 destDir = toDest / distToDest;
+                float targetYaw = glm::degrees(std::atan2(destDir.x, destDir.y));
+                float currentYaw = tf.rotation.y;
+                float diff = targetYaw - currentYaw;
+                while (diff < -180.f) diff += 360.f;
+                while (diff > 180.f) diff -= 360.f;
+                tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+            }
         } else {
             int curTx, curTz;
             m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
@@ -3461,31 +3686,53 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier, isClimber)) chosen = {0.f,    step.y};
             else                                                                           chosen = {0.f, 0.f};
 
+            auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e);
+            bool hasPhysics = (physComp && physComp->handle.IsValid() && ctx.physics);
+
             if (chosen.x == 0.f && chosen.y == 0.f) {
                 mv.velocity = {0.f, 0.f, 0.f};
+                if (hasPhysics)
+                    ctx.physics->SetLinearVelocity(physComp->handle, JPH::Vec3::sZero());
                 continue;
             }
 
-            tf.position.x += chosen.x;
-            tf.position.z += chosen.y;
-            tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
-            mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
-        }
-
-        if (isFlying) {
-            // Face the final destination so flying units don't jitter between
-            // stair-stepped waypoints (the A* pathfinder only uses 4 cardinal
-            // directions).
-            glm::vec2 toDest = glm::vec2(mo.destination.x, mo.destination.z) - curXZ;
-            float distToDest = glm::length(toDest);
-            if (distToDest > 0.001f) {
-                glm::vec2 destDir = toDest / distToDest;
-                tf.rotation.y = glm::degrees(std::atan2(destDir.x, destDir.y));
+            if (hasPhysics) {
+                JPH::Vec3 vel(chosen.x / dt, 0.f, chosen.y / dt);
+                ctx.physics->SetLinearVelocity(physComp->handle, vel);
+                JPH::RVec3 curJolt = ctx.physics->GetPosition(physComp->handle);
+                float groundY = GroundHeightAt(m_World, curJolt.GetX(), curJolt.GetZ());
+                // Only teleport the body if Y actually changes to avoid invalidating contact caches
+                if (std::abs(curJolt.GetY() - groundY) > 0.01f) {
+                    ctx.physics->SetPosition(physComp->handle,
+                        JPH::RVec3(curJolt.GetX(), groundY, curJolt.GetZ()));
+                }
+                tf.position = glm::vec3(curJolt.GetX(), groundY, curJolt.GetZ());
+                mv.velocity = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
+            } else {
+                tf.position.x += chosen.x;
+                tf.position.z += chosen.y;
+                tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+                mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
             }
-        } else if (distToWp > 0.001f) {
-            tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.y));
+
+            // Ground units face the current waypoint direction smoothly.
+            if (distToWp > 0.15f) {
+                float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                float currentYaw = tf.rotation.y;
+                float diff = targetYaw - currentYaw;
+                while (diff < -180.f) diff += 360.f;
+                while (diff > 180.f) diff -= 360.f;
+                tf.rotation.y = currentYaw + diff * glm::clamp(8.f * dt, 0.f, 1.f);
+
+                if (hasPhysics) {
+                    JPH::Quat rot = JPH::Quat::sRotation(JPH::Vec3::sAxisY(),
+                        glm::radians(tf.rotation.y));
+                    ctx.physics->SetRotation(physComp->handle, rot);
+                }
+            }
         }
     }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -3551,12 +3798,19 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 
         // Find nearest enemy if no valid target (only for auto-acquire, not commanded)
         if (!targetValid && !cc.commandedTarget) {
-            float bestDist = cc.attackRange;
+            float searchRange = cc.autoAttack
+                ? FogOfWarSystem::COMBAT_SIGHT_RADIUS
+                : cc.attackRange;
+            float bestDist = searchRange;
             for (const auto& info : unitInfos) {
                 if (info.team == uc.teamId) continue;
                 float d = glm::length(info.pos - tf.position);
                 if (d < bestDist) { bestDist = d; cc.target = info.e; targetValid = true; }
             }
+            // When auto-attack is on, treat the acquired target as commanded so the
+            // unit pursues it across the map (handled by UpdateUnitMovement).
+            if (targetValid && cc.autoAttack)
+                cc.commandedTarget = true;
         }
 
         if (!targetValid) continue;
@@ -3658,6 +3912,16 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 void GameScene::HandleUnitDeath(SceneContext& ctx, entt::entity entity, uint32_t netId)
 {
     if (!ctx.serverRegistry.valid(entity)) return;
+
+    // Remove Jolt physics body before destroying the entity.
+    if (auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(entity)) {
+        if (physComp->handle.IsValid() && ctx.physics) {
+            uint32_t physicsId = static_cast<uint32_t>(
+                ctx.physics->GetSystem().GetBodyInterface().GetUserData(physComp->handle.id));
+            ctx.world->UnregisterPhysicsEntity(physicsId);
+            ctx.physics->RemoveBody(physComp->handle);
+        }
+    }
 
     auto* tf = ctx.serverRegistry.try_get<TransformComponent>(entity);
     if (tf) {

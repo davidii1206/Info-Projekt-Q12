@@ -189,6 +189,7 @@ struct CombatComponent {
     float attackRate     = 1.5f;  ///< Seconds between attacks.
     entt::entity target  = entt::null; ///< Current attack target (server).
     bool commandedTarget = false; ///< True when target was set by an attack order (pursue).
+    bool autoAttack      = false; ///< When true, unit autonomously chases enemies within sight.
 };
 
 /**

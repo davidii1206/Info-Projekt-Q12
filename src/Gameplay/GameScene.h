@@ -255,6 +255,12 @@ private:
     /// Toggled by the "Karte" button in the Game window.
     bool m_ShowMapOverlay = false;
 
+    // --- Selection circle drag state (Pikmin-style) ---
+    bool     m_SelectDragging = false;       ///< Left mouse held during drag.
+    glm::vec2 m_SelectStartWorld{0.f, 0.f}; ///< World XZ at drag start.
+    glm::vec2 m_SelectEndWorld{0.f, 0.f};   ///< World XZ at current mouse.
+    float    m_SelectMaxRadius = 40.f;       ///< Cap the selection circle at this size.
+
     // --- Camera Modes ---
     /// @brief Active camera/control mode.
     enum class CameraMode { Commander, Building };
