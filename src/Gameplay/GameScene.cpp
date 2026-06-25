@@ -777,9 +777,6 @@ void GameScene::OnExit(SceneContext& ctx) {
     // HUD-Texturen freigeben
     HUDTextures::Unload();
 
-    // HUD-Texturen freigeben
-    HUDTextures::Unload();
-
     ctx.world->ClearPhysicsState();
     
     CancelPlacement(ctx);
@@ -794,8 +791,8 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_ShadowMap.reset();
     m_ShadowUBO.reset();
 
-    // Drop all cached pipelines so stale shader handles don't dangle.
-    ctx.renderer->GetPipelines()->Clear();
+    // Pipelines outlive their shader objects (SDL_GPU compiles shader code into
+    // the pipeline at creation time, so the shader handles can be freed safely).
 
     spdlog::info("GameScene: exited, registries cleared");
 }
