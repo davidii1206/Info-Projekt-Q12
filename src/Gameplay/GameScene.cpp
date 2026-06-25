@@ -469,8 +469,10 @@ void GameScene::OnEnter(SceneContext& ctx) {
             }
         }
 
-        // Also build the full merged mesh for physics collision
-        terrainMesh = TerrainMeshBuilder::Build(m_World);
+        // (The merged-mesh build for Jolt MeshShape collision was removed —
+        // it took 25+ seconds on a 750x750 map and the result was only used
+        // by the MeshCollisionBuilder call below, which we skip for the same
+        // reason. Units sample ground height from WorldManager directly.)
 
         spdlog::info("GameScene: built {} terrain chunks ({}x{}) total {} tiles",
                       chunkRes.chunks.size(), chunkRes.chunksPerAxis, chunkRes.chunksPerAxis,
@@ -478,23 +480,12 @@ void GameScene::OnEnter(SceneContext& ctx) {
     }
 
     if (ctx.network.IsHosting()) {
-        /**
-         * @brief Register the generated terrain mesh as static physics collision.
-         *
-         * Replaces the old flat AddStaticFloor() / test_scene_pixelation.glb
-         * placeholder with collision matching the terraced terrain mesh.
-         */
-        JPH::Shape::ShapeResult terrainShape = MeshCollisionBuilder::Build(
-            terrainMesh.vertices, terrainMesh.indices, glm::mat4(1.f));
-        if (terrainShape.IsValid()) {
-            PhysicsBodyHandle handle = ctx.physics->AddStaticMesh(
-                terrainShape.Get(), JPH::RVec3::sZero(), JPH::Quat::sIdentity());
-            if (handle.IsValid()) m_MeshCollisionBodies.push_back(handle);
-            else spdlog::error("GameScene: AddStaticMesh failed for terrain mesh");
-        } else {
-            spdlog::error("GameScene: terrain MeshShape creation failed: {}",
-                           terrainShape.GetError().c_str());
-        }
+        // NOTE: building a Jolt MeshShape over the full terrain (~3M vertices on
+        // a 750x750 map) takes 25+ seconds and can OOM. Skip it for now; ground
+        // height for units is sampled directly from the WorldManager via
+        // GroundHeightAt(), so we don't lose movement correctness.
+        spdlog::info("GameScene: skipping terrain MeshShape build (too expensive on chunked terrain)");
+        (void)terrainMesh;
 
         // Initialize resource system
         m_ResourceManager.Init();
@@ -824,6 +815,18 @@ struct alignas(16) FragPC {
 };
 static_assert(sizeof(FragPC) == 64, "FragPC must be 64 bytes for std140 layout");
 
+void GameScene::EnsureFogTexture(const SceneContext& ctx) {
+    if (m_FogTexture || !ctx.renderer) return;
+    // 1x1 fully-revealed placeholder so the model.frag sampler at binding 2
+    // is never bound to a null descriptor. Without this the client crashes
+    // hard on first frame (Windows TDR / no Vulkan validation output) because
+    // the fog code only runs after a FogSnapshotPacket arrives — but the
+    // shader pipeline references this slot from the very first draw call.
+    uint8_t white[4] = {255, 255, 255, 255};
+    m_FogTexture = std::make_shared<Texture>(ctx.renderer->GetDevice(), white,
+                                              1, 1, TextureFilter::Nearest);
+}
+
 void GameScene::UpdateFogTexture(const SceneContext& ctx, const FogGrid& fog) {
     if (!ctx.renderer) return;
     int w = fog.cellsX;
@@ -848,6 +851,11 @@ void GameScene::UpdateFogTexture(const SceneContext& ctx, const FogGrid& fog) {
 
 void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     if (!m_Camera) return;
+    // Always make sure the fog-of-war texture slot is bound. On the client
+    // it would otherwise stay null until the first FogSnapshotPacket arrives,
+    // and SDL_GPU on Vulkan hard-crashes (TDR) on a draw with an unbound
+    // sampled texture descriptor.
+    EnsureFogTexture(ctx);
     // ------------------------------------------------------------------
     // 1. Lazy-init graphics pipelines
     // ------------------------------------------------------------------

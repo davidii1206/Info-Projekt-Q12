@@ -418,4 +418,5 @@ private:
     bool m_FogTextureDirty = true;
 
     void UpdateFogTexture(const SceneContext& ctx, const FogGrid& fog);
+    void EnsureFogTexture(const SceneContext& ctx);
 };
