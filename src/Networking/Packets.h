@@ -266,10 +266,12 @@ struct ResourceDepletedPacket {
 
 /**
  * @struct CommanderOrderPacket
- * @brief Client → Server: move selected units to a position.
+ * @brief Client → Server: move or attack order for selected units.
  *
- * Includes the list of selected unit netIds so the server knows
- * exactly which units were selected (selection state is not synced).
+ * For move orders (orderType == 0), x/y/z is the destination and
+ * targetNetId is unused.  For attack orders (orderType == 1 for unit,
+ * 2 for building), targetNetId identifies the enemy entity and x/y/z
+ * is the target's current position (used as initial destination).
  */
 struct CommanderOrderPacket {
     PacketType type          = PacketType::COMMANDER_ORDER; /**< Packet type identifier. */
@@ -279,6 +281,8 @@ struct CommanderOrderPacket {
     float      z = 0.f;                                     ///< World destination Z.
     uint32_t   selectedCount = 0;                           ///< How many units are selected (max 32).
     uint32_t   selectedNetIds[32]{};                        ///< NetIds of selected units.
+    uint8_t    orderType     = 0;                           ///< 0=Move, 1=AttackUnit, 2=AttackBuilding.
+    uint32_t   targetNetId   = 0;                           ///< Network ID of attack target (0 for move orders).
 };
 
 /**

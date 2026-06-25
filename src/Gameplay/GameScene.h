@@ -301,6 +301,13 @@ private:
     bool     m_GameOver      = false;
     uint32_t m_WinnerTeam    = 0xFFFFFFFFu; ///< Winning team once the game is over (0xFFFFFFFF = none).
 
+    /// Teams that have ever had a Main building (used to detect elimination).
+    std::unordered_set<uint32_t> m_TeamsWithMainBuildings;
+
+    /// Timer counting up after game over; triggers auto-return to lobby.
+    float m_GameOverTimer = 0.f;
+    static constexpr float GAME_OVER_DELAY = 8.f; ///< Seconds before auto-return to lobby.
+
     // --- Server state ---
     /// ID for the next networked entity.
     uint32_t m_NextNetId    = 1;

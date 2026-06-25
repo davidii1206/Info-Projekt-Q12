@@ -188,6 +188,7 @@ struct CombatComponent {
     float attackCooldown = 0.f;   ///< Remaining seconds until next attack.
     float attackRate     = 1.5f;  ///< Seconds between attacks.
     entt::entity target  = entt::null; ///< Current attack target (server).
+    bool commandedTarget = false; ///< True when target was set by an attack order (pursue).
 };
 
 /**

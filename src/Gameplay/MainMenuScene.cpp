@@ -100,7 +100,6 @@ void MainMenuScene::UIUpdate(SceneContext& ctx, float /*dt*/) {
         quitEvent.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&quitEvent);
     }
-    ImGui::TextDisabled("F12 = Entwicklerwerkzeuge");
     ImGui::End();
 
     // Terrain Generation Debug Window — only visible when dev panels are on.

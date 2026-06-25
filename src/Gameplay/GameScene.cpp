@@ -1622,7 +1622,7 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 spdlog::info("Commander: selected {} unit(s)", m_SelectedUnits.size());
             }
 
-            // Right-click: issue move order to selected units
+            // Right-click: issue move or attack order to selected units
             if (Input::IsMouseButtonPressed(SDL_BUTTON_RIGHT) && !m_SelectedUnits.empty()) {
                 glm::vec2 mpos     = Input::GetMousePosition();
                 glm::vec3 worldPos = ScreenToWorldXZ(mpos.x, mpos.y, winW, winH);
@@ -1633,9 +1633,52 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 pkt.selectedCount = std::min(static_cast<uint32_t>(m_SelectedUnits.size()), 32u);
                 for (uint32_t i = 0; i < pkt.selectedCount; ++i)
                     pkt.selectedNetIds[i] = m_SelectedUnits[i];
+
+                // CTRL+RMB: attack order — pick nearest enemy unit or building
+                bool ctrlHeld = Input::IsKeyDown(SDLK_LCTRL) || Input::IsKeyDown(SDLK_RCTRL);
+                if (ctrlHeld) {
+                    constexpr float PICK_RADIUS = 3.f;
+                    float bestDist = PICK_RADIUS;
+                    uint32_t targetNetId = 0;
+                    uint8_t targetType = 0; // 1=unit, 2=building
+
+                    // Check enemy units
+                    auto unitView = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, UnitComponent>();
+                    for (auto e : unitView) {
+                        auto& tf = unitView.get<TransformComponent>(e);
+                        auto& nc = unitView.get<NetworkedComponent>(e);
+                        auto& uc = unitView.get<UnitComponent>(e);
+                        if (uc.teamId == m_MyPlayerId) continue;
+                        float d = glm::length(glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z));
+                        if (d < bestDist) {
+                            bestDist = d; targetNetId = nc.netId; targetType = 1;
+                            pkt.x = tf.position.x; pkt.z = tf.position.z;
+                        }
+                    }
+
+                    // Check enemy buildings (lower priority than units)
+                    auto bldView = ctx.clientRegistry.view<TransformComponent, NetworkedComponent, BuildingComponent>();
+                    for (auto e : bldView) {
+                        auto& tf = bldView.get<TransformComponent>(e);
+                        auto& nc = bldView.get<NetworkedComponent>(e);
+                        auto& bc = bldView.get<BuildingComponent>(e);
+                        if (bc.teamId == m_MyPlayerId || bc.destroyed) continue;
+                        float d = glm::length(glm::vec2(tf.position.x - worldPos.x, tf.position.z - worldPos.z));
+                        if (d < bestDist) {
+                            bestDist = d; targetNetId = nc.netId; targetType = 2;
+                            pkt.x = tf.position.x; pkt.z = tf.position.z;
+                        }
+                    }
+
+                    if (targetNetId != 0) {
+                        pkt.targetNetId = targetNetId;
+                        pkt.orderType   = targetType;
+                    }
+                }
+
                 ctx.network.Send(pkt);
-                spdlog::info("Commander: move order to ({:.1f},{:.1f},{:.1f}) for {} units",
-                             worldPos.x, worldPos.y, worldPos.z, pkt.selectedCount);
+                spdlog::info("Commander: orderType={} to ({:.1f},{:.1f},{:.1f}) for {} units (targetNetId={})",
+                             pkt.orderType, pkt.x, pkt.y, pkt.z, pkt.selectedCount, pkt.targetNetId);
             }
         }
     }
@@ -1700,6 +1743,8 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     // Game-over overlay
     // ------------------------------------------------------------------
     if (m_GameOver) {
+        m_GameOverTimer += dt;
+
         ImGuiIO& io = ImGui::GetIO();
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                                 ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -1711,6 +1756,10 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             ImGui::Text("Unentschieden!");
         else
             ImGui::TextColored(ImVec4(1.f, 0.f, 0.f, 1.f), "NIEDERLAGE! Team %u gewinnt.", m_WinnerTeam);
+
+        float remaining = std::max(0.f, GAME_OVER_DELAY - m_GameOverTimer);
+        ImGui::TextDisabled("Return to lobby in %.0f seconds...", remaining);
+
         if (ctx.network.IsHosting()) {
             if (ImGui::Button("Play Again (Lobby)")) {
                 ctx.network.BroadcastToAll(ReturnToLobbyPacket{});
@@ -1721,7 +1770,14 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                 ctx.network.Disconnect();
                 ctx.scenes.RequestTransition(new MainMenuScene());
             }
+
+            // Auto-return after delay
+            if (m_GameOverTimer >= GAME_OVER_DELAY) {
+                ctx.network.BroadcastToAll(ReturnToLobbyPacket{});
+                ctx.scenes.RequestTransition(new LobbyScene());
+            }
         } else {
+            // Clients also auto-transition when host sends ReturnToLobbyPacket
             ImGui::TextDisabled("Waiting for host...");
         }
         ImGui::End();
@@ -1764,6 +1820,21 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                             ctx.network.IsHosting() ? "Host" : "Client",
                             m_MyPlayerId, m_MyNetId);
         if (!m_IdAssigned) ImGui::TextDisabled("Waiting for server assignment...");
+
+        if (ctx.network.IsHosting()) {
+            ImGui::Separator();
+            if (ImGui::Button("Eradicate all enemy Main buildings")) {
+                auto bView = ctx.serverRegistry.view<BuildingComponent, NetworkedComponent>();
+                for (auto be : bView) {
+                    auto& bc = bView.get<BuildingComponent>(be);
+                    auto& nc = bView.get<NetworkedComponent>(be);
+                    if (bc.type == BuildingType::Main && !bc.destroyed && bc.teamId != m_MyPlayerId) {
+                        bc.destroyed = true;
+                        HandleBuildingDeath(ctx, be, nc.netId);
+                    }
+                }
+            }
+        }
     }
 
     if (m_CameraMode == CameraMode::Commander) {
@@ -2058,23 +2129,75 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
         PollConnectionEvents(ctx);
         PollClientPackets(ctx);
 
-        // Process commander movement orders from clients
+        // Process commander movement / attack orders from clients
         while (true) {
             auto result = ctx.network.ReceiveFromClient<CommanderOrderPacket>(PacketType::COMMANDER_ORDER);
             if (!result) break;
             auto [pkt, senderPeer] = *result;
             glm::vec3 dest{pkt.x, pkt.y, pkt.z};
-            spdlog::info("Commander order playerId={}: ({:.1f},{:.1f},{:.1f}) {} units",
-                         pkt.playerId, dest.x, dest.y, dest.z, pkt.selectedCount);
-            // Apply order to the specific units identified by netId in the packet
             uint32_t count = std::min(pkt.selectedCount, 32u);
-            for (uint32_t i = 0; i < count; ++i) {
-                auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
-                if (it == m_ServerNetMap.end()) continue;
-                auto* mo = ctx.serverRegistry.try_get<MovementOrderComponent>(it->second);
-                if (mo) {
-                    mo->destination = dest;
-                    mo->active      = true;
+
+            if (pkt.orderType != 0) {
+                // Attack order
+                entt::entity targetEntity = entt::null;
+                {
+                    auto it = m_ServerNetMap.find(pkt.targetNetId);
+                    if (it != m_ServerNetMap.end())
+                        targetEntity = it->second;
+                }
+
+                if (targetEntity != entt::null && ctx.serverRegistry.valid(targetEntity)) {
+                    auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(targetEntity);
+                    if (ttf) dest = ttf->position;
+                }
+
+                spdlog::info("Attack order playerId={}: targetNetId={} ({:.0f},{:.0f},{:.0f}) {} units",
+                             pkt.playerId, pkt.targetNetId, dest.x, dest.y, dest.z, count);
+
+                for (uint32_t i = 0; i < count; ++i) {
+                    auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
+                    if (it == m_ServerNetMap.end()) continue;
+                    entt::entity unit = it->second;
+
+                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
+                    if (cc) {
+                        cc->target          = targetEntity;
+                        cc->commandedTarget = true;
+                    }
+
+                    auto* mo = ctx.serverRegistry.try_get<MovementOrderComponent>(unit);
+                    if (mo) {
+                        mo->destination = dest;
+                        mo->active      = true;
+                    }
+
+                    auto* path = ctx.serverRegistry.try_get<PathComponent>(unit);
+                    if (path) path->dirty = true;
+                }
+            } else {
+                // Move order — also clears any commanded attack target
+                spdlog::info("Commander order playerId={}: ({:.1f},{:.1f},{:.1f}) {} units",
+                             pkt.playerId, dest.x, dest.y, dest.z, count);
+
+                for (uint32_t i = 0; i < count; ++i) {
+                    auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
+                    if (it == m_ServerNetMap.end()) continue;
+                    entt::entity unit = it->second;
+
+                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
+                    if (cc) {
+                        cc->target          = entt::null;
+                        cc->commandedTarget = false;
+                    }
+
+                    auto* mo = ctx.serverRegistry.try_get<MovementOrderComponent>(unit);
+                    if (mo) {
+                        mo->destination = dest;
+                        mo->active      = true;
+                    }
+
+                    auto* path = ctx.serverRegistry.try_get<PathComponent>(unit);
+                    if (path) path->dirty = true;
                 }
             }
         }
@@ -2533,8 +2656,9 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
     {
         auto pkt = ctx.network.ReceiveFromServer<GameOverPacket>(PacketType::GAME_OVER);
         if (pkt && !m_GameOver) {
-            m_GameOver    = true;
-            m_WinnerTeam  = pkt->winnerTeam;
+            m_GameOver      = true;
+            m_GameOverTimer = 0.f;
+            m_WinnerTeam    = pkt->winnerTeam;
             spdlog::info("GameScene: GAME OVER – winner team {}", m_WinnerTeam);
         }
     }
@@ -2749,7 +2873,7 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, flo
     ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false});
     ctx.serverRegistry.emplace<HealthComponent>(e, HealthComponent{hp});
     ctx.serverRegistry.emplace<CombatComponent>(e,
-        CombatComponent{/*range=*/6.f, /*dmg=*/dmg, /*cd=*/0.f, /*rate=*/1.5f, entt::null});
+        CombatComponent{/*range=*/6.f, /*dmg=*/dmg, /*cd=*/0.f, /*rate=*/1.5f, entt::null, false});
     ctx.serverRegistry.emplace<MovementOrderComponent>(e);
     m_ServerNetMap[netId] = e;
 
@@ -2830,6 +2954,9 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
     }
 
     const uint32_t netId = m_NextNetId++;
+    if (type == BuildingType::Main)
+        m_TeamsWithMainBuildings.insert(teamId);
+
     auto e = ctx.serverRegistry.create();
     ctx.serverRegistry.emplace<TransformComponent>(e, pos);
     ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
@@ -3048,6 +3175,36 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         auto& mv = view.get<MovementComponent>(e);
         auto& mo = view.get<MovementOrderComponent>(e);
 
+        // Combat target pursuit: if this unit has a commanded attack target
+        // that is out of range, keep moving toward it each tick.
+        auto* cc = ctx.serverRegistry.try_get<CombatComponent>(e);
+        if (cc && cc->commandedTarget && cc->target != entt::null &&
+            ctx.serverRegistry.valid(cc->target)) {
+            auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
+            if (ttf) {
+                float distToTarget = glm::length(ttf->position - tf.position);
+                if (distToTarget > cc->attackRange + 0.5f) {
+                    // Out of range: chase.
+                    mo.active = true;
+                    if (glm::length(mo.destination - ttf->position) > 0.5f) {
+                        mo.destination = ttf->position;
+                        // Mark path dirty so it recomputes next tick.
+                        auto& path = ctx.serverRegistry.get_or_emplace<PathComponent>(e);
+                        path.dirty = true;
+                    }
+                } else {
+                    // In attack range — stop moving; UpdateCombat handles firing.
+                    mo.active = false;
+                    mv.velocity = {0.f, 0.f, 0.f};
+                    continue;
+                }
+            } else {
+                // Target lost its transform — invalidate.
+                cc->target = entt::null;
+                cc->commandedTarget = false;
+            }
+        }
+
         if (!mo.active) {
             mv.velocity = {0.f, 0.f, 0.f};
             continue;
@@ -3210,11 +3367,15 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
                            ctx.serverRegistry.valid(cc.target);
         if (targetValid) {
             auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
-            if (!thc || thc->dead) { targetValid = false; cc.target = entt::null; }
+            if (!thc || thc->dead) {
+                targetValid = false;
+                cc.target = entt::null;
+                cc.commandedTarget = false;
+            }
         }
 
-        // Find nearest enemy if no valid target
-        if (!targetValid) {
+        // Find nearest enemy if no valid target (only for auto-acquire, not commanded)
+        if (!targetValid && !cc.commandedTarget) {
             float bestDist = cc.attackRange;
             for (const auto& info : unitInfos) {
                 if (info.team == uc.teamId) continue;
@@ -3227,7 +3388,7 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
 
         // Check range
         auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
-        if (!ttf) { cc.target = entt::null; continue; }
+        if (!ttf) { cc.target = entt::null; cc.commandedTarget = false; continue; }
         float dist = glm::length(ttf->position - tf.position);
 
         if (dist <= cc.attackRange) {
@@ -3368,29 +3529,64 @@ void GameScene::CheckWinCondition(SceneContext& ctx)
     }
 
     // Fallback: legacy BaseHealthComponent
-    if (surviving.empty()) {
+    if (m_TeamsWithMainBuildings.empty()) {
         auto view = ctx.serverRegistry.view<BaseHealthComponent>();
         for (auto e : view) {
             const auto& bhc = view.get<BaseHealthComponent>(e);
             if (!bhc.destroyed) surviving[bhc.teamId]++;
         }
+        if (surviving.empty()) return;
+
+        std::vector<uint32_t> eliminated;
+        for (const auto& [team, cnt] : surviving)
+            if (cnt == 0) eliminated.push_back(team);
+        if (eliminated.empty()) return;
+
+        uint32_t winner = 0xFFFFFFFFu;
+        for (const auto& [team, cnt] : surviving)
+            if (cnt > 0) { winner = team; break; }
+
+        m_GameOver   = true;
+        m_GameOverTimer = 0.f;
+        m_WinnerTeam = winner;
+
+        GameOverPacket gopkt;
+        gopkt.winnerTeam = winner;
+        ctx.network.BroadcastToAll(gopkt);
+        spdlog::info("GameScene: WIN CONDITION – team {} wins", winner);
+        return;
     }
 
-    if (surviving.empty()) return;
-
-    // Find teams whose Main buildings are all gone
+    // Normal path: teams tracked by m_TeamsWithMainBuildings
+    // Find eliminated teams (those in the set but with no surviving Main)
     std::vector<uint32_t> eliminated;
-    for (const auto& [team, cnt] : surviving)
-        if (cnt == 0) eliminated.push_back(team);
+    for (uint32_t team : m_TeamsWithMainBuildings) {
+        if (surviving[team] == 0)
+            eliminated.push_back(team);
+    }
 
     if (eliminated.empty()) return;
 
-    // Determine winner (the non-eliminated team)
+    // Survivors (teams that still have at least one Main building)
+    std::vector<uint32_t> survivors;
+    for (uint32_t team : m_TeamsWithMainBuildings) {
+        if (surviving[team] > 0)
+            survivors.push_back(team);
+    }
+
+    // Game ends when only one team remains with Main buildings
     uint32_t winner = 0xFFFFFFFFu;
-    for (const auto& [team, cnt] : surviving)
-        if (cnt > 0) { winner = team; break; }
+    if (survivors.size() == 1) {
+        winner = survivors[0];
+    } else if (survivors.empty() && eliminated.size() >= 2) {
+        // All teams eliminated simultaneously (mutual destruction)
+        winner = 0xFFFFFFFFu; // draw
+    } else {
+        return; // More than one survivor — game continues
+    }
 
     m_GameOver   = true;
+    m_GameOverTimer = 0.f;
     m_WinnerTeam = winner;
 
     GameOverPacket gopkt;
@@ -3464,6 +3660,14 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
     float aspect = (float)winW / (float)winH;
     glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
 
+    // Fog check: hide HP bars for entities not revealed to the local player
+    const FogGrid* fog = nullptr;
+    {
+        auto fit = m_TeamFogs.find(m_MyPlayerId);
+        if (fit != m_TeamFogs.end() && fit->second.IsInitialised())
+            fog = &fit->second;
+    }
+
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     constexpr float BAR_W = 40.f, BAR_H = 5.f;
 
@@ -3475,6 +3679,8 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
             const auto& hc  = view.get<HealthComponent>(e);
             const auto& uc  = view.get<UnitComponent>(e);
             const auto& nc  = view.get<NetworkedComponent>(e);
+
+            if (fog && !fog->IsWorldPosRevealed(tf.position)) continue;
 
             glm::vec4 clip = vp * glm::vec4(tf.position + glm::vec3(0, 2.5f, 0), 1.f);
             if (clip.w <= 0.f) continue;
@@ -3511,6 +3717,8 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
             const auto& bc  = view.get<BuildingComponent>(e);
             const auto& nc  = view.get<NetworkedComponent>(e);
             if (bc.destroyed) continue;
+
+            if (fog && !fog->IsWorldPosRevealed(tf.position)) continue;
 
             constexpr float BLD_BAR_W = 50.f, BLD_BAR_H = 6.f;
             glm::vec4 clip = vp * glm::vec4(tf.position + glm::vec3(0, 3.5f, 0), 1.f);
