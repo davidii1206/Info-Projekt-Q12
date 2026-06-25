@@ -123,6 +123,11 @@ struct EntitySnapshotPacket {
     float      vx = 0.f;                             /**< Velocity X. */
     float      vy = 0.f;                             /**< Velocity Y. */
     float      vz = 0.f;                             /**< Velocity Z. */
+    uint32_t   targetNetId = 0;                      /**< Network ID of the combat target. */
+    float      attackCooldown = 0.f;                 /**< Cooldown timer remaining. */
+    float      attackRate     = 1.f;                 /**< Attack rate (total duration). */
+    uint8_t    autoAttack  = 0;                      /**< 1 if autoAttack is enabled. */
+    uint8_t    padding[3]{};                         /**< Alignment padding. */
 };
 
 /**
@@ -286,7 +291,7 @@ struct CommanderOrderPacket {
     float      z = 0.f;                                     ///< World destination Z.
     uint32_t   selectedCount = 0;                           ///< How many units are selected (max 32).
     uint32_t   selectedNetIds[32]{};                        ///< NetIds of selected units.
-    uint8_t    orderType     = 0;                           ///< 0=Move, 1=AttackUnit, 2=AttackBuilding.
+    uint8_t    orderType     = 0;                           ///< 0=Move, 1=AttackUnit, 2=AttackBuilding, 3=ToggleAutoAttack.
     uint32_t   targetNetId   = 0;                           ///< Network ID of attack target (0 for move orders).
 };
 

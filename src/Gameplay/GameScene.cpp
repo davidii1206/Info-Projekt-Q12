@@ -1399,6 +1399,28 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
 // ---------------------------------------------------------------------------
 
 void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
+    // Tick client-side combat cooldowns for visuals
+    {
+        auto view = ctx.clientRegistry.view<CombatComponent>();
+        for (auto e : view) {
+            auto& cc = view.get<CombatComponent>(e);
+            if (cc.attackCooldown > 0.f) {
+                cc.attackCooldown -= dt;
+                if (cc.attackCooldown < 0.f) cc.attackCooldown = 0.f;
+            }
+        }
+    }
+
+    // Tick visual explosions
+    for (auto it = m_VisualExplosions.begin(); it != m_VisualExplosions.end(); ) {
+        it->timer += dt;
+        if (it->timer >= it->maxDuration) {
+            it = m_VisualExplosions.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // F12 toggles all developer ImGui panels at once.
     if (Input::IsKeyPressed(SDLK_F12)) DebugUI::Toggle();
 
@@ -1970,8 +1992,41 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
 
     if (m_CameraMode == CameraMode::Commander) {
         ImGui::Separator();
-        ImGui::Text("Ausgewaehlte Einheiten: %zu", m_SelectedUnits.size());
-        ImGui::TextDisabled("LKlick: Einheit waehlen  RKlick: Bewegungsbefehl");
+        if (m_DirectControlActive && m_DirectControlNetId != 0) {
+            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.f), "DIREKTE STEUERUNG AKTIV");
+            ImGui::Text("Einheit NetID: %u", m_DirectControlNetId);
+            auto it = m_ClientNetMap.find(m_DirectControlNetId);
+            if (it != m_ClientNetMap.end()) {
+                auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+                if (cc) {
+                    if (cc->attackCooldown > 0.f) {
+                        ImGui::Text("Angriffs-Cooldown: %.1fs / %.1fs", cc->attackCooldown, cc->attackRate);
+                        ImGui::ProgressBar(1.f - (cc->attackCooldown / cc->attackRate), ImVec2(-1, 0), "Nachladen...");
+                    } else {
+                        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.f), "BEREIT ZUM ANGRIFF! [LEERTASTE]");
+                    }
+                }
+            }
+            ImGui::TextDisabled("C-Taste: Steuerung beenden");
+        } else {
+            ImGui::Text("Ausgewaehlte Einheiten: %zu", m_SelectedUnits.size());
+            if (!m_SelectedUnits.empty()) {
+                int autoAttackCount = 0;
+                for (uint32_t netId : m_SelectedUnits) {
+                    auto it = m_ClientNetMap.find(netId);
+                    if (it != m_ClientNetMap.end()) {
+                        auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+                        if (cc && cc->autoAttack) {
+                            autoAttackCount++;
+                        }
+                    }
+                }
+                ImGui::Text("Auto-Angriff: %d von %zu aktiv", autoAttackCount, m_SelectedUnits.size());
+                ImGui::TextDisabled("G-Taste: Auto-Angriff umschalten");
+                ImGui::TextDisabled("C-Taste: Erste Einheit direkt steuern");
+            }
+        }
+        ImGui::TextDisabled("LKlick: Einheit waehlen | RKlick: Befehl");
     }
 
     if (m_CameraMode == CameraMode::Building) {
@@ -2175,8 +2230,8 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
 
         // Toggle auto-attack on selected units.
         auto toggleAutoAttack = [&]() {
+            // Toggle client-side immediately for responsiveness
             for (uint32_t netId : m_SelectedUnits) {
-                // Toggle on the client-side entity (UI).
                 auto cit = m_ClientNetMap.find(netId);
                 if (cit != m_ClientNetMap.end()) {
                     auto* cc = ctx.clientRegistry.try_get<CombatComponent>(cit->second);
@@ -2188,19 +2243,15 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                         }
                     }
                 }
-                // Mirror to the server-side entity so UpdateCombat sees it.
-                auto sit = m_ServerNetMap.find(netId);
-                if (sit != m_ServerNetMap.end()) {
-                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(sit->second);
-                    if (cc) {
-                        cc->autoAttack = !cc->autoAttack;
-                        if (!cc->autoAttack) {
-                            cc->commandedTarget = false;
-                            cc->target = entt::null;
-                        }
-                    }
-                }
             }
+            // Send to server
+            CommanderOrderPacket pkt;
+            pkt.playerId = m_MyPlayerId;
+            pkt.orderType = 3; // ToggleAutoAttack
+            pkt.selectedCount = std::min(static_cast<uint32_t>(m_SelectedUnits.size()), 32u);
+            for (uint32_t i = 0; i < pkt.selectedCount; ++i)
+                pkt.selectedNetIds[i] = m_SelectedUnits[i];
+            ctx.network.Send(pkt);
         };
 
         bool anySelectedAuto = false;
@@ -2214,13 +2265,13 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             toggleAutoAttack();
 
         // Keyboard shortcut: G for auto-attack toggle.
-        if (ImGui::IsKeyPressed(ImGuiKey_G) && !m_SelectedUnits.empty())
+        if ((ImGui::IsKeyPressed(ImGuiKey_G) || Input::IsKeyPressed(SDLK_G)) && !m_SelectedUnits.empty())
             toggleAutoAttack();
 
         ImGui::End();
 
         // Keyboard shortcuts
-        if (ImGui::IsKeyPressed(ImGuiKey_M))
+        if (ImGui::IsKeyPressed(ImGuiKey_M) || Input::IsKeyPressed(SDLK_M))
             m_ShowMapOverlay = !m_ShowMapOverlay;
     }
 
@@ -2473,7 +2524,22 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
             glm::vec3 dest{pkt.x, pkt.y, pkt.z};
             uint32_t count = std::min(pkt.selectedCount, 32u);
 
-            if (pkt.orderType != 0) {
+            if (pkt.orderType == 3) {
+                // Toggle auto-attack order
+                for (uint32_t i = 0; i < count; ++i) {
+                    auto it = m_ServerNetMap.find(pkt.selectedNetIds[i]);
+                    if (it == m_ServerNetMap.end()) continue;
+                    entt::entity unit = it->second;
+                    auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unit);
+                    if (cc) {
+                        cc->autoAttack = !cc->autoAttack;
+                        if (!cc->autoAttack) {
+                            cc->commandedTarget = false;
+                            cc->target = entt::null;
+                        }
+                    }
+                }
+            } else if (pkt.orderType != 0) {
                 // Attack order
                 entt::entity targetEntity = entt::null;
                 {
@@ -2838,10 +2904,9 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
                     auto* cc = ctx.serverRegistry.try_get<CombatComponent>(unitEntity);
                     if (cc) {
                         if (packet.attackActive) {
-                            // Look for nearest enemy (unit or building) to the target cursor coordinates
-                            float bestDist = 999999.f;
+                            // Look for nearest enemy (unit or building) to the target cursor coordinates in 2D (XZ)
+                            float bestDist = 5.f; // Pick radius: only target if within 5 units of the cursor
                             entt::entity bestTarget = entt::null;
-                            glm::vec3 cursorTargetPos(packet.targetX, 0.f, packet.targetZ);
 
                             // 1. Check enemy units
                             auto uView = ctx.serverRegistry.view<TransformComponent, UnitComponent, HealthComponent>();
@@ -2852,7 +2917,7 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
                                 if (targetHc.dead) continue;
                                 auto& targetTf = uView.get<TransformComponent>(ue);
                                 
-                                float d = glm::length(targetTf.position - cursorTargetPos);
+                                float d = glm::length(glm::vec2(targetTf.position.x - packet.targetX, targetTf.position.z - packet.targetZ));
                                 if (d < bestDist) {
                                     bestDist = d;
                                     bestTarget = ue;
@@ -2866,21 +2931,21 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
                                 if (targetBc.teamId == uc->teamId || targetBc.destroyed) continue;
                                 auto& targetTf = bView.get<TransformComponent>(be);
 
-                                float d = glm::length(targetTf.position - cursorTargetPos);
+                                float d = glm::length(glm::vec2(targetTf.position.x - packet.targetX, targetTf.position.z - packet.targetZ));
                                 if (d < bestDist) {
                                     bestDist = d;
                                     bestTarget = be;
                                 }
                             }
 
-                            // Set target
+                            // Set target if found, otherwise clear target if clicked on empty ground
                             if (bestTarget != entt::null) {
                                 cc->target = bestTarget;
                                 cc->commandedTarget = true;
+                            } else {
+                                cc->target = entt::null;
+                                cc->commandedTarget = false;
                             }
-                        } else {
-                            cc->target = entt::null;
-                            cc->commandedTarget = false;
                         }
                     }
                 }
@@ -2912,6 +2977,23 @@ void GameScene::SendSnapshots(SceneContext& ctx) {
             pkt.vx = m->velocity.x; pkt.vy = m->velocity.y; pkt.vz = m->velocity.z;
         } else {
             pkt.vx = pkt.vy = pkt.vz = 0.f;
+        }
+        auto* cc = ctx.serverRegistry.try_get<CombatComponent>(entity);
+        if (cc) {
+            pkt.autoAttack     = cc->autoAttack ? 1 : 0;
+            pkt.attackCooldown = cc->attackCooldown;
+            pkt.attackRate     = cc->attackRate;
+            if (cc->target != entt::null && ctx.serverRegistry.valid(cc->target)) {
+                auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc->target);
+                pkt.targetNetId = tnc ? tnc->netId : 0;
+            } else {
+                pkt.targetNetId = 0;
+            }
+        } else {
+            pkt.autoAttack     = 0;
+            pkt.attackCooldown = 0.f;
+            pkt.attackRate     = 1.f;
+            pkt.targetNetId    = 0;
         }
         ctx.network.BroadcastToAll(pkt);
     }
@@ -2971,6 +3053,22 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
             t->scale = glm::vec3{pkt->sx, pkt->sy, pkt->sz};
         }
         if (m) m->velocity = {pkt->vx, pkt->vy, pkt->vz};
+
+        auto* cc = ctx.clientRegistry.try_get<CombatComponent>(it->second);
+        if (!cc) {
+            cc = &ctx.clientRegistry.emplace<CombatComponent>(it->second);
+        }
+        if (cc) {
+            cc->autoAttack = (pkt->autoAttack != 0);
+            cc->attackCooldown = pkt->attackCooldown;
+            cc->attackRate     = pkt->attackRate;
+            if (pkt->targetNetId != 0) {
+                auto targetIt = m_ClientNetMap.find(pkt->targetNetId);
+                cc->target = (targetIt != m_ClientNetMap.end()) ? targetIt->second : entt::null;
+            } else {
+                cc->target = entt::null;
+            }
+        }
     }
 
     while (true) {
@@ -3020,6 +3118,7 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         ctx.clientRegistry.emplace<HealthComponent>(entity,
             HealthComponent{pkt->maxHp});
         ctx.clientRegistry.emplace<MovementOrderComponent>(entity);
+        ctx.clientRegistry.emplace<CombatComponent>(entity);
         m_ClientNetMap[pkt->netId] = entity;
     }
 
@@ -3029,7 +3128,20 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         if (!pkt) break;
         auto it = m_ClientNetMap.find(pkt->netId);
         if (it == m_ClientNetMap.end()) continue;
-        ctx.clientRegistry.destroy(it->second);
+
+        auto entity = it->second;
+        auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
+        auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
+        if (uc && tf && uc->bugClass == BugClass::BeesWasps && uc->tier == 1) {
+            VisualExplosion expl;
+            expl.position = tf->position;
+            expl.timer = 0.f;
+            expl.maxDuration = 0.5f;
+            expl.maxRadius = 2.5f;
+            m_VisualExplosions.push_back(expl);
+        }
+
+        ctx.clientRegistry.destroy(entity);
         m_ClientNetMap.erase(it);
         // Remove from selection if present
         m_SelectedUnits.erase(std::remove(m_SelectedUnits.begin(), m_SelectedUnits.end(), pkt->netId),
@@ -3365,7 +3477,7 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
             unitScale = 0.7f;
         } else if (tier == 4) { // Gelbwest-Wespe
             if (hp < 0.f) hp = 80.f;
-            dmg = 10.f;
+            dmg = 25.f;
             speed = 7.5f;
             attackRange = 6.0f; // Ranged
             attackRate = 1.5f;
@@ -3709,6 +3821,9 @@ glm::vec3 GameScene::RandomSpawnInTerritory(SceneContext& ctx, uint32_t teamId)
  */
 void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 {
+    struct KillRec { entt::entity dead; uint32_t netId; uint32_t killerTeam; };
+    std::vector<KillRec> toKillMovement;
+
     // Build a per‑tile occupancy grid from buildings (2×2 blocks).
     const int gs = m_World.GetGridSize();
     std::vector<bool> occupiedTiles(static_cast<size_t>(gs) * gs, false);
@@ -3753,6 +3868,32 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             slow->timer -= dt;
             if (slow->timer > 0.f) {
                 currentSpeed *= slow->speedMultiplier;
+
+                // Tick acid DOT if any
+                if (slow->damagePerSecond > 0.f) {
+                    if (auto* hc = ctx.serverRegistry.try_get<HealthComponent>(e)) {
+                        if (!hc->dead) {
+                            hc->hp -= slow->damagePerSecond * dt;
+
+                            // Broadcast HP update
+                            if (auto* nc = ctx.serverRegistry.try_get<NetworkedComponent>(e)) {
+                                UnitHpUpdatePacket hp_pkt;
+                                hp_pkt.netId = nc->netId;
+                                hp_pkt.hp = hc->hp;
+                                ctx.network.BroadcastToAll(hp_pkt);
+                            }
+
+                            if (hc->hp <= 0.f) {
+                                hc->hp = 0.f;
+                                hc->dead = true;
+                                if (auto* nc = ctx.serverRegistry.try_get<NetworkedComponent>(e)) {
+                                    uint32_t killerTeam = uc.teamId == 0 ? 1 : 0;
+                                    toKillMovement.push_back({e, nc->netId, killerTeam});
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 ctx.serverRegistry.remove<SlowDebuffComponent>(e);
             }
@@ -3882,11 +4023,14 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             ctx.serverRegistry.valid(cc->target)) {
             auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc->target);
             if (ttf) {
-                float distToTarget = glm::length(ttf->position - tf.position);
-                if (distToTarget > cc->attackRange + 0.5f) {
+                float distToTarget = glm::length(glm::vec2(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z));
+                bool isBuilding = ctx.serverRegistry.any_of<BuildingComponent>(cc->target);
+                float effectiveRange = cc->attackRange + (isBuilding ? 1.5f : 0.f);
+
+                if (distToTarget > effectiveRange) {
                     // Out of range: chase.
                     mo.active = true;
-                    if (glm::length(mo.destination - ttf->position) > 0.5f) {
+                    if (glm::length(glm::vec2(mo.destination.x - ttf->position.x, mo.destination.z - ttf->position.z)) > 0.5f) {
                         mo.destination = ttf->position;
                         // Mark path dirty so it recomputes next tick.
                         auto& path = ctx.serverRegistry.get_or_emplace<PathComponent>(e);
@@ -4134,6 +4278,11 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         }
     }
 
+    // Process kills from movement tick (e.g. acid DOT)
+    for (auto& kr : toKillMovement) {
+        UpgradeSystem::AddKill(kr.killerTeam);
+        HandleUnitDeath(ctx, kr.dead, kr.netId);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4188,9 +4337,25 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
         // Validate current target
         bool targetValid = (cc.target != entt::null) &&
                            ctx.serverRegistry.valid(cc.target);
+        bool targetIsBuilding = false;
         if (targetValid) {
             auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
-            if (!thc || thc->dead) {
+            auto* tbc = ctx.serverRegistry.try_get<BuildingComponent>(cc.target);
+            if (thc) {
+                if (thc->dead) {
+                    targetValid = false;
+                    cc.target = entt::null;
+                    cc.commandedTarget = false;
+                }
+            } else if (tbc) {
+                if (tbc->destroyed) {
+                    targetValid = false;
+                    cc.target = entt::null;
+                    cc.commandedTarget = false;
+                } else {
+                    targetIsBuilding = true;
+                }
+            } else {
                 targetValid = false;
                 cc.target = entt::null;
                 cc.commandedTarget = false;
@@ -4198,20 +4363,81 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
         }
 
         // Find nearest enemy if no valid target (only for auto-acquire, not commanded)
-        if (!targetValid && !cc.commandedTarget) {
-            float searchRange = cc.autoAttack
-                ? FogOfWarSystem::COMBAT_SIGHT_RADIUS
-                : cc.attackRange;
-            float bestDist = searchRange;
+        if (!targetValid && !cc.commandedTarget && !uc.directControl) {
+            // 1. Check if there is any enemy within immediate attack range (so we don't chase if we can already hit something!)
+            float bestDist = cc.attackRange;
+            entt::entity bestImmediate = entt::null;
+            bool immediateIsBuilding = false;
+
+            // Check immediate units
             for (const auto& info : unitInfos) {
                 if (info.team == uc.teamId) continue;
-                float d = glm::length(info.pos - tf.position);
-                if (d < bestDist) { bestDist = d; cc.target = info.e; targetValid = true; }
+                float d = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestImmediate = info.e;
+                    immediateIsBuilding = false;
+                }
             }
-            // When auto-attack is on, treat the acquired target as commanded so the
-            // unit pursues it across the map (handled by UpdateUnitMovement).
-            if (targetValid && cc.autoAttack)
-                cc.commandedTarget = true;
+
+            // Check immediate buildings (include footprint tolerance)
+            auto bView = ctx.serverRegistry.view<TransformComponent, BuildingComponent>();
+            for (auto be : bView) {
+                auto& bc = bView.get<BuildingComponent>(be);
+                if (bc.teamId == uc.teamId || bc.destroyed) continue;
+                auto& btf = bView.get<TransformComponent>(be);
+                float d = glm::length(glm::vec2(btf.position.x - tf.position.x, btf.position.z - tf.position.z));
+                float effectiveBldRange = cc.attackRange + 1.5f;
+                if (d < effectiveBldRange && d < bestDist + 1.5f) {
+                    bestDist = d - 1.5f; // Normalized building distance
+                    bestImmediate = be;
+                    immediateIsBuilding = true;
+                }
+            }
+
+            if (bestImmediate != entt::null) {
+                cc.target = bestImmediate;
+                targetValid = true;
+                cc.commandedTarget = false; // Stay in place, just fight what is close
+                targetIsBuilding = immediateIsBuilding;
+            } else if (cc.autoAttack) {
+                // No immediate target, but auto-attack is enabled: search within COMBAT_SIGHT_RADIUS (10.0f)
+                float bestSightDist = FogOfWarSystem::COMBAT_SIGHT_RADIUS;
+                entt::entity bestSightTarget = entt::null;
+                bool sightIsBuilding = false;
+
+                // Check units in sight range
+                for (const auto& info : unitInfos) {
+                    if (info.team == uc.teamId) continue;
+                    float d = glm::length(glm::vec2(info.pos.x - tf.position.x, info.pos.z - tf.position.z));
+                    if (d < bestSightDist) {
+                        bestSightDist = d;
+                        bestSightTarget = info.e;
+                        sightIsBuilding = false;
+                    }
+                }
+
+                // Check buildings in sight range
+                for (auto be : bView) {
+                    auto& bc = bView.get<BuildingComponent>(be);
+                    if (bc.teamId == uc.teamId || bc.destroyed) continue;
+                    auto& btf = bView.get<TransformComponent>(be);
+                    float d = glm::length(glm::vec2(btf.position.x - tf.position.x, btf.position.z - tf.position.z));
+                    float bDist = d - 1.5f;
+                    if (bDist < bestSightDist) {
+                        bestSightDist = bDist;
+                        bestSightTarget = be;
+                        sightIsBuilding = true;
+                    }
+                }
+
+                if (bestSightTarget != entt::null) {
+                    cc.target = bestSightTarget;
+                    targetValid = true;
+                    cc.commandedTarget = true; // Chase the target
+                    targetIsBuilding = sightIsBuilding;
+                }
+            }
         }
 
         if (!targetValid) continue;
@@ -4219,67 +4445,108 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
         // Check range
         auto* ttf = ctx.serverRegistry.try_get<TransformComponent>(cc.target);
         if (!ttf) { cc.target = entt::null; cc.commandedTarget = false; continue; }
-        float dist = glm::length(ttf->position - tf.position);
+        float dist = glm::length(glm::vec2(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z));
 
-        if (dist <= cc.attackRange) {
+        float effectiveRange = cc.attackRange + (targetIsBuilding ? 1.5f : 0.f);
+
+        if (dist <= effectiveRange) {
             // Pause movement while in combat
             mo.active = false;
 
             if (cc.attackCooldown <= 0.f) {
                 cc.attackCooldown = cc.attackRate;
 
-                auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
-                if (thc && !thc->dead) {
-                    float dmgDealt = cc.attackDamage;
-                    if (uc.bugClass == BugClass::BeesWasps) {
-                        if (uc.tier == 1) { // Honigbiene: Kamikaze
-                            hc.hp = 0.f;
-                            hc.dead = true;
-                            auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
-                            uint32_t enetId = enc ? enc->netId : 0;
-                            uint32_t killerTeam = uc.teamId == 0 ? 1 : 0;
-                            auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
-                            if (targetUc) killerTeam = targetUc->teamId;
-                            toKill.push_back({e, enetId, killerTeam});
-                            spdlog::debug("Honigbiene: Kamikaze hit against unit!");
-                        }
-                        else if (uc.tier == 4) { // Gelbwest-Wespe: Slow acid
-                            auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
-                            if (targetUc && !IsFlying(targetUc->bugClass)) {
-                                auto& slow = ctx.serverRegistry.get_or_emplace<SlowDebuffComponent>(cc.target);
-                                slow.timer = 3.f;
-                                slow.speedMultiplier = 0.5f;
-                                spdlog::debug("Gelbwest-Wespe: Applied slow to target unit!");
+                if (!targetIsBuilding) {
+                    auto* thc = ctx.serverRegistry.try_get<HealthComponent>(cc.target);
+                    if (thc && !thc->dead) {
+                        float dmgDealt = cc.attackDamage;
+                        if (uc.bugClass == BugClass::BeesWasps) {
+                            if (uc.tier == 1) { // Honigbiene: Kamikaze
+                                hc.hp = 0.f;
+                                hc.dead = true;
+                                auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                                uint32_t enetId = enc ? enc->netId : 0;
+                                uint32_t killerTeam = uc.teamId == 0 ? 1 : 0;
+                                auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
+                                if (targetUc) killerTeam = targetUc->teamId;
+                                toKill.push_back({e, enetId, killerTeam});
+                                spdlog::debug("Honigbiene: Kamikaze hit against unit!");
+                            }
+                            else if (uc.tier == 4) { // Gelbwest-Wespe: Slow acid
+                                auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
+                                if (targetUc && !IsFlying(targetUc->bugClass)) {
+                                    auto& slow = ctx.serverRegistry.get_or_emplace<SlowDebuffComponent>(cc.target);
+                                    slow.timer = 3.f;
+                                    slow.speedMultiplier = 0.5f;
+                                    slow.damagePerSecond = 10.f; // 10 acid damage per second
+                                    spdlog::debug("Gelbwest-Wespe: Applied slow and acid DOT to target unit!");
+                                }
+                            }
+                            else if (uc.tier == 5) { // Hornisse: Boss-Killer
+                                auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
+                                if (targetUc && (targetUc->tier == 1 || targetUc->tier == 2)) {
+                                    dmgDealt *= 3.f;
+                                    spdlog::debug("Hornisse: Triple bite damage against Tier {} target!", targetUc->tier);
+                                }
                             }
                         }
-                        else if (uc.tier == 5) { // Hornisse: Boss-Killer
-                            auto* targetUc = ctx.serverRegistry.try_get<UnitComponent>(cc.target);
-                            if (targetUc && (targetUc->tier == 1 || targetUc->tier == 2)) {
-                                dmgDealt *= 3.f;
-                                spdlog::debug("Hornisse: Triple bite damage against Tier {} target!", targetUc->tier);
-                            }
+
+                        thc->hp -= dmgDealt;
+                        spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
+                                      (uint32_t)e, (uint32_t)cc.target, dmgDealt, thc->hp);
+
+                        // Broadcast HP update
+                        auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                        if (tnc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = tnc->netId;
+                            hp_pkt.hp    = thc->hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
+
+                        if (thc->hp <= 0.f) {
+                            thc->dead = true;
+                            auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                            uint32_t dnetId = dnc ? dnc->netId : 0;
+                            toKill.push_back({cc.target, dnetId, uc.teamId});
+                            cc.target = entt::null;
                         }
                     }
+                } else {
+                    auto* tbc = ctx.serverRegistry.try_get<BuildingComponent>(cc.target);
+                    if (tbc && !tbc->destroyed) {
+                        float dmgDealt = cc.attackDamage;
+                        if (uc.bugClass == BugClass::BeesWasps) {
+                            if (uc.tier == 1) { // Honigbiene: Kamikaze
+                                hc.hp = 0.f;
+                                hc.dead = true;
+                                auto* enc = ctx.serverRegistry.try_get<NetworkedComponent>(e);
+                                uint32_t enetId = enc ? enc->netId : 0;
+                                toKill.push_back({e, enetId, tbc->teamId});
+                                spdlog::debug("Honigbiene: Kamikaze hit against building!");
+                            }
+                        }
 
-                    thc->hp -= dmgDealt;
-                    spdlog::debug("Combat: unit {} hits {} for {:.0f} dmg (hp={:.0f})",
-                                  (uint32_t)e, (uint32_t)cc.target, dmgDealt, thc->hp);
+                        tbc->hp -= dmgDealt;
+                        spdlog::debug("Combat: unit {} hits building {} for {:.0f} dmg (hp={:.0f})",
+                                      (uint32_t)e, (uint32_t)cc.target, dmgDealt, tbc->hp);
 
-                    // Broadcast HP update
-                    auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
-                    if (tnc) {
-                        UnitHpUpdatePacket hp_pkt;
-                        hp_pkt.netId = tnc->netId;
-                        hp_pkt.hp    = thc->hp;
-                        ctx.network.BroadcastToAll(hp_pkt);
-                    }
+                        // Broadcast building HP update
+                        auto* bnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
+                        if (bnc) {
+                            UnitHpUpdatePacket hp_pkt;
+                            hp_pkt.netId = bnc->netId;
+                            hp_pkt.hp    = tbc->hp;
+                            ctx.network.BroadcastToAll(hp_pkt);
+                        }
 
-                    if (thc->hp <= 0.f) {
-                        thc->dead = true;
-                        auto* dnc = ctx.serverRegistry.try_get<NetworkedComponent>(cc.target);
-                        uint32_t dnetId = dnc ? dnc->netId : 0;
-                        toKill.push_back({cc.target, dnetId, uc.teamId});
-                        cc.target = entt::null;
+                        if (tbc->hp <= 0.f) {
+                            tbc->hp = 0.f;
+                            tbc->destroyed = true;
+                            uint32_t bnetId = bnc ? bnc->netId : 0;
+                            HandleBuildingDeath(ctx, cc.target, bnetId);
+                            cc.target = entt::null;
+                        }
                     }
                 }
             }
@@ -4293,13 +4560,13 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
             auto* cc2 = ctx.serverRegistry.try_get<CombatComponent>(info.e);
             if (!cc2 || cc2->target != entt::null) continue;
 
-            float bestDist = cc2->attackRange;
+            float bestDist = cc2->attackRange + 1.5f;
             entt::entity bestBld = entt::null;
             for (auto be : bldView) {
                 auto& btf = bldView.get<TransformComponent>(be);
                 auto& bc  = bldView.get<BuildingComponent>(be);
                 if (bc.teamId == info.team || bc.destroyed) continue;
-                float d = glm::length(btf.position - info.pos);
+                float d = glm::length(glm::vec2(btf.position.x - info.pos.x, btf.position.z - info.pos.z));
                 if (d < bestDist) { bestDist = d; bestBld = be; }
             }
             if (bestBld == entt::null) continue;
@@ -4548,6 +4815,38 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
     float aspect = (float)winW / (float)winH;
     glm::mat4 vp = m_Camera->GetProjectionMatrix(aspect) * m_Camera->GetViewMatrix();
 
+    // Draw visual explosions
+    for (const auto& expl : m_VisualExplosions) {
+        float progress = glm::clamp(expl.timer / expl.maxDuration, 0.f, 1.f);
+        float currentRadiusWorld = expl.maxRadius * progress;
+
+        glm::vec4 centerClip = vp * glm::vec4(expl.position, 1.f);
+        if (centerClip.w <= 0.f) continue;
+        centerClip /= centerClip.w;
+        if (centerClip.x < -1.1f || centerClip.x > 1.1f || centerClip.y < -1.1f || centerClip.y > 1.1f) continue;
+
+        float cx = (centerClip.x * 0.5f + 0.5f) * (float)winW;
+        float cy = (1.f - (centerClip.y * 0.5f + 0.5f)) * (float)winH;
+
+        glm::vec4 edgeClip = vp * glm::vec4(expl.position + glm::vec3(currentRadiusWorld, 0.f, 0.f), 1.f);
+        float rScreen = 10.f;
+        if (edgeClip.w > 0.f) {
+            edgeClip /= edgeClip.w;
+            float ex = (edgeClip.x * 0.5f + 0.5f) * (float)winW;
+            rScreen = glm::abs(ex - cx);
+        }
+
+        ImDrawList* explDl = ImGui::GetBackgroundDrawList();
+
+        // Draw expanding fading orange outer ring
+        int alphaOuter = static_cast<int>((1.f - progress) * 200);
+        explDl->AddCircle(ImVec2(cx, cy), rScreen, IM_COL32(255, 100, 0, alphaOuter), 0, 4.0f);
+
+        // Draw expanding white/yellow core
+        int alphaInner = static_cast<int>((1.f - progress) * 255);
+        explDl->AddCircleFilled(ImVec2(cx, cy), rScreen * 0.6f, IM_COL32(255, 230, 100, alphaInner));
+    }
+
     // Fog check: hide HP bars for entities not revealed to the local player
     const FogGrid* fog = nullptr;
     {
@@ -4593,6 +4892,106 @@ void GameScene::DrawUnitHPBars(SceneContext& ctx)
             if (selected)
                 dl->AddRect(ImVec2(bmin.x - 1, bmin.y - 1), ImVec2(bmax.x + 1, bmax.y + 1),
                             IM_COL32(255, 255, 0, 255), 0.f, 0, 1.5f);
+
+            auto* cc = ctx.clientRegistry.try_get<CombatComponent>(e);
+            if (cc) {
+                if (cc->autoAttack) {
+                    dl->AddCircleFilled(ImVec2(bmin.x - 6.f, sy + BAR_H * 0.5f), 3.f, IM_COL32(0, 255, 0, 255));
+                }
+                
+                // Attack Cooldown Bar
+                if (cc->attackCooldown > 0.f && cc->attackRate > 0.f) {
+                    float cdFrac = glm::clamp(cc->attackCooldown / cc->attackRate, 0.f, 1.f);
+                    ImVec2 cmin{bmin.x, bmax.y + 1.f};
+                    ImVec2 cmax{bmax.x, bmax.y + 3.f};
+                    dl->AddRectFilled(cmin, cmax, IM_COL32(30, 30, 30, 200));
+                    dl->AddRectFilled(cmin, ImVec2(cmin.x + BAR_W * cdFrac, cmax.y), IM_COL32(0, 191, 255, 220)); // DeepSkyBlue
+                }
+
+                if (cc->target != entt::null && ctx.clientRegistry.valid(cc->target)) {
+                    auto* ttf = ctx.clientRegistry.try_get<TransformComponent>(cc->target);
+                    if (ttf) {
+                        glm::vec4 srcClip = vp * glm::vec4(tf.position, 1.f);
+                        glm::vec4 dstClip = vp * glm::vec4(ttf->position, 1.f);
+                        if (srcClip.w > 0.f && dstClip.w > 0.f) {
+                            srcClip /= srcClip.w;
+                            dstClip /= dstClip.w;
+                            float srcX = (srcClip.x * 0.5f + 0.5f) * (float)winW;
+                            float srcY = (1.f - (srcClip.y * 0.5f + 0.5f)) * (float)winH;
+                            float dstX = (dstClip.x * 0.5f + 0.5f) * (float)winW;
+                            float dstY = (1.f - (dstClip.y * 0.5f + 0.5f)) * (float)winH;
+
+                            // 1. Draw a very faint target line showing current unit target
+                            ImU32 faintCol = (uc.teamId == m_MyPlayerId) 
+                                ? IM_COL32(255, 200, 0, 45)   // friendly
+                                : IM_COL32(255, 50, 50, 45);    // hostile
+                            dl->AddLine(ImVec2(srcX, srcY), ImVec2(dstX, dstY), faintCol, 1.0f);
+
+                            // Define colors for the attack effect
+                            ImU32 glow1 = IM_COL32(255, 50, 50, 60);
+                            ImU32 glow2 = IM_COL32(255, 50, 50, 130);
+                            ImU32 core  = IM_COL32(255, 200, 200, 255);
+                            if (uc.teamId == m_MyPlayerId) {
+                                glow1 = IM_COL32(255, 200, 0, 60);
+                                glow2 = IM_COL32(255, 200, 0, 130);
+                                core  = IM_COL32(255, 255, 200, 255);
+                            }
+
+                            // Check if ranged vs melee
+                            bool isRanged = (cc->attackRange > 3.0f);
+                            float elapsed = cc->attackRate - cc->attackCooldown;
+
+                            if (isRanged) {
+                                // Projectile flies for the first 0.35s of the attack cooldown
+                                float travelDuration = glm::min(0.35f, cc->attackRate);
+                                if (cc->attackCooldown > 0.f && elapsed >= 0.f && elapsed <= travelDuration) {
+                                    float t = elapsed / travelDuration;
+                                    float projX = srcX + (dstX - srcX) * t;
+                                    float projY = srcY + (dstY - srcY) * t;
+                                    ImVec2 projPos{projX, projY};
+
+                                    if (uc.bugClass == BugClass::BeesWasps && uc.tier == 4) {
+                                        // Gelbwest-Wespe: Bright green acid projectile & trail
+                                        ImU32 acidGlow1 = IM_COL32(0, 255, 0, 60);
+                                        ImU32 acidGlow2 = IM_COL32(0, 255, 0, 140);
+                                        ImU32 acidCore  = IM_COL32(180, 255, 180, 255);
+
+                                        // Trail from attacker to projectile
+                                        dl->AddLine(ImVec2(srcX, srcY), projPos, IM_COL32(0, 255, 0, 80), 1.5f);
+
+                                        // Outer acid blob glow
+                                        dl->AddCircleFilled(projPos, 7.f, acidGlow1);
+                                        dl->AddCircleFilled(projPos, 4.5f, acidGlow2);
+                                        dl->AddCircleFilled(projPos, 2.f, acidCore);
+                                    } else {
+                                        // Generic ranged projectile with glow trail
+                                        dl->AddLine(ImVec2(srcX, srcY), projPos, glow1, 3.f);
+                                        dl->AddLine(ImVec2(srcX, srcY), projPos, core, 1.f);
+
+                                        dl->AddCircleFilled(projPos, 5.f, glow2);
+                                        dl->AddCircleFilled(projPos, 2.f, IM_COL32(255, 255, 255, 255));
+                                    }
+                                }
+                            } else {
+                                // Melee unit: draw a quick slash / flash on target when hitting
+                                float strikeDuration = 0.15f;
+                                if (cc->attackCooldown > 0.f && elapsed >= 0.f && elapsed <= strikeDuration) {
+                                    float t = elapsed / strikeDuration; // 0 to 1
+                                    float alpha = 1.0f - t;
+                                    
+                                    // Melee hit flash/circle on target
+                                    ImU32 strikeGlow = IM_COL32(255, 255, 255, (int)(150 * alpha));
+                                    dl->AddCircleFilled(ImVec2(dstX, dstY), 12.f * (0.5f + t * 0.5f), strikeGlow);
+
+                                    // Melee strike slash line
+                                    dl->AddLine(ImVec2(srcX, srcY), ImVec2(dstX, dstY), glow2, 5.f);
+                                    dl->AddLine(ImVec2(srcX, srcY), ImVec2(dstX, dstY), core, 2.f);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

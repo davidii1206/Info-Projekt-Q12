@@ -171,6 +171,7 @@ struct UnitComponent {
 struct SlowDebuffComponent {
     float timer = 0.f;            ///< Remaining duration in seconds.
     float speedMultiplier = 0.5f; ///< Movement speed multiplier.
+    float damagePerSecond = 0.f;  ///< Acid damage per second.
 };
 
 /**

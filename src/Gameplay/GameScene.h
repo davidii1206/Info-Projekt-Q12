@@ -303,6 +303,14 @@ private:
     // --- Unit system ---
     /// Network IDs of units currently selected by this client's Commander.
     std::vector<uint32_t> m_SelectedUnits;
+
+    struct VisualExplosion {
+        glm::vec3 position;
+        float timer = 0.f;
+        float maxDuration = 0.5f;
+        float maxRadius = 2.0f;
+    };
+    std::vector<VisualExplosion> m_VisualExplosions;
     /// Direct control mode status
     bool                  m_DirectControlActive = false;
     /// Network ID of the unit under direct control
