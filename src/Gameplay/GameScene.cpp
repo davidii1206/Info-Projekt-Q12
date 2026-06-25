@@ -434,6 +434,11 @@ void GameScene::OnEnter(SceneContext& ctx) {
         m_ChunksPerAxis = chunkRes.chunksPerAxis;
 
         spdlog::info("GameScene: generating {} terrain chunks...", chunkRes.chunks.size());
+
+        // Use a single command buffer for all chunk uploads to avoid GPU
+        // memory exhaustion on low‑VRAM devices (i5‑9400 UHD 630).
+        SDL_GPUCommandBuffer* uploadCmd = SDL_AcquireGPUCommandBuffer(ctx.renderer->GetDevice());
+
         for (int cz = 0; cz < chunkRes.chunksPerAxis; ++cz) {
             for (int cx = 0; cx < chunkRes.chunksPerAxis; ++cx) {
                 int idx = cz * chunkRes.chunksPerAxis + cx;
@@ -459,7 +464,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
                 };
                 std::vector<Material> materials = { terrainMat };
                 AssetManager::RegisterProceduralScene(key, chunk.vertices, chunk.indices,
-                                                       sections, materials);
+                                                       sections, materials, uploadCmd);
 
                 auto chunkEntity = ctx.clientRegistry.create();
                 ctx.clientRegistry.emplace<TransformComponent>(chunkEntity);
@@ -468,6 +473,9 @@ void GameScene::OnEnter(SceneContext& ctx) {
                 ctx.clientRegistry.emplace<TerrainChunkComponent>(chunkEntity, cx, cz);
             }
         }
+
+        SDL_SubmitGPUCommandBuffer(uploadCmd);
+        SDL_WaitForGPUIdle(ctx.renderer->GetDevice());
 
         // (The merged-mesh build for Jolt MeshShape collision was removed —
         // it took 25+ seconds on a 750x750 map and the result was only used

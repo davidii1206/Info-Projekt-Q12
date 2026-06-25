@@ -343,9 +343,10 @@ const SceneData& AssetManager::RegisterProceduralScene(
     std::vector<ModelVertex> vertices,
     std::vector<uint32_t> indices,
     const std::vector<MeshSection>& sections,
-    const std::vector<Material>& materials)
+    const std::vector<Material>& materials,
+    SDL_GPUCommandBuffer* cmd)
 {
-    auto model = std::make_shared<Model>(s_Device, vertices, indices, sections, materials);
+    auto model = std::make_shared<Model>(s_Device, vertices, indices, sections, materials, cmd);
     std::vector<MeshInstance> meshInstances = {
         { 0, (uint32_t)sections.size(), glm::mat4(1.0f) }
     };

@@ -102,6 +102,8 @@ public:
      * @param indices CPU-side index buffer (triangle list).
      * @param sections Mesh sections (material groups).
      * @param materials Materials referenced by the sections.
+     * @param cmd Optional shared command buffer — forwarded to the Model
+     *        constructor so all GPU uploads reuse the same command buffer.
      * @return The cached SceneData, ready for ModelComponent lookup.
      */
     static const SceneData& RegisterProceduralScene(
@@ -109,7 +111,8 @@ public:
         std::vector<ModelVertex> vertices,
         std::vector<uint32_t> indices,
         const std::vector<MeshSection>& sections,
-        const std::vector<Material>& materials);
+        const std::vector<Material>& materials,
+        SDL_GPUCommandBuffer* cmd = nullptr);
 
     /** @brief Returns a simple procedural unit cube. */
     static std::shared_ptr<Model> GetFallbackModel();

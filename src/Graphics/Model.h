@@ -76,8 +76,11 @@ public:
      * @param indices List of indices.
      * @param sections List of mesh sections.
      * @param materials List of materials.
+     * @param cmd Optional shared command buffer — all uploads use the same
+     *        buffer instead of creating one per GPUBuffer::Upload call.
+     *        The caller must submit the buffer after all models are created.
      */
-    Model(SDL_GPUDevice* device, const std::vector<ModelVertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections, const std::vector<Material>& materials);
+    Model(SDL_GPUDevice* device, const std::vector<ModelVertex>& vertices, const std::vector<uint32_t>& indices, const std::vector<MeshSection>& sections, const std::vector<Material>& materials, SDL_GPUCommandBuffer* cmd = nullptr);
 
     /**
      * @brief Destroys the Model and releases GPU resources.
