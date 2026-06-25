@@ -35,29 +35,38 @@ bool IsTileWalkable(
     int currentTier,
     int maxTierDiff,
     const FogGrid* fog,
-    const std::vector<bool>* occupiedTiles)
+    const std::vector<bool>* occupiedTiles,
+    bool isFlying,
+    bool isClimber)
 {
     const int gs = world.GetGridSize();
     if (tx < 0 || tx >= gs || tz < 0 || tz >= gs) return false;
 
-    // Reject tiles occupied by buildings.
-    if (occupiedTiles) {
-        size_t idx = (size_t)tz * gs + (size_t)tx;
-        if (idx < occupiedTiles->size() && (*occupiedTiles)[idx])
-            return false;
+    // Flying units ignore buildings on the ground.
+    if (!isFlying) {
+        // Reject tiles occupied by buildings.
+        if (occupiedTiles) {
+            size_t idx = (size_t)tz * gs + (size_t)tx;
+            if (idx < occupiedTiles->size() && (*occupiedTiles)[idx])
+                return false;
+        }
+
+        const auto& tile = world.GetTile(tx, tz);
+
+        // Reject water
+        if (tile.surface == TileSurface::Water) return false;
+
+        // Cliff faces and tier differences: climbers can scale them directly.
+        if (!isClimber) {
+            if (tile.surface == TileSurface::Cliff) return false;
+
+            int tileTier = (int)tile.tier;
+            if (std::abs(tileTier - currentTier) > maxTierDiff) return false;
+        }
     }
 
-    const auto& tile = world.GetTile(tx, tz);
-
-    // Reject water, cliff, boss arena
-    if (tile.surface == TileSurface::Water)  return false;
-    if (tile.surface == TileSurface::Cliff)  return false;
-
-    // Reject tiles that are too high above or below the current tier.
-    int tileTier = (int)tile.tier;
-    if (std::abs(tileTier - currentTier) > maxTierDiff) return false;
-
     // If a fog grid is provided, only walk through revealed cells.
+    // Fog still affects flying units (they can't see through it).
     if (fog && fog->IsInitialised()) {
         glm::vec2 wc = world.TileToWorld(tx, tz);
         if (!fog->IsWorldPosRevealed(glm::vec3(wc.x, 0.f, wc.y)))
@@ -73,7 +82,9 @@ std::vector<glm::vec2> FindPath(
     glm::vec2 end,
     const FogGrid* fog,
     int maxTierDiff,
-    const std::vector<bool>* occupiedTiles)
+    const std::vector<bool>* occupiedTiles,
+    bool isFlying,
+    bool isClimber)
 {
     const int gs = world.GetGridSize();
     if (gs <= 0) return {};
@@ -98,7 +109,7 @@ std::vector<glm::vec2> FindPath(
 
     // Check if the destination tile is itself walkable; if not, the path is
     // still allowed to end there (the unit will stop as close as it can).
-    bool destWalkable = IsTileWalkable(world, ex, ez, startTier, maxTierDiff, fog, occupiedTiles);
+    bool destWalkable = IsTileWalkable(world, ex, ez, startTier, maxTierDiff, fog, occupiedTiles, isFlying, isClimber);
 
     // Scratch grids – allocated once, reused across pathfinding calls.
     // visited: 0 = unvisited, 1 = open, 2 = closed
@@ -164,7 +175,7 @@ std::vector<glm::vec2> FindPath(
             size_t ni = idx(nx, nz);
             if (visited[ni] == 2) continue;
 
-            if (!IsTileWalkable(world, nx, nz, curTier, maxTierDiff, fog, occupiedTiles)) {
+            if (!IsTileWalkable(world, nx, nz, curTier, maxTierDiff, fog, occupiedTiles, isFlying, isClimber)) {
                 // Mark as closed so we don't re-evaluate every frame.
                 // But only if it's not the destination tile.
                 if (!(nx == ex && nz == ez) || !destWalkable) {

@@ -121,6 +121,39 @@ inline const char* DietTypeName(DietType d) {
 }
 
 /**
+ * @brief Returns true if the bug class can fly (ignores terrain height limits in pathfinding).
+ */
+inline bool IsFlying(BugClass bc) {
+    switch (bc) {
+        case BugClass::Dragonflies:
+        case BugClass::MosquitosTicks:
+        case BugClass::Fireflies:
+        case BugClass::ButterfliesMoths:
+        case BugClass::BeesWasps:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief Returns true if the bug class can climb terraces directly
+ *        (ignores tier differences — no ramps needed).
+ *
+ * Climbers are slower to compensate.
+ */
+inline bool IsClimber(BugClass bc) {
+    switch (bc) {
+        case BugClass::Snails:
+        case BugClass::Spiders:
+        case BugClass::Beetles:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
  * @brief Returns a human-readable name for a BugClass.
  */
 inline const char* BugClassName(BugClass bc) {

@@ -163,7 +163,7 @@ private:
     // -----------------------------------------------------------------------
 
     /** @brief Spawns a unit entity on the server and broadcasts to clients. */
-    void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, float hp = 100.f);
+    void SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, float hp = 100.f);
 
     /** @brief Spawns a building on the server and broadcasts to clients. */
     entt::entity SpawnBuilding(SceneContext& ctx, BuildingType type, uint32_t teamId,

@@ -73,14 +73,17 @@ bool IsBuildableAt(const WorldManager& world, float wx, float wz) {
 /// ramps); only Water and Cliff faces are forbidden. The optional
 /// @p currentTier guards against climbing onto tiles more than one tier
 /// higher (i.e. off-corridor cliff walls).
-bool IsWalkableAt(const WorldManager& world, float wx, float wz, int currentTier = -1) {
+bool IsWalkableAt(const WorldManager& world, float wx, float wz, int currentTier = -1, bool isFlying = false, bool isClimber = false) {
+    if (isFlying) return true;
     if (world.GetGridSize() <= 0) return false;
     int tx, tz;
     world.WorldToTile(wx, wz, tx, tz);
     const auto& tile = world.GetTile(tx, tz);
     if (tile.surface == TileSurface::Water) return false;
-    if (tile.surface == TileSurface::Cliff) return false;
-    if (currentTier >= 0 && (int)tile.tier - currentTier > 1) return false;
+    if (!isClimber) {
+        if (tile.surface == TileSurface::Cliff) return false;
+        if (currentTier >= 0 && (int)tile.tier - currentTier > 1) return false;
+    }
     return true;
 }
 
@@ -2009,7 +2012,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                 ImGui::SameLine();
                 if (ImGui::Button("Sofort (Cheat)")) {
                     // Bypass the queue: spawn one unit immediately at the building.
-                    SpawnUnit(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f));
+                    SpawnUnit(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f), bc.ownerClass);
                 }
                 ImGui::PopID();
             }
@@ -2029,7 +2032,19 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                             break;
                         }
                     }
-                    if (found) SpawnUnit(ctx, myTeam, sp + glm::vec3(3.f, 0.f, 0.f));
+                    if (found) {
+                        BugClass playerClass = BugClass::Ants;
+                        auto pView = ctx.serverRegistry.view<PlayerComponent>();
+                        for (auto pe : pView) {
+                            auto& pc = pView.get<PlayerComponent>(pe);
+                            if (pc.playerId == myTeam) {
+                                if (pc.bugClass != BugClass::None)
+                                    playerClass = pc.bugClass;
+                                break;
+                            }
+                        }
+                        SpawnUnit(ctx, myTeam, sp + glm::vec3(3.f, 0.f, 0.f), playerClass);
+                    }
                 }
             }
         }
@@ -2229,7 +2244,7 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                     // Spawn just in front of the barracks (offset on X) so units
                     // don't pile up exactly on top of the building.
                     glm::vec3 p = tf.position + glm::vec3((float)i * 1.4f + 2.f, 0.f, 0.f);
-                    SpawnUnit(ctx, bc.teamId, p);
+                    SpawnUnit(ctx, bc.teamId, p, bc.ownerClass);
                 }
                 barr.completedSpawns = 0;
             }
@@ -2838,20 +2853,14 @@ void GameScene::LoadSceneMeshCollision(
  *   Omnivores  (Ants, Roaches, Beetles, CentipedesWorms) → medium (12)
  *   Rest       → low (7)
  */
-void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, float hp)
+void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bc, float hp)
 {
     if (!ctx.network.IsHosting()) return;
 
-    // Drop the unit onto the terraced terrain instead of the flat Y=0 plane.
+    // Position: ground units sit on terrain, flying units hover above it.
     pos.y = GroundHeightAt(m_World, pos.x, pos.z);
-
-    static std::mt19937 rng{std::random_device{}()};
-    // Pick a random bug class from available ones (skip None)
-    static const BugClass classes[] = {
-        BugClass::Ants, BugClass::Beetles, BugClass::Mantis,
-        BugClass::Dragonflies, BugClass::Roaches, BugClass::Scorpions
-    };
-    BugClass bc = classes[rng() % std::size(classes)];
+    if (IsFlying(bc))
+        pos.y += 4.f;
 
     // Damage by diet archetype
     float dmg = 7.f;
@@ -2861,10 +2870,15 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, flo
              bc == BugClass::CentipedesWorms)
         dmg = 12.f;
 
+    // Debuffs
+    if (IsFlying(bc))
+        hp *= 0.75f;
+    float speed = IsClimber(bc) ? 6.f : 10.f;
+
     const uint32_t netId = m_NextNetId++;
     auto e = ctx.serverRegistry.create();
     ctx.serverRegistry.emplace<TransformComponent>(e, pos);
-    ctx.serverRegistry.emplace<MovementComponent>(e);
+    ctx.serverRegistry.emplace<MovementComponent>(e, MovementComponent{glm::vec3(0.f), speed});
     ctx.serverRegistry.emplace<NetworkedComponent>(e, netId);
     ctx.serverRegistry.emplace<ModelComponent>(e, std::string("assets/cube.glb"));
     ctx.serverRegistry.emplace<UnitComponent>(e, UnitComponent{teamId, bc, false});
@@ -2889,7 +2903,7 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, flo
     if (!m_ClientNetMap.count(netId)) {
         auto ce = ctx.clientRegistry.create();
         ctx.clientRegistry.emplace<TransformComponent>(ce, pos);
-        ctx.clientRegistry.emplace<MovementComponent>(ce);
+        ctx.clientRegistry.emplace<MovementComponent>(ce, MovementComponent{glm::vec3(0.f), speed});
         ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
         ctx.clientRegistry.emplace<ModelComponent>(ce, std::string("assets/cube.glb"));
         ctx.clientRegistry.emplace<UnitComponent>(ce, UnitComponent{teamId, bc, false});
@@ -3161,8 +3175,8 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
     }
 
     // Steering‑level terrain check (building avoidance is handled by the A* pathfinder).
-    auto canStand = [&](glm::vec2 np, int currentTier) -> bool {
-        return IsWalkableAt(m_World, np.x, np.y, currentTier);
+    auto canStand = [&](glm::vec2 np, int currentTier, bool climber) -> bool {
+        return IsWalkableAt(m_World, np.x, np.y, currentTier, false, climber);
     };
 
     auto view = ctx.serverRegistry.view<TransformComponent, MovementComponent,
@@ -3171,6 +3185,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         auto& tf = view.get<TransformComponent>(e);
         auto& mv = view.get<MovementComponent>(e);
         auto& mo = view.get<MovementOrderComponent>(e);
+        auto& uc = view.get<UnitComponent>(e);
+        bool isFlying  = IsFlying(uc.bugClass);
+        bool isClimber = IsClimber(uc.bugClass);
 
         // Combat target pursuit: if this unit has a commanded attack target
         // that is out of range, keep moving toward it each tick.
@@ -3213,7 +3230,6 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         // When a new order arrives (destination changed), compute a fresh path.
         if (path.waypoints.empty() || path.dirty) {
             // Use the unit's team fog grid for pathfinding
-            auto& uc = view.get<UnitComponent>(e);
             auto fit = m_TeamFogs.find(uc.teamId);
             const FogGrid* fog = (fit != m_TeamFogs.end() && fit->second.IsInitialised())
                                  ? &fit->second : nullptr;
@@ -3223,7 +3239,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 glm::vec2(mo.destination.x, mo.destination.z),
                 fog,
                 1,
-                &occupiedTiles);
+                &occupiedTiles,
+                isFlying,
+                isClimber);
             path.current   = 0;
             path.dirty     = false;
             path.recalcTimer = 0.f;
@@ -3240,7 +3258,6 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         // tiles or changes in building placement.
         path.recalcTimer += dt;
         if (path.recalcTimer >= PathComponent::RECALC_INTERVAL) {
-            auto& uc = view.get<UnitComponent>(e);
             auto fit = m_TeamFogs.find(uc.teamId);
             const FogGrid* fog = (fit != m_TeamFogs.end() && fit->second.IsInitialised())
                                  ? &fit->second : nullptr;
@@ -3250,7 +3267,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 glm::vec2(mo.destination.x, mo.destination.z),
                 fog,
                 1,
-                &occupiedTiles);
+                &occupiedTiles,
+                isFlying,
+                isClimber);
             path.current   = 0;
             path.recalcTimer = 0.f;
             if (path.waypoints.empty()) {
@@ -3272,7 +3291,11 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 // All waypoints reached — order complete.
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
-                tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+                if (isFlying) {
+                    float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
+                    tf.position.y = glm::mix(tf.position.y, targetY, 10.f * dt);
+                } else
+                    tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
                 path.waypoints.clear();
                 continue;
             }
@@ -3284,29 +3307,49 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         glm::vec2 dir = distToWp > 0.001f ? toWp / distToWp : glm::vec2(0.f);
         glm::vec2 step = dir * (mv.speed * dt);
 
-        int curTx, curTz;
-        m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
-        int currentTier = (int)m_World.GetTile(curTx, curTz).tier;
+        if (isFlying) {
+            // Flying units move freely — no terrain sliding, no ground snap.
+            tf.position.x += step.x;
+            tf.position.z += step.y;
+            float targetY = GroundHeightAt(m_World, tf.position.x, tf.position.z) + 4.f;
+            tf.position.y  = glm::mix(tf.position.y, targetY, 10.f * dt);
+            mv.velocity    = glm::vec3(step.x, 0.f, step.y) / dt;
+        } else {
+            int curTx, curTz;
+            m_World.WorldToTile(curXZ.x, curXZ.y, curTx, curTz);
+            int currentTier = (int)m_World.GetTile(curTx, curTz).tier;
 
-        // Slide along X / Z if the full step is blocked.
-        glm::vec2 chosen{0.f};
-        if      (canStand(curXZ + step,                       currentTier)) chosen = step;
-        else if (canStand(curXZ + glm::vec2(step.x, 0.f),     currentTier)) chosen = {step.x, 0.f};
-        else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier)) chosen = {0.f,    step.y};
-        else                                                                chosen = {0.f, 0.f};
+            // Slide along X / Z if the full step is blocked.
+            glm::vec2 chosen{0.f};
+            if      (canStand(curXZ + step,                       currentTier, isClimber)) chosen = step;
+            else if (canStand(curXZ + glm::vec2(step.x, 0.f),     currentTier, isClimber)) chosen = {step.x, 0.f};
+            else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier, isClimber)) chosen = {0.f,    step.y};
+            else                                                                           chosen = {0.f, 0.f};
 
-        if (chosen.x == 0.f && chosen.y == 0.f) {
-            mv.velocity = {0.f, 0.f, 0.f};
-            continue;
+            if (chosen.x == 0.f && chosen.y == 0.f) {
+                mv.velocity = {0.f, 0.f, 0.f};
+                continue;
+            }
+
+            tf.position.x += chosen.x;
+            tf.position.z += chosen.y;
+            tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
+            mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
         }
 
-        tf.position.x += chosen.x;
-        tf.position.z += chosen.y;
-        tf.position.y  = GroundHeightAt(m_World, tf.position.x, tf.position.z);
-        mv.velocity    = glm::vec3(chosen.x, 0.f, chosen.y) / dt;
-
-        if (distToWp > 0.001f)
+        if (isFlying) {
+            // Face the final destination so flying units don't jitter between
+            // stair-stepped waypoints (the A* pathfinder only uses 4 cardinal
+            // directions).
+            glm::vec2 toDest = glm::vec2(mo.destination.x, mo.destination.z) - curXZ;
+            float distToDest = glm::length(toDest);
+            if (distToDest > 0.001f) {
+                glm::vec2 destDir = toDest / distToDest;
+                tf.rotation.y = glm::degrees(std::atan2(destDir.x, destDir.y));
+            }
+        } else if (distToWp > 0.001f) {
             tf.rotation.y = glm::degrees(std::atan2(dir.x, dir.y));
+        }
     }
 }
 

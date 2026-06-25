@@ -17,6 +17,10 @@ namespace Pathfinding {
     /// @param maxTierDiff  Maximum tier climb allowed per step (0 = same tier only).
     /// @param occupiedTiles  Optional per-tile bool array (gridSize², row-major).
     ///        Tiles marked true are treated as blocked (e.g. by buildings).
+    /// @param isFlying  If true, the unit ignores terrain tier differences, water, and cliffs.
+    /// @param isClimber If true, the unit can climb cliff faces directly
+    ///                  (skips both the tier-difference and cliff-surface checks)
+    ///                  but still respects water and occupied tiles.
     /// @return Waypoints in world XZ (tile centres), empty if no path found.
     std::vector<glm::vec2> FindPath(
         const WorldManager& world,
@@ -24,7 +28,9 @@ namespace Pathfinding {
         glm::vec2 end,
         const FogGrid* fog = nullptr,
         int maxTierDiff = 0,
-        const std::vector<bool>* occupiedTiles = nullptr);
+        const std::vector<bool>* occupiedTiles = nullptr,
+        bool isFlying = false,
+        bool isClimber = false);
 
     /// Checks whether a tile at (tx, tz) is walkable.
     bool IsTileWalkable(
@@ -33,6 +39,8 @@ namespace Pathfinding {
         int currentTier,
         int maxTierDiff = 0,
         const FogGrid* fog = nullptr,
-        const std::vector<bool>* occupiedTiles = nullptr);
+        const std::vector<bool>* occupiedTiles = nullptr,
+        bool isFlying = false,
+        bool isClimber = false);
 
 } // namespace Pathfinding
