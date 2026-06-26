@@ -49,6 +49,8 @@ enum class PacketType : uint8_t {
     GAME_START         = 22, /**< Server→Client: host started the game. */
     RETURN_TO_LOBBY   = 23, /**< Server→Client: host is returning everyone to lobby. */
     INVENTORY_UPDATE  = 25, /**< Server→Client: per-base resource stockpile sync. */
+    WORKER_ASSIGN     = 26, /**< Client→Server: assign a worker to harvest a resource node (or stop). */
+    WORKER_BUY        = 27, /**< Client→Server: purchase one additional worker (costs 5 signature resource). */
 };
 
 /**
@@ -295,6 +297,34 @@ struct InventoryUpdatePacket {
     int32_t    insekten  = 0;
     int32_t    fleisch   = 0;
     int32_t    holz      = 0;
+};
+
+/**
+ * @struct WorkerAssignPacket
+ * @brief Client → Server: bind a worker to a specific resource node, or stop.
+ *
+ * resourceNetId == 0 means "stop / clear assignment" → the worker drops any
+ * active gather job, returns to the commander, and goes Idle.
+ * Otherwise the worker locks onto that node and loops gather → deposit → gather
+ * until the node is gone or the player issues another assignment.
+ */
+struct WorkerAssignPacket {
+    PacketType type           = PacketType::WORKER_ASSIGN; /**< Packet type identifier. */
+    uint32_t   workerNetId    = 0;                          /**< Network ID of the worker unit. */
+    uint32_t   resourceNetId  = 0;                          /**< Target node net ID, or 0 to STOP. */
+};
+
+/**
+ * @struct WorkerBuyPacket
+ * @brief Client → Server: request to purchase one additional worker.
+ *
+ * The server validates the request: it checks the team's worker count
+ * (hard cap 20), deducts 5 of the team's signature resource from the
+ * base inventory, and calls SpawnWorker if the purchase is valid.
+ * No payload is needed — the server infers the team from the sender peer.
+ */
+struct WorkerBuyPacket {
+    PacketType type = PacketType::WORKER_BUY; /**< Packet type identifier. */
 };
 
 /**

@@ -1,6 +1,21 @@
 /**
  * @file ResourceSystem.cpp
- * @brief Implementation of the ResourceSystem ECS tick.
+ * @brief Assignment-driven worker state machine.
+ *
+ * Unassigned workers (Idle / ReturningToCommander) follow the commander
+ * like a loose entourage — they close in when the commander moves away and
+ * stop when within FOLLOW_RADIUS.  Assigning a worker to a resource node
+ * sends it through GoingToResource → Collecting → Returning → Depositing,
+ * then back to following the commander.
+ *
+ *   Idle ←──────────────────────────── ReturningToCommander
+ *    │  (both states follow the commander)
+ *    └──[assigned]──► GoingToResource → Collecting → Returning → Depositing
+ *                         ↑_______________________↓   (if still assigned)
+ *                                                    → ReturningToCommander
+ *
+ * Movement is issued via MovementOrderComponent; the existing
+ * UpdateUnitMovement / A* pipeline handles the actual pathfinding.
  */
 
 #include "ResourceSystem.h"
@@ -9,94 +24,55 @@
 #include "Bug_classes.h"
 #include "UpgradeSystem.h"
 #include <glm/glm.hpp>
-#include <glm/gtc/constants.hpp>
 #include <spdlog/spdlog.h>
-#include <limits>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace ResourceSystem
 {
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 namespace
 {
-    constexpr float DEPOSIT_RADIUS  = 2.f;  ///< Distance to base at which deposit triggers.
-    constexpr float DETECT_RADIUS   = 15.f; ///< Distance within which collectors notice resources.
-    constexpr float COLLECTOR_SPEED = 4.f;  ///< Units per second.
+    constexpr float DEPOSIT_RADIUS  = 3.f;  ///< Distance to base that triggers deposit.
+    constexpr float FOLLOW_RADIUS   = 5.f;  ///< Workers stop following when this close to commander.
+    constexpr float FOLLOW_DEADZONE = 1.5f; ///< Don't re-issue a move order until drift exceeds this.
 
-    /**
-     * @brief Moves `pos` toward `target` by up to `speed * dt` units.
-     * @return true if the target was reached.
-     */
-    bool MoveToward(glm::vec3& pos, const glm::vec3& target, float speed, float dt)
+    /// Finds the player entity (commander) for the given team.
+    entt::entity FindCommander(entt::registry& registry, uint32_t teamId)
     {
-        glm::vec3 diff = target - pos;
-        float dist = glm::length(diff);
-        if (dist < 0.05f) return true;
-
-        glm::vec3 dir = diff / dist;
-        float step = std::min(speed * dt, dist);
-        pos += dir * step;
-        return step >= dist;
-    }
-
-    /**
-     * @brief Determines the BugClass for a collector entity.
-     *
-     * Checks UnitComponent and PlayerComponent for bug class info.
-     * Falls back to a heuristic based on teamId (team 0 → Termites, team 1 → Ants).
-     */
-    BugClass GetCollectorBugClass(entt::registry& registry, entt::entity e) {
-        if (auto* uc = registry.try_get<UnitComponent>(e))
-            return uc->bugClass;
-        if (auto* pc = registry.try_get<PlayerComponent>(e))
-            return pc->bugClass;
-        return BugClass::Ants;
-    }
-
-    /**
-     * @brief Finds the nearest non-depleted resource entity within detectRadius
-     *        that matches one of the given acceptable resource types.
-     * @return entt::null if none found.
-     */
-    entt::entity FindNearestResource(entt::registry& registry,
-                                     const glm::vec3& from,
-                                     float            maxDist,
-                                     const std::unordered_set<ResourceType>& acceptable)
-    {
-        entt::entity best = entt::null;
-        float bestDist = maxDist * maxDist;
-
-        auto view = registry.view<TransformComponent, ResourceComponent>();
+        auto view = registry.view<TransformComponent, PlayerComponent>();
         for (auto e : view) {
-            const auto& res = view.get<ResourceComponent>(e);
-            if (res.depleted) continue;
-            // Skip resources this bug class cannot eat
-            if (!acceptable.empty() && acceptable.find(res.type) == acceptable.end())
-                continue;
-
-            const auto& tf = view.get<TransformComponent>(e);
-            glm::vec3 diff3 = tf.position - from;
-            float d2 = glm::dot(diff3, diff3);
-            if (d2 < bestDist) {
-                bestDist = d2;
-                best = e;
-            }
+            if (view.get<PlayerComponent>(e).playerId == teamId)
+                return e;
         }
-        return best;
+        return entt::null;
     }
 
-    /**
-     * @brief Finds the nearest base entity for the given teamId.
-     */
+    /// Moves `mo` toward commander if the worker has drifted outside FOLLOW_RADIUS,
+    /// stops if already close.  Returns true if the commander was found.
+    bool FollowCommander(entt::registry& registry, uint32_t teamId,
+                         const glm::vec3& pos, MovementOrderComponent& mo)
+    {
+        entt::entity cmd = FindCommander(registry, teamId);
+        if (cmd == entt::null) { mo.active = false; return false; }
+        const auto& cmdPos = registry.get<TransformComponent>(cmd).position;
+        float dist = std::sqrt((cmdPos.x-pos.x)*(cmdPos.x-pos.x) +
+                               (cmdPos.z-pos.z)*(cmdPos.z-pos.z));
+        if (dist > FOLLOW_RADIUS) {
+            mo.destination = cmdPos;
+            mo.active = true;
+        } else if (dist < FOLLOW_RADIUS - FOLLOW_DEADZONE) {
+            mo.active = false;
+        }
+        return true;
+    }
+
+    /// Finds the first base entity owned by teamId (prefers BaseComponent, falls
+    /// back to a non-destroyed MainBase BuildingComponent).
     entt::entity FindBase(entt::registry& registry, uint32_t teamId)
     {
-        auto view = registry.view<TransformComponent, BaseComponent>();
-        for (auto e : view) {
-            if (view.get<BaseComponent>(e).teamId == teamId)
+        auto bView = registry.view<TransformComponent, BaseComponent>();
+        for (auto e : bView) {
+            if (bView.get<BaseComponent>(e).teamId == teamId)
                 return e;
         }
         auto bldView = registry.view<TransformComponent, BuildingComponent>();
@@ -107,6 +83,14 @@ namespace
         }
         return entt::null;
     }
+
+    /// XZ distance between two world positions.
+    float DistXZ(const glm::vec3& a, const glm::vec3& b)
+    {
+        float dx = b.x - a.x, dz = b.z - a.z;
+        return std::sqrt(dx * dx + dz * dz);
+    }
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -115,102 +99,201 @@ namespace
 
 void Update(entt::registry& registry, ResourceManager& resourceManager, float dt)
 {
-    auto view = registry.view<TransformComponent, CollectorComponent, ResourceInventory>();
+    // Build a netId → resource entity lookup once per tick.
+    std::unordered_map<uint32_t, entt::entity> resNetMap;
+    {
+        auto resView = registry.view<NetworkedComponent, ResourceComponent>();
+        for (auto e : resView)
+            resNetMap[resView.get<NetworkedComponent>(e).netId] = e;
+    }
+
+    auto view = registry.view<TransformComponent, CollectorComponent,
+                               ResourceInventory, MovementOrderComponent, UnitComponent>();
 
     for (auto collectorEntity : view)
     {
         auto& tf        = view.get<TransformComponent>(collectorEntity);
         auto& collector = view.get<CollectorComponent>(collectorEntity);
         auto& inventory = view.get<ResourceInventory>(collectorEntity);
+        auto& mo        = view.get<MovementOrderComponent>(collectorEntity);
+        const uint32_t teamId = view.get<UnitComponent>(collectorEntity).teamId;
 
-        // Determine team and bug class
-        BugClass bc = GetCollectorBugClass(registry, collectorEntity);
-        uint32_t teamId = 0;
-        if (auto* uc = registry.try_get<UnitComponent>(collectorEntity))
-            teamId = uc->teamId;
-        else if (auto* pc = registry.try_get<PlayerComponent>(collectorEntity))
-            teamId = pc->playerId;
-
-        auto edibleVec = GetEdibleResources(bc);
-        std::unordered_set<ResourceType> acceptable(edibleVec.begin(), edibleVec.end());
-
-        // Tick cooldown (scaled by upgrade gather-rate bonus)
-        if (collector.collectCooldown > 0.f) {
+        // Tick harvest cooldown, boosted by any gather-rate upgrade.
+        if (collector.collectCooldown > 0.f)
             collector.collectCooldown -= dt * UpgradeSystem::GetGatherRateMul(teamId);
+
+        switch (collector.state)
+        {
+        // -------------------------------------------------------------------
+        case WorkerState::Idle:
+        {
+            if (collector.assignedResourceNetId != 0) {
+                mo.active = false;
+                collector.state = WorkerState::GoingToResource;
+                break;
+            }
+            // No assignment — loosely follow the commander.
+            FollowCommander(registry, teamId, tf.position, mo);
+            break;
         }
 
-        if (!collector.carryingLoad)
+        // -------------------------------------------------------------------
+        case WorkerState::GoingToResource:
         {
-            // ----------------------------------------------------------------
-            // Phase 1: SEEKING / COLLECTING
-            // ----------------------------------------------------------------
-            entt::entity target = FindNearestResource(registry, tf.position, DETECT_RADIUS, acceptable);
-
-            if (target == entt::null) continue; // nothing suitable nearby
-
-            const auto& resTf = registry.get<TransformComponent>(target);
-            float distToResource = glm::distance(tf.position, resTf.position);
-
-            if (distToResource > collector.collectRadius)
-            {
-                MoveToward(tf.position, resTf.position, COLLECTOR_SPEED, dt);
+            if (collector.assignedResourceNetId == 0) {
+                mo.active = false;
+                collector.state = WorkerState::ReturningToCommander;
+                break;
             }
-            else if (collector.collectCooldown <= 0.f)
-            {
+            auto rit = resNetMap.find(collector.assignedResourceNetId);
+            if (rit == resNetMap.end() || !registry.valid(rit->second)) {
+                collector.assignedResourceNetId = 0;
+                mo.active = false;
+                collector.state = WorkerState::ReturningToCommander;
+                break;
+            }
+            entt::entity resEnt = rit->second;
+            auto& res   = registry.get<ResourceComponent>(resEnt);
+            auto& resTf = registry.get<TransformComponent>(resEnt);
+
+            if (res.depleted) {
+                // Node is respawning — wait in place.
+                mo.active = false;
+                break;
+            }
+
+            float dist = DistXZ(tf.position, resTf.position);
+            if (dist <= collector.collectRadius) {
+                mo.active = false;
+                collector.state = WorkerState::Collecting;
+            } else {
+                mo.destination = resTf.position;
+                mo.active = true;
+            }
+            break;
+        }
+
+        // -------------------------------------------------------------------
+        case WorkerState::Collecting:
+        {
+            if (collector.assignedResourceNetId == 0) {
+                mo.active = false;
+                collector.state = collector.carryingLoad
+                    ? WorkerState::Returning : WorkerState::ReturningToCommander;
+                break;
+            }
+            auto rit = resNetMap.find(collector.assignedResourceNetId);
+            if (rit == resNetMap.end() || !registry.valid(rit->second)) {
+                collector.assignedResourceNetId = 0;
+                mo.active = false;
+                collector.state = collector.carryingLoad
+                    ? WorkerState::Returning : WorkerState::ReturningToCommander;
+                break;
+            }
+            entt::entity resEnt = rit->second;
+            auto& res   = registry.get<ResourceComponent>(resEnt);
+
+            if (res.depleted) {
+                // Wait for respawn — reuse collectCooldown as a poll timer.
+                if (collector.collectCooldown <= 0.f)
+                    collector.collectCooldown = 1.f;
+                break;
+            }
+
+            if (collector.collectCooldown <= 0.f) {
                 ResourceType collectedType;
-                int amount = resourceManager.Collect(registry, target, collectedType);
-                if (amount > 0)
-                {
+                int amount = resourceManager.Collect(registry, resEnt, collectedType);
+                if (amount > 0) {
                     inventory.Add(collectedType, amount);
                     collector.collectCooldown = collector.collectRate;
                     collector.carryingLoad    = true;
-
-                    spdlog::debug("[ResourceSystem] {} collector picked up {} x {}",
-                                  BugClassName(bc), amount, ResourceTypeName(collectedType));
+                    collector.state           = WorkerState::Returning;
                 }
             }
+            break;
         }
-        else
+
+        // -------------------------------------------------------------------
+        case WorkerState::Returning:
         {
-            // ----------------------------------------------------------------
-            // Phase 2: RETURNING to base
-            // ----------------------------------------------------------------
             entt::entity base = FindBase(registry, teamId);
             if (base == entt::null) {
+                inventory           = ResourceInventory{};
                 collector.carryingLoad = false;
-                continue;
+                collector.state     = WorkerState::ReturningToCommander;
+                break;
             }
-
             const auto& baseTf = registry.get<TransformComponent>(base);
-            float distToBase   = glm::distance(tf.position, baseTf.position);
-
-            if (distToBase > DEPOSIT_RADIUS)
-            {
-                MoveToward(tf.position, baseTf.position, COLLECTOR_SPEED, dt);
+            float dist = DistXZ(tf.position, baseTf.position);
+            if (dist <= DEPOSIT_RADIUS) {
+                mo.active = false;
+                collector.state = WorkerState::Depositing;
+            } else {
+                mo.destination = baseTf.position;
+                mo.active = true;
             }
-            else
-            {
-                // ----------------------------------------------------------------
-                // Phase 3: DEPOSITING
-                // ----------------------------------------------------------------
-                auto* baseInv = registry.try_get<ResourceInventory>(base);
-                if (baseInv)
-                {
+            break;
+        }
+
+        // -------------------------------------------------------------------
+        case WorkerState::Depositing:
+        {
+            entt::entity base = FindBase(registry, teamId);
+            if (base != entt::null) {
+                if (auto* baseInv = registry.try_get<ResourceInventory>(base)) {
                     baseInv->Add(ResourceType::Pilze,    inventory.pilze);
                     baseInv->Add(ResourceType::Beeren,   inventory.beeren);
                     baseInv->Add(ResourceType::Nektar,   inventory.nektar);
                     baseInv->Add(ResourceType::Samen,    inventory.samen);
                     baseInv->Add(ResourceType::Insekten, inventory.insekten);
                     baseInv->Add(ResourceType::Fleisch,  inventory.fleisch);
-
-                    spdlog::debug("[ResourceSystem] {} collector deposited load at base (team {})",
-                                  BugClassName(bc), teamId);
+                    baseInv->Add(ResourceType::Holz,     inventory.holz);
                 }
-
-                inventory = ResourceInventory{};
-                collector.carryingLoad = false;
             }
+            inventory              = ResourceInventory{};
+            collector.carryingLoad = false;
+
+            // If the player's assignment is still valid, loop back for more.
+            if (collector.assignedResourceNetId != 0) {
+                auto rit = resNetMap.find(collector.assignedResourceNetId);
+                if (rit != resNetMap.end() && registry.valid(rit->second)) {
+                    collector.state = WorkerState::GoingToResource;
+                    break;
+                }
+                collector.assignedResourceNetId = 0;
+            }
+            collector.state = WorkerState::ReturningToCommander;
+            break;
         }
+
+        // -------------------------------------------------------------------
+        case WorkerState::ReturningToCommander:
+        {
+            if (collector.assignedResourceNetId != 0) {
+                // Re-assigned while walking back — go immediately.
+                collector.state = WorkerState::GoingToResource;
+                break;
+            }
+            // Walk back; switch to Idle (which also follows) once close enough.
+            entt::entity cmd = FindCommander(registry, teamId);
+            if (cmd == entt::null) {
+                mo.active = false;
+                collector.state = WorkerState::Idle;
+                break;
+            }
+            const auto& cmdPos = registry.get<TransformComponent>(cmd).position;
+            float dist = DistXZ(tf.position, cmdPos);
+            if (dist <= FOLLOW_RADIUS) {
+                mo.active = false;
+                collector.state = WorkerState::Idle;
+            } else {
+                mo.destination = cmdPos;
+                mo.active = true;
+            }
+            break;
+        }
+
+        } // switch
     }
 }
 

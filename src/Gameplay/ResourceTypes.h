@@ -73,17 +73,40 @@ struct ResourceComponent {
 };
 
 /**
+ * @enum WorkerState
+ * @brief Lifecycle phase of a collector unit, driven by player assignments.
+ *
+ * Phase 2 model: workers do not auto-find resources. They wait in Idle until
+ * the player clicks a resource with them selected (sets assignedResourceNetId).
+ * They then loop through GoingToResource → Collecting → Returning → Depositing
+ * and back to GoingToResource as long as the assignment is still valid.
+ * After deposit without a valid assignment they walk back to the commander
+ * and stand Idle.
+ */
+enum class WorkerState : uint8_t {
+    Idle                = 0, ///< Standing near commander, doing nothing.
+    GoingToResource     = 1, ///< Walking toward the assigned resource node.
+    Collecting          = 2, ///< In range of the assigned node, harvesting.
+    Returning           = 3, ///< Walking back to the nearest own-team base with a load.
+    Depositing          = 4, ///< At the base, dumping inventory.
+    ReturningToCommander= 5, ///< Walking back to the commander after deposit (no longer assigned).
+};
+
+/**
  * @struct CollectorComponent
  * @brief Tags an entity as a unit that can collect resources.
  *
- * Entities with this component will automatically pick up ResourceComponents
- * within `collectRadius` and carry them to the base.
+ * In Phase 2 collectors are assignment-driven: assignedResourceNetId names a
+ * specific ResourceComponent entity the worker should harvest until told
+ * otherwise. assignedResourceNetId == 0 means "no assignment" → Idle.
  */
 struct CollectorComponent {
-    float collectRadius   = 3.f;   ///< Distance within which resources are auto-collected.
-    float collectCooldown = 0.f;   ///< Remaining cooldown before next collection.
-    float collectRate     = 2.f;   ///< Seconds between collection attempts.
-    bool  carryingLoad    = false; ///< True while returning to base with resources.
+    float       collectRadius          = 3.f;                  ///< Range to harvest the assigned node.
+    float       collectCooldown        = 0.f;                  ///< Remaining cooldown before next collection.
+    float       collectRate            = 2.f;                  ///< Seconds between collection attempts.
+    bool        carryingLoad           = false;                ///< True while returning to base with resources.
+    uint32_t    assignedResourceNetId  = 0;                    ///< Network ID of the resource node the player assigned (0 = none).
+    WorkerState state                  = WorkerState::Idle;    ///< Current phase in the worker loop.
 };
 
 /**

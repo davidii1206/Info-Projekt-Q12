@@ -25,6 +25,7 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include "ResourceTypes.h"
+#include "../Core/WorldManager.h"
 
 /**
  * @struct ResourceSpawnPoint
@@ -55,18 +56,17 @@ public:
     void Init();
 
     /**
-     * @brief Procedurally generates spawn points spread across the whole map.
+     * @brief Procedurally generates spawn points with biome-aware placement.
      *
-     * Replaces the hard-coded default list with ~250 randomly-placed nodes:
-     * a balanced mix of food types and a dense Holz population (since wood
-     * drives base upgrades and is harvested by every faction).
+     * Each faction's signature resource is concentrated near its territory's
+     * spawn point.  Holz (universal) is spread randomly across the whole map.
+     * Non-signature types get a sparse global scatter so every map has all
+     * resource types reachable.
      *
-     * @param worldExtent  Half-width of the playable map in world units.
-     *                     Nodes are placed inside [-extent .. +extent] on
-     *                     both X and Z.
-     * @param seed         RNG seed for deterministic node placement.
+     * @param world   Live WorldManager — used to read territory faction data.
+     * @param seed    RNG seed for deterministic node placement.
      */
-    void GenerateForWorld(float worldExtent, uint32_t seed = 0xC0FFEE);
+    void GenerateForWorld(const WorldManager& world, uint32_t seed = 0xC0FFEE);
 
     /**
      * @brief Spawns all permanent resource nodes at their defined positions.

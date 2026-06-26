@@ -1,18 +1,20 @@
 /**
  * @file ResourceSystem.h
- * @brief ECS system: collectors auto-gather nearby resources and return to base.
+ * @brief Assignment-driven worker state machine.
  *
- * Call ResourceSystem::Update() every server fixed-tick.
+ * Workers do NOT auto-find resources.  They wait Idle until the player
+ * assigns them to a specific resource node (WORKER_ASSIGN packet → sets
+ * CollectorComponent::assignedResourceNetId).  Unassigning (netId = 0) or
+ * pressing S sends them back to the commander.
  *
- * Collector behaviour (state machine):
- *  1. SEEKING  – walks toward nearest non-depleted resource within detectRadius
- *  2. COLLECTING – within collectRadius: calls ResourceManager::Collect()
- *  3. RETURNING – walks back to the nearest base entity
- *  4. DEPOSITING – within depositRadius of base: transfers ResourceInventory to base
+ * State loop (server only, runs every fixed tick):
  *
- * The system operates purely on the authoritative server registry and is
- * intentionally decoupled from networking – the position updates broadcast
- * through the normal EntitySnapshot path.
+ *   Idle → GoingToResource → Collecting → Returning → Depositing
+ *       ↑_______________________________________↓   (if still assigned)
+ *                                                  → ReturningToCommander → Idle
+ *
+ * Movement is issued via MovementOrderComponent; the existing
+ * UpdateUnitMovement / A* pipeline handles pathfinding.
  */
 
 #pragma once
@@ -22,10 +24,10 @@
 namespace ResourceSystem
 {
     /**
-     * @brief Runs one tick of the resource collection AI.
+     * @brief Runs one server tick of the worker AI.
      *
      * @param registry        Authoritative server registry.
-     * @param resourceManager The ResourceManager for Collect() calls.
+     * @param resourceManager Used for Collect() calls.
      * @param dt              Fixed delta time in seconds.
      */
     void Update(entt::registry& registry, ResourceManager& resourceManager, float dt);

@@ -502,7 +502,7 @@ void GameScene::OnEnter(SceneContext& ctx) {
         // would all cluster around the origin; instead, procedurally scatter
         // ~240 nodes (Holz-heavy) across the full map extent so workers have
         // somewhere to walk to from their respective MainBase.
-        m_ResourceManager.GenerateForWorld(m_World.GetConfig().worldExtent, m_WorldSeed);
+        m_ResourceManager.GenerateForWorld(m_World, m_WorldSeed);
         m_ResourceManager.SpawnPermanentResources(ctx.serverRegistry);
 
         // Snap every freshly-spawned resource node onto the terrain surface
@@ -572,6 +572,17 @@ void GameScene::OnEnter(SceneContext& ctx) {
                 const glm::vec2 sp = it->second;
                 SpawnBuilding(ctx, BuildingType::Main, playerId,
                               glm::vec3{sp.x, 0.f, sp.y}, 1, "assets/cube.glb");
+
+                // Move the player entity to the spawn point so that workers
+                // (which follow the commander) don't race to the map origin.
+                {
+                    auto* ptf = ctx.serverRegistry.try_get<TransformComponent>(pe);
+                    if (ptf) {
+                        ptf->position.x = sp.x;
+                        ptf->position.z = sp.y; // sp is glm::vec2(x, z)
+                        ptf->position.y = GroundHeightAt(m_World, sp.x, sp.y);
+                    }
+                }
 
                 spdlog::info("GameScene: spawned MainBase for player {} team {} bugClass {} at ({:.1f}, {:.1f})",
                              playerId, playerId, (int)pc.bugClass, sp.x, sp.y);
@@ -1893,9 +1904,48 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                     }
                 }
 
-                ctx.network.Send(pkt);
-                spdlog::info("Commander: orderType={} to ({:.1f},{:.1f},{:.1f}) for {} units (targetNetId={})",
-                             pkt.orderType, pkt.x, pkt.y, pkt.z, pkt.selectedCount, pkt.targetNetId);
+                // RMB near a resource node: assign selected workers to it.
+                // Workers get WORKER_ASSIGN; the normal move order is skipped
+                // so combat units don't accidentally march into a resource field.
+                bool resourceClicked = false;
+                {
+                    constexpr float RES_PICK_RADIUS = 3.5f;
+                    uint32_t clickedResNetId = 0;
+                    float bestDist = RES_PICK_RADIUS;
+                    auto resView = ctx.clientRegistry.view<TransformComponent,
+                                                           NetworkedComponent,
+                                                           ResourceComponent>();
+                    for (auto re : resView) {
+                        const auto& rtf = resView.get<TransformComponent>(re);
+                        float d = glm::length(glm::vec2(rtf.position.x - worldPos.x,
+                                                         rtf.position.z - worldPos.z));
+                        if (d < bestDist) {
+                            bestDist = d;
+                            clickedResNetId = resView.get<NetworkedComponent>(re).netId;
+                        }
+                    }
+                    if (clickedResNetId != 0) {
+                        resourceClicked = true;
+                        for (uint32_t wNetId : m_SelectedUnits) {
+                            auto cit = m_ClientNetMap.find(wNetId);
+                            if (cit == m_ClientNetMap.end()) continue;
+                            auto* uc = ctx.clientRegistry.try_get<UnitComponent>(cit->second);
+                            if (!uc || uc->role != UnitRole::Worker) continue;
+                            WorkerAssignPacket apkt;
+                            apkt.workerNetId   = wNetId;
+                            apkt.resourceNetId = clickedResNetId;
+                            ctx.network.Send(apkt);
+                            spdlog::info("Commander: WORKER_ASSIGN worker={} -> resource={}",
+                                         wNetId, clickedResNetId);
+                        }
+                    }
+                }
+
+                if (!resourceClicked) {
+                    ctx.network.Send(pkt);
+                    spdlog::info("Commander: orderType={} to ({:.1f},{:.1f},{:.1f}) for {} units (targetNetId={})",
+                                 pkt.orderType, pkt.x, pkt.y, pkt.z, pkt.selectedCount, pkt.targetNetId);
+                }
             }
         }
     }
@@ -2314,11 +2364,9 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
     }
     ImGui::End();
 
-    // Resource stockpile HUD (top-right overlay). Both host and client read
-    // from m_ClientBaseInventories — the host populates it locally during
-    // SendInventoryUpdates, the client receives it via INVENTORY_UPDATE.
-    // Find this player's main base by walking the client registry.
+    // Resource stockpile HUD (top-right overlay).
     {
+        // Find inventory for this player's main base.
         const ResourceInventory* invToShow = nullptr;
         auto bView = ctx.clientRegistry.view<BuildingComponent, NetworkedComponent>();
         for (auto e : bView) {
@@ -2326,13 +2374,68 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             if (bc.teamId != m_MyPlayerId || bc.type != BuildingType::Main || bc.destroyed) continue;
             const auto& nc = bView.get<NetworkedComponent>(e);
             auto it = m_ClientBaseInventories.find(nc.netId);
-            if (it != m_ClientBaseInventories.end()) {
-                invToShow = &it->second;
-                break;
-            }
+            if (it != m_ClientBaseInventories.end()) { invToShow = &it->second; break; }
         }
         ResourceInventory empty{};
         ResourceHUD::DrawInventory(invToShow ? *invToShow : empty);
+
+        // Worker panel — separate overlay below the resource HUD.
+        constexpr ImGuiWindowFlags kWF =
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+
+        const float PAD = 10.f;
+        ImGuiIO& io = ImGui::GetIO();
+        // Position below the resource HUD (resource HUD is ~200px tall, leave gap).
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - PAD, 220.f),
+                                ImGuiCond_Always, ImVec2(1.f, 0.f));
+        ImGui::SetNextWindowBgAlpha(0.72f);
+        if (ImGui::Begin("##WorkerHUD", nullptr, kWF)) {
+            // Count own workers in client registry.
+            int workerCount = 0;
+            auto wView = ctx.clientRegistry.view<UnitComponent, HealthComponent>();
+            for (auto e : wView) {
+                auto& uc = wView.get<UnitComponent>(e);
+                auto& hc = wView.get<HealthComponent>(e);
+                if (uc.teamId == m_MyPlayerId && uc.role == UnitRole::Worker && !hc.dead)
+                    ++workerCount;
+            }
+            constexpr int kCap = 20;
+            ImGui::TextColored(ImVec4(0.7f,0.9f,0.7f,1.f), u8"\U0001F41C Arbeiter");
+            ImGui::SameLine();
+            ImGui::Text("%d / %d", workerCount, kCap);
+
+            // Get local player's BugClass for cost display.
+            BugClass localBc = BugClass::Ants;
+            {
+                auto pView = ctx.clientRegistry.view<PlayerComponent>();
+                for (auto e : pView) {
+                    auto& pc = pView.get<PlayerComponent>(e);
+                    if (pc.playerId == m_MyPlayerId) { localBc = pc.bugClass; break; }
+                }
+            }
+            ResourceType sig = GetSignatureResource(localBc);
+            int sigAmt = invToShow ? invToShow->Get(sig) : 0;
+            constexpr int kCost = 5;
+            bool canAfford = (sigAmt >= kCost) && (workerCount < kCap);
+
+            char label[64];
+            std::snprintf(label, sizeof(label), "Kaufen (5 %s)###BuyWorker",
+                          ResourceTypeName(sig));
+            if (!canAfford) ImGui::BeginDisabled();
+            if (ImGui::Button(label)) {
+                WorkerBuyPacket pkt;
+                ctx.network.Send(pkt);
+            }
+            if (!canAfford) ImGui::EndDisabled();
+
+            if (workerCount >= kCap)
+                ImGui::TextDisabled("  (Maximum erreicht)");
+            else if (!canAfford)
+                ImGui::TextDisabled("  (Brauche %d %s)", kCost, ResourceTypeName(sig));
+        }
+        ImGui::End();
     }
 
     // Map overlay + auto-attack (available to all clients with synced data)
@@ -2381,6 +2484,20 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         // Keyboard shortcut: G for auto-attack toggle.
         if ((ImGui::IsKeyPressed(ImGuiKey_G) || Input::IsKeyPressed(SDLK_G)) && !m_SelectedUnits.empty())
             toggleAutoAttack();
+
+        // S: stop / unassign selected workers (WORKER_ASSIGN with resourceNetId=0).
+        if ((ImGui::IsKeyPressed(ImGuiKey_S) || Input::IsKeyPressed(SDLK_S)) && !m_SelectedUnits.empty()) {
+            for (uint32_t wNetId : m_SelectedUnits) {
+                auto cit = m_ClientNetMap.find(wNetId);
+                if (cit == m_ClientNetMap.end()) continue;
+                auto* uc = ctx.clientRegistry.try_get<UnitComponent>(cit->second);
+                if (!uc || uc->role != UnitRole::Worker) continue;
+                WorkerAssignPacket apkt;
+                apkt.workerNetId   = wNetId;
+                apkt.resourceNetId = 0; // 0 = stop / return to commander
+                ctx.network.Send(apkt);
+            }
+        }
 
         ImGui::End();
 
@@ -2725,6 +2842,105 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                 }
             }
         }
+
+        // Worker assignments from clients: bind a worker to a resource node, or stop.
+        while (true) {
+            auto result = ctx.network.ReceiveFromClient<WorkerAssignPacket>(PacketType::WORKER_ASSIGN);
+            if (!result) break;
+            auto [pkt, senderPeer] = *result;
+            (void)senderPeer;
+
+            auto wit = m_ServerNetMap.find(pkt.workerNetId);
+            if (wit == m_ServerNetMap.end()) continue;
+            entt::entity worker = wit->second;
+            auto* cc = ctx.serverRegistry.try_get<CollectorComponent>(worker);
+            if (!cc) continue;
+            // Skip if the resourceNetId isn't actually a resource entity (or 0 = stop).
+            if (pkt.resourceNetId != 0) {
+                auto rit = m_ServerNetMap.find(pkt.resourceNetId);
+                if (rit == m_ServerNetMap.end()) continue;
+                if (!ctx.serverRegistry.any_of<ResourceComponent>(rit->second)) continue;
+            }
+            cc->assignedResourceNetId = pkt.resourceNetId;
+            // Reset cooldown and force a state re-evaluation on next tick.
+            cc->state = (pkt.resourceNetId == 0)
+                ? (cc->carryingLoad ? WorkerState::Returning : WorkerState::ReturningToCommander)
+                : WorkerState::GoingToResource;
+            // Mark any existing path as dirty so movement recomputes immediately.
+            if (auto* path = ctx.serverRegistry.try_get<PathComponent>(worker))
+                path->dirty = true;
+            spdlog::info("WORKER_ASSIGN: worker netId={} -> resource netId={}",
+                         pkt.workerNetId, pkt.resourceNetId);
+        }
+    }
+
+    // WORKER_BUY: client requests to purchase an additional worker.
+    if (ctx.network.IsHosting()) {
+        while (true) {
+            auto result = ctx.network.ReceiveFromClient<WorkerBuyPacket>(PacketType::WORKER_BUY);
+            if (!result) break;
+            auto [pkt, senderPeer] = *result;
+            (void)pkt;
+
+            // Resolve buyer's player entity from sender peer.
+            auto peerIt = m_PeerToNetId.find(senderPeer);
+            if (peerIt == m_PeerToNetId.end()) continue;
+            auto entIt = m_ServerNetMap.find(peerIt->second);
+            if (entIt == m_ServerNetMap.end()) continue;
+            entt::entity playerEnt = entIt->second;
+            auto* pc = ctx.serverRegistry.try_get<PlayerComponent>(playerEnt);
+            if (!pc) continue;
+            const uint32_t teamId = pc->playerId;
+            const BugClass bc     = pc->bugClass;
+
+            // Count living workers for this team.
+            constexpr int kWorkerCap = 20;
+            int workerCount = 0;
+            {
+                auto wView = ctx.serverRegistry.view<UnitComponent, HealthComponent>();
+                for (auto e : wView) {
+                    auto& uc = wView.get<UnitComponent>(e);
+                    auto& hc = wView.get<HealthComponent>(e);
+                    if (uc.teamId == teamId && uc.role == UnitRole::Worker && !hc.dead)
+                        ++workerCount;
+                }
+            }
+            if (workerCount >= kWorkerCap) {
+                spdlog::info("WORKER_BUY: team {} at cap ({}/{})", teamId, workerCount, kWorkerCap);
+                continue;
+            }
+
+            // Check and deduct signature resource cost.
+            constexpr int kWorkerCost = 5;
+            ResourceType sig = GetSignatureResource(bc);
+            entt::entity baseEnt = entt::null;
+            {
+                auto bView = ctx.serverRegistry.view<BaseComponent, ResourceInventory>();
+                for (auto e : bView) {
+                    if (bView.get<BaseComponent>(e).teamId == teamId) { baseEnt = e; break; }
+                }
+            }
+            if (baseEnt == entt::null) continue;
+            auto& baseInv = ctx.serverRegistry.get<ResourceInventory>(baseEnt);
+            if (baseInv.Get(sig) < kWorkerCost) {
+                spdlog::info("WORKER_BUY: team {} can't afford ({} {} needed)",
+                             teamId, kWorkerCost, ResourceTypeName(sig));
+                continue;
+            }
+            baseInv.Add(sig, -kWorkerCost);
+
+            // Spawn near commander.
+            auto& playerTf = ctx.serverRegistry.get<TransformComponent>(playerEnt);
+            float ang = (float)(workerCount % 8) * (6.2831853f / 8.f);
+            glm::vec3 spawnPos{
+                playerTf.position.x + std::cos(ang) * 4.f,
+                0.f,
+                playerTf.position.z + std::sin(ang) * 4.f
+            };
+            SpawnWorker(ctx, teamId, spawnPos, bc);
+            spdlog::info("WORKER_BUY: team {} bought worker ({}/{}) cost 5 {}",
+                         teamId, workerCount + 1, kWorkerCap, ResourceTypeName(sig));
+        }
     }
 
     if (ctx.network.IsConnected()) {
@@ -2982,7 +3198,7 @@ void GameScene::PollConnectionEvents(SceneContext& ctx) {
 }
 
 void GameScene::PollClientPackets(SceneContext& ctx) {
-    // Reset directControl flags and inputDir on all units at start of tick
+    // Reset directControl flags and inputDir on all units at start of tick.
     {
         auto uView = ctx.serverRegistry.view<MovementComponent, UnitComponent>();
         for (auto ue : uView) {
@@ -2991,6 +3207,15 @@ void GameScene::PollClientPackets(SceneContext& ctx) {
             uc.directControl = false;
             mv.inputDir = glm::vec3(0.f);
         }
+    }
+    // Also reset player entity inputDir — players don't have UnitComponent so
+    // the loop above skips them, and stale inputDir would cause indefinite drift
+    // via Systems::MovementSystem.
+    {
+        auto pView = ctx.serverRegistry.view<MovementComponent, PlayerComponent>(
+            entt::exclude<UnitComponent>);
+        for (auto pe : pView)
+            pView.get<MovementComponent>(pe).inputDir = glm::vec3(0.f);
     }
 
     while (true) {
@@ -3416,6 +3641,8 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, pkt->y, pkt->z});
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         ctx.clientRegistry.emplace<ModelComponent>(entity, modelPath);
+        // ResourceComponent tag lets the RMB picker find resource nodes by type.
+        ctx.clientRegistry.emplace<ResourceComponent>(entity, rtype, 1, true);
         m_ClientNetMap[pkt->netId] = entity;
     }
 
@@ -3888,6 +4115,7 @@ void GameScene::SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, B
 
     pos.y = GroundHeightAt(m_World, pos.x, pos.z);
     if (IsFlying(bc)) pos.y += 4.f;
+    else              pos.y += 0.3f; // workers have no physics body; lift half-height above ground
 
     float speed = IsClimber(bc) ? 6.f : 10.f;
 
@@ -5958,7 +6186,21 @@ void GameScene::SyncResourceSpawns(SceneContext& ctx)
 {
     if (!ctx.network.IsHosting()) return;
 
-    // Assign netIds to newly spawned resources (e.g. meat drops, respawned nodes)
+    // Maps a resource type to the model path used by the client renderer.
+    auto ResourceModelPath = [](ResourceType t) -> std::string {
+        switch (t) {
+            case ResourceType::Pilze:    return "assets/Mushroom_2.glb";
+            case ResourceType::Beeren:   return "assets/Watermelon_1.glb";
+            case ResourceType::Nektar:   return "assets/Plant_5.glb";
+            case ResourceType::Samen:    return "assets/Wheat_2.glb";
+            case ResourceType::Holz:     return "assets/WoodLog.glb";
+            case ResourceType::Insekten:
+            case ResourceType::Fleisch:  return "assets/prim_sphere_red.glb";
+            default:                     return "assets/cube.glb";
+        }
+    };
+
+    // Assign netIds to newly spawned resources (meat drops, nodes without one).
     auto view = ctx.serverRegistry.view<TransformComponent, ResourceComponent>();
     for (auto entity : view) {
         if (ctx.serverRegistry.try_get<NetworkedComponent>(entity))
@@ -5967,24 +6209,34 @@ void GameScene::SyncResourceSpawns(SceneContext& ctx)
         uint32_t netId = m_NextNetId++;
         ctx.serverRegistry.emplace<NetworkedComponent>(entity, netId);
         m_ResourceNetMap[netId] = entity;
-        m_ServerNetMap[netId]   = entity; // also tracked for snapshots
+        m_ServerNetMap[netId]   = entity;
 
         auto& res = view.get<ResourceComponent>(entity);
         auto& tf  = view.get<TransformComponent>(entity);
 
         ResourceSpawnedPacket pkt;
-        pkt.netId = netId;
+        pkt.netId        = netId;
         pkt.resourceType = static_cast<uint8_t>(res.type);
         pkt.x = tf.position.x;
         pkt.y = tf.position.y;
         pkt.z = tf.position.z;
         ctx.network.BroadcastToAll(pkt);
 
+        // Host-local mirror — BroadcastToAll doesn't loop back to the host's client.
+        if (!m_ClientNetMap.count(netId)) {
+            auto ce = ctx.clientRegistry.create();
+            ctx.clientRegistry.emplace<TransformComponent>(ce, tf.position);
+            ctx.clientRegistry.emplace<NetworkedComponent>(ce, netId);
+            ctx.clientRegistry.emplace<ModelComponent>(ce, ResourceModelPath(res.type));
+            ctx.clientRegistry.emplace<ResourceComponent>(ce, res.type, 1, true);
+            m_ClientNetMap[netId] = ce;
+        }
+
         spdlog::debug("Resource synced: netId={} type={} at ({:.1f},{:.1f},{:.1f})",
                       netId, (int)res.type, tf.position.x, tf.position.y, tf.position.z);
     }
 
-    // Detect depleted or destroyed resources and broadcast removal
+    // Detect depleted or destroyed resources and broadcast removal.
     std::vector<uint32_t> toRemove;
     for (auto& [netId, entity] : m_ResourceNetMap) {
         if (!ctx.serverRegistry.valid(entity)) {
@@ -5992,15 +6244,36 @@ void GameScene::SyncResourceSpawns(SceneContext& ctx)
             continue;
         }
         auto* res = ctx.serverRegistry.try_get<ResourceComponent>(entity);
-        if (res && res->depleted) {
+        if (res && res->depleted)
             toRemove.push_back(netId);
-        }
     }
     for (uint32_t netId : toRemove) {
-        ResourceDepletedPacket pkt;
-        pkt.netId = netId;
-        ctx.network.BroadcastToAll(pkt);
+        ResourceDepletedPacket dpkt;
+        dpkt.netId = netId;
+        ctx.network.BroadcastToAll(dpkt);
+
+        // Host-local mirror.
+        {
+            auto it = m_ClientNetMap.find(netId);
+            if (it != m_ClientNetMap.end()) {
+                ctx.clientRegistry.destroy(it->second);
+                m_ClientNetMap.erase(it);
+            }
+        }
+
+        // For permanent nodes: strip NetworkedComponent so the entity gets a
+        // fresh netId and RESOURCE_SPAWNED re-broadcast when it respawns.
+        auto mapIt = m_ResourceNetMap.find(netId);
+        if (mapIt != m_ResourceNetMap.end()) {
+            entt::entity ent = mapIt->second;
+            if (ctx.serverRegistry.valid(ent)) {
+                auto* res = ctx.serverRegistry.try_get<ResourceComponent>(ent);
+                if (res && res->permanent)
+                    ctx.serverRegistry.remove<NetworkedComponent>(ent);
+            }
+        }
         m_ResourceNetMap.erase(netId);
+        m_ServerNetMap.erase(netId);
     }
 }
 

@@ -5,8 +5,10 @@
 
 #include "ResourceManager.h"
 #include "Components.h"
+#include "Bug_classes.h"
 #include <spdlog/spdlog.h>
 #include <random>
+#include <cmath>
 
 // ---------------------------------------------------------------------------
 // Init – define all permanent spawn points for the map
@@ -55,42 +57,73 @@ void ResourceManager::Init()
 // GenerateForWorld – procedurally distribute spawn points across the map
 // ---------------------------------------------------------------------------
 
-void ResourceManager::GenerateForWorld(float worldExtent, uint32_t seed)
+void ResourceManager::GenerateForWorld(const WorldManager& world, uint32_t seed)
 {
     m_SpawnPoints.clear();
 
-    // Per-type counts and respawn timings. Holz is the heaviest because it
-    // drives universal base upgrades; cooldown is short so workers can keep
-    // chopping. Insekten is rare/slow on purpose (high-value carnivore food).
-    struct TypeSpec {
-        ResourceType type;
-        int          count;
-        int          amount;
-        float        respawn;
-    };
-    const TypeSpec specs[] = {
-        { ResourceType::Holz,     90, 5, 10.f },
-        { ResourceType::Pilze,    35, 3, 25.f },
-        { ResourceType::Beeren,   35, 4, 25.f },
-        { ResourceType::Nektar,   25, 3, 30.f },
-        { ResourceType::Samen,    35, 4, 20.f },
-        { ResourceType::Insekten, 20, 2, 45.f },
-    };
-
+    const float worldExtent = world.GetConfig().worldExtent;
     std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> dist(-worldExtent, worldExtent);
+    std::uniform_real_distribution<float> global(-worldExtent, worldExtent);
 
-    for (const auto& s : specs) {
-        for (int i = 0; i < s.count; ++i) {
-            // Y is finalised when the node spawns (snapped to terrain there).
+    // Helper: scatter `count` nodes of type within `radius` world units of centre.
+    auto scatter = [&](glm::vec2 centre, float radius,
+                       ResourceType type, int amount, float respawn, int count)
+    {
+        std::uniform_real_distribution<float> angle(0.f, 6.2831853f);
+        std::uniform_real_distribution<float> r(0.f, 1.f);
+        for (int i = 0; i < count; ++i) {
+            float a = angle(rng);
+            float d = radius * std::sqrt(r(rng)); // uniform area distribution
             m_SpawnPoints.push_back({
-                glm::vec3{ dist(rng), 0.f, dist(rng) },
-                s.type, s.amount, s.respawn
+                glm::vec3{ centre.x + std::cos(a) * d, 0.f, centre.y + std::sin(a) * d },
+                type, amount, respawn
             });
         }
+    };
+
+    // -----------------------------------------------------------------------
+    // 1. Holz: universal upgrade currency — dense random scatter everywhere.
+    // -----------------------------------------------------------------------
+    for (int i = 0; i < 80; ++i)
+        m_SpawnPoints.push_back({ glm::vec3{global(rng), 0.f, global(rng)}, ResourceType::Holz, 5, 10.f });
+
+    // -----------------------------------------------------------------------
+    // 2. Signature resources: 5 nodes per territory, centred on the faction's
+    //    biome spawn point.  Each faction's signature resource therefore sits
+    //    naturally inside its home territory so workers don't have to cross the
+    //    whole map to find what their base needs.
+    // -----------------------------------------------------------------------
+    const float SIG_RADIUS = 35.f; // spread within ~35u of the territory centre
+    for (const auto& td : world.GetTerrains()) {
+        ResourceType sig = GetSignatureResource(td.bugClass);
+        if (sig == ResourceType::Holz || sig == ResourceType::None) continue; // already covered
+        // respawn and amount by type
+        int   amt     = 3;
+        float respawn = 25.f;
+        if (sig == ResourceType::Nektar)   { amt = 2; respawn = 30.f; }
+        if (sig == ResourceType::Insekten) { amt = 2; respawn = 45.f; }
+        if (sig == ResourceType::Pilze)    { amt = 3; respawn = 25.f; }
+        if (sig == ResourceType::Beeren)   { amt = 4; respawn = 22.f; }
+        if (sig == ResourceType::Samen)    { amt = 4; respawn = 20.f; }
+        scatter(td.spawnPoint, SIG_RADIUS, sig, amt, respawn, 5);
     }
 
-    spdlog::info("[ResourceManager] Generated {} spawn points across {}x{} map.",
+    // -----------------------------------------------------------------------
+    // 3. Global sparse fallback so every resource type exists everywhere even
+    //    when a type has no matching faction on this map.
+    // -----------------------------------------------------------------------
+    const struct { ResourceType type; int n; int amt; float resp; } fallback[] = {
+        { ResourceType::Pilze,    12, 3, 25.f },
+        { ResourceType::Beeren,   12, 4, 22.f },
+        { ResourceType::Nektar,    8, 2, 30.f },
+        { ResourceType::Samen,    12, 4, 20.f },
+        { ResourceType::Insekten,  6, 2, 45.f },
+    };
+    for (const auto& f : fallback)
+        for (int i = 0; i < f.n; ++i)
+            m_SpawnPoints.push_back({ glm::vec3{global(rng), 0.f, global(rng)}, f.type, f.amt, f.resp });
+
+    spdlog::info("[ResourceManager] Generated {} spawn points (biome-aware) across {}x{} map.",
                  m_SpawnPoints.size(), (int)(worldExtent * 2), (int)(worldExtent * 2));
 }
 
