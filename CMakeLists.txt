@@ -50,7 +50,7 @@ add_definitions(-DGLM_FORCE_DEPTH_ZERO_TO_ONE)
 # Force re-run for new source files
 file(GLOB_RECURSE BUGMIN_SOURCES "src/*.cpp" "src/*.hpp" "src/*.h")
 add_executable(Bugmin ${BUGMIN_SOURCES})
-
+target_compile_options(Bugmin PRIVATE -Wa,-mbig-obj)
 target_link_libraries(Bugmin PRIVATE
         SDL3::SDL3
         imgui_lib
@@ -176,12 +176,14 @@ if(GLSLANG_VALIDATOR)
         $<TARGET_FILE_DIR:Bugmin>/shaders
     )
 
-    # Copy assets to executable directory on build
-    add_custom_command(TARGET Bugmin POST_BUILD
+    # Eigenes "immer ausführen"-Target damit Assets auch ohne C++-Änderung kopiert werden
+    add_custom_target(CopyAssets ALL
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Assets
         $<TARGET_FILE_DIR:Bugmin>/assets
+        COMMENT "Kopiere Assets (src/Assets -> assets/) ..."
     )
+    add_dependencies(Bugmin CopyAssets)
 else()
     message(WARNING "glslangValidator not found! Shaders will not be compiled automatically.")
 endif()

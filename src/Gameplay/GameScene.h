@@ -168,6 +168,9 @@ private:
     /** @brief Spawns a worker (scaled-down collector unit) on the server and broadcasts to clients. */
     void SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bugClass, float hp = 50.f);
 
+    /** @brief Spawns a collector unit (unit + CollectorComponent) on the server. */
+    void SpawnCollector(SceneContext& ctx, uint32_t teamId, glm::vec3 pos);
+
     /** @brief Spawns a building on the server and broadcasts to clients. */
     entt::entity SpawnBuilding(SceneContext& ctx, BuildingType type, uint32_t teamId,
                                glm::vec3 pos, uint32_t tier = 1,

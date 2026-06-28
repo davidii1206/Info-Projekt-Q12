@@ -25,6 +25,7 @@
 #include "FogOfWar.h"
 #include "TerritorySystem.h"
 #include "HUDTextureRegistry.h"
+#include "BuildingTextureRegistry.h"
 #include "../Graphics/API/Shader.h"
 #include "../Graphics/API/GraphicsPipeline.h"
 #include "../Graphics/API/Framebuffer.h"
@@ -145,6 +146,63 @@ static bool IsAABBVisible(const glm::vec3& aabbMin, const glm::vec3& aabbMax,
             return false;
     }
     return true;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Resource / cost helpers (translation-unit-internal)
+// ---------------------------------------------------------------------------
+namespace {
+
+/// Finds the first ResourceInventory owned by the given team (prefers Main).
+ResourceInventory* GetTeamInventory(entt::registry& reg, uint32_t teamId)
+{
+    auto bldView = reg.view<BuildingComponent, ResourceInventory>();
+    for (auto e : bldView) {
+        const auto& bc = bldView.get<BuildingComponent>(e);
+        if (bc.teamId == teamId && bc.type == BuildingType::Main && !bc.destroyed)
+            return &bldView.get<ResourceInventory>(e);
+    }
+    for (auto e : bldView) {
+        const auto& bc = bldView.get<BuildingComponent>(e);
+        if (bc.teamId == teamId && !bc.destroyed)
+            return &bldView.get<ResourceInventory>(e);
+    }
+    return nullptr;
+}
+
+/// Initial construction cost for a general building type (not upgrade costs).
+ResourceInventory GetBuildingBaseCost(BuildingType type)
+{
+    ResourceInventory c{};
+    switch (type) {
+        case BuildingType::Barracks:   c.pilze  = 10; c.samen   =  8; break;
+        case BuildingType::Storage:    c.pilze  = 15; c.beeren  =  5; break;
+        case BuildingType::Upgrade:    c.samen  = 15; c.pilze   = 10; break;
+        case BuildingType::Conversion: c.nektar = 15; c.beeren  =  8; break;
+        case BuildingType::Defense:    c.pilze  = 20; c.samen   =  5; break;
+        case BuildingType::Attack:     c.fleisch= 10; c.samen   = 10; break;
+        case BuildingType::Outpost:    c.pilze  =  8; c.nektar  =  8; break;
+        default: break; // Main / Special: no construction cost
+    }
+    return c;
+}
+
+/// True when inv can cover cost.
+bool CanAfford(const ResourceInventory& inv, const ResourceInventory& cost)
+{
+    return inv.pilze    >= cost.pilze    && inv.beeren   >= cost.beeren  &&
+           inv.nektar   >= cost.nektar   && inv.samen    >= cost.samen   &&
+           inv.insekten >= cost.insekten && inv.fleisch  >= cost.fleisch;
+}
+
+/// Subtracts cost from inv. Caller must have verified CanAfford() first.
+void Deduct(ResourceInventory& inv, const ResourceInventory& cost)
+{
+    inv.pilze    -= cost.pilze;    inv.beeren   -= cost.beeren;
+    inv.nektar   -= cost.nektar;   inv.samen    -= cost.samen;
+    inv.insekten -= cost.insekten; inv.fleisch  -= cost.fleisch;
 }
 
 } // namespace
@@ -490,6 +548,12 @@ void GameScene::OnEnter(SceneContext& ctx) {
                       m_World.GetGridSize());
     }
 
+    // HUD- und Gebäude-Texturen auf allen Peers laden (Host + Clients)
+    if (ctx.renderer) {
+        HUDTextures::Load(ctx.renderer->GetDevice());
+        BuildingTextures::Load(ctx.renderer->GetDevice());
+    }
+
     if (ctx.network.IsHosting()) {
         // NOTE: building a Jolt MeshShape over the full terrain (~3M vertices on
         // a 750x750 map) takes 25+ seconds and can OOM. Skip it for now; ground
@@ -533,9 +597,6 @@ void GameScene::OnEnter(SceneContext& ctx) {
 
         // Territory zones — derived from the tile grid
         TerritorySystem::SpawnZones(ctx.serverRegistry, m_World);
-
-        // HUD-Texturen laden (Pixel-Art-Icons des HUD-Designers)
-        HUDTextures::Load(ctx.renderer->GetDevice());
 
         // -----------------------------------------------------------------
         // Spawn MainBase at a unique territory for each connected player.
@@ -815,8 +876,9 @@ void GameScene::OnExit(SceneContext& ctx) {
     m_ClientBaseInventories.clear();
     m_ResourceNetMap.clear();
 
-    // HUD-Texturen freigeben
+    // HUD- und Gebäude-Texturen freigeben
     HUDTextures::Unload();
+    BuildingTextures::Unload();
 
     ctx.world->ClearPhysicsState();
     
@@ -855,7 +917,9 @@ struct alignas(16) FragPC {
     float alpha;
     float blocksView;
     float fogEnabled;
-    float _pad0, _pad1, _pad2;
+    float buildProgress;
+    float damageState;
+    float tribeIndex;
     glm::vec4 ghostPos;
     glm::vec4 tintColor;
 };
@@ -907,7 +971,7 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
     // ------------------------------------------------------------------
     if (!m_ModelPipeline) {
         ShaderResourceLayout vertLayout = {0, 0, 2, 1}; // 2 SSBOs: GlobalUniforms + InstanceTransforms
-        ShaderResourceLayout fragLayout = {3, 0, 2, 1}; // 3 samplers: baseColor(0), shadowMap(1), fogTexture(2); 2 storage buffers at 3,4
+        ShaderResourceLayout fragLayout = {4, 0, 2, 1}; // samplers 0-3 (base,shadow,fog,construction) + SSBOs 4,5 (globals,materials)
 
         m_VertShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.vert", ShaderStage::Vertex, vertLayout);
         m_FragShader = std::make_unique<Shader>(renderer->GetDevice(), "shaders/model.frag", ShaderStage::Fragment, fragLayout);
@@ -1233,6 +1297,16 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
         if (m_FogTexture)
             renderCtx.BindFragmentTexture(2, m_FogTexture.get());
 
+        // Slot 3 muss IMMER gebunden sein – der Shader sampelt constructionSheet (binding 3) beim Bau-Fortschritt.
+        {
+            auto constructionSheet = BuildingTextures::Get().GetConstructionSheet();
+            auto sheetTex = (constructionSheet && constructionSheet->GetHandle())
+                            ? constructionSheet
+                            : AssetManager::GetFallbackTexture();
+            if (sheetTex)
+                renderCtx.BindFragmentTexture(3, sheetTex.get());
+        }
+
         // Frustum planes for main camera (cull chunks outside the viewport)
         FrustumPlane camFrustum[6];
         if (m_Camera) {
@@ -1292,6 +1366,26 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             const auto& allSections  = sceneData.model->GetSections();
             const auto& allMaterials = sceneData.model->GetMaterials();
 
+            auto* bldComp = ctx.clientRegistry.try_get<BuildingComponent>(entity);
+            auto* constrComp = ctx.clientRegistry.try_get<ConstructionComponent>(entity);
+            auto* healthComp = ctx.clientRegistry.try_get<HealthComponent>(entity);
+
+            float buildProgress = 1.f;
+            if (constrComp && constrComp->duration > 0.f)
+                buildProgress = std::min(constrComp->elapsed / constrComp->duration, 1.f);
+
+            float damageState = 0.f;
+            float tribeIndex = 0.f;
+            std::shared_ptr<Texture> buildingTex;
+            if (bldComp) {
+                const float hp = healthComp ? healthComp->hp : bldComp->hp;
+                const auto dmg = GetBuildingDamageState(hp, bldComp->maxHp);
+                damageState = static_cast<float>(static_cast<uint8_t>(dmg));
+                tribeIndex = static_cast<float>(static_cast<uint8_t>(bldComp->ownerClass));
+                buildingTex = BuildingTextures::Get().GetTexture(
+                    bldComp->ownerClass, bldComp->type, bldComp->specialType, dmg);
+            }
+
             for (const auto& instance : sceneData.meshInstances) {
                 struct ModelPC { glm::mat4 model; } modelPC;
                 glm::mat4 entityMat = glm::translate(glm::mat4(1.0f), transform.position) *
@@ -1308,16 +1402,19 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                     fpc.alpha  = 1.0f;
                     fpc.blocksView = 0.f;
                     fpc.fogEnabled = isTerrainChunk ? 1.f : 0.f;
-                    fpc._pad0 = fpc._pad1 = fpc._pad2 = 0.f;
+                    fpc.buildProgress = buildProgress;
+                    fpc.damageState = damageState;
+                    fpc.tribeIndex = tribeIndex;
                     fpc.ghostPos   = glm::vec4(0.f);
                     fpc.tintColor  = glm::vec4(1.f);
                     renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
 
-                    if (section.materialIndex < allMaterials.size()) {
-                        auto tex = allMaterials[section.materialIndex].baseColorTexture;
-                        if (!tex) tex = AssetManager::GetFallbackTexture();
-                        renderCtx.BindFragmentTexture(0, tex.get());
-                    }
+                    std::shared_ptr<Texture> tex;
+                    if (buildingTex) tex = buildingTex;
+                    else if (section.materialIndex < allMaterials.size())
+                        tex = allMaterials[section.materialIndex].baseColorTexture;
+                    if (!tex) tex = AssetManager::GetFallbackTexture();
+                    renderCtx.BindFragmentTexture(0, tex.get());
                     renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
                 }
             }
@@ -1331,6 +1428,27 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
             if (ghostTf && ghostMc) {
                 auto gSceneData = AssetManager::LoadGLTF(ghostMc->modelPath);
                 if (gSceneData.model) {
+                    BugClass ghostTribe = BugClass::Termites;
+                    BuildingType ghostType = BuildingType::Main;
+                    SpecialBuildingType ghostSpecial = SpecialBuildingType::NectarRefinery;
+                    if (m_SelectedBuildingType >= 0)
+                        ghostType = static_cast<BuildingType>(m_SelectedBuildingType);
+                    else if (m_SelectedBuildingType < 0)
+                        ghostType = BuildingType::Special;
+                    ghostSpecial = m_SelectedSpecialBuilding;
+                    {
+                        auto pView = ctx.clientRegistry.view<PlayerComponent>();
+                        for (auto pe : pView) {
+                            const auto& pc = pView.get<PlayerComponent>(pe);
+                            if (pc.isLocal && pc.bugClass != BugClass::None) {
+                                ghostTribe = pc.bugClass;
+                                break;
+                            }
+                        }
+                    }
+                    auto ghostBuildingTex = BuildingTextures::Get().GetTexture(
+                        ghostTribe, ghostType, ghostSpecial, BuildingDamageState::Healthy);
+
                     renderCtx.BindPipeline(m_GhostPipeline);
                     renderCtx.BindVertexStorageBuffer(0, renderer->GetGlobalUBO());
                     renderCtx.BindFragmentStorageBuffer(0, renderer->GetGlobalUBO());
@@ -1363,16 +1481,18 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                             gfpc.alpha  = 0.35f;
                             gfpc.blocksView = 0.f;
                             gfpc.fogEnabled = 0.f;
-                            gfpc._pad0 = gfpc._pad1 = gfpc._pad2 = 0.f;
+                            gfpc.buildProgress = 1.f;
+                            gfpc.damageState = 0.f;
+                            gfpc.tribeIndex = static_cast<float>(static_cast<uint8_t>(ghostTribe));
                             gfpc.ghostPos   = glm::vec4(0.f);
                             gfpc.tintColor  = m_PlacementValid ? glm::vec4(1.f) : glm::vec4(1.f, 0.f, 0.f, 1.f);
                             renderCtx.PushFragmentConstants(0, &gfpc, sizeof(FragPC));
 
-                            if (section.materialIndex < gMaterials.size()) {
-                                auto tex = gMaterials[section.materialIndex].baseColorTexture;
-                                if (!tex) tex = AssetManager::GetFallbackTexture();
-                                renderCtx.BindFragmentTexture(0, tex.get());
-                            }
+                            std::shared_ptr<Texture> tex = ghostBuildingTex;
+                            if (!tex && section.materialIndex < gMaterials.size())
+                                tex = gMaterials[section.materialIndex].baseColorTexture;
+                            if (!tex) tex = AssetManager::GetFallbackTexture();
+                            renderCtx.BindFragmentTexture(0, tex.get());
                             renderCtx.DrawIndexed(section.indexCount, 1, section.firstIndex);
                         }
                     }
@@ -1415,7 +1535,9 @@ void GameScene::Render(SceneContext& ctx, Renderer* renderer) {
                     fpc.alpha  = 1.0f;
                     fpc.blocksView = blocksView ? 1.f : 0.f;
                     fpc.fogEnabled = 0.f;
-                    fpc._pad0 = fpc._pad1 = fpc._pad2 = 0.f;
+                    fpc.buildProgress = 1.f;
+                    fpc.damageState = 0.f;
+                    fpc.tribeIndex = 0.f;
                     fpc.ghostPos   = blocksView ? glm::vec4(m_FadeCenter, 0.f) : glm::vec4(0.f);
                     fpc.tintColor  = glm::vec4(1.f);
                     renderCtx.PushFragmentConstants(0, &fpc, sizeof(FragPC));
@@ -1720,16 +1842,29 @@ void GameScene::LogicUpdate(SceneContext& ctx, float dt) {
                 if (Input::IsMouseButtonPressed(SDL_BUTTON_LEFT) &&
                     !ImGui::GetIO().WantCaptureMouse && ctx.network.IsHosting() &&
                     m_PlacementValid) {
-                    // Team 0 for host, TODO: proper team assignment
-                    uint32_t placeTeam = 0;
+                    uint32_t placeTeam = m_MyPlayerId;
+                    auto* teamInv = GetTeamInventory(ctx.serverRegistry, placeTeam);
                     if (m_SelectedBuildingType >= 0) {
-                        SpawnBuilding(ctx, static_cast<BuildingType>(m_SelectedBuildingType),
-                                      placeTeam, worldPos);
+                        auto bType = static_cast<BuildingType>(m_SelectedBuildingType);
+                        auto cost  = GetBuildingBaseCost(bType);
+                        // Main building is free; others cost resources
+                        bool free = (bType == BuildingType::Main);
+                        if (free || !teamInv || CanAfford(*teamInv, cost)) {
+                            if (!free && teamInv) Deduct(*teamInv, cost);
+                            SpawnBuilding(ctx, bType, placeTeam, worldPos);
+                        } else {
+                            spdlog::warn("GameScene: zu wenig Ressourcen fuer Gebaeude Typ {}", (int)bType);
+                        }
                     } else if (m_PlacementActive) {
-                        // Special building
+                        // Special building – costs from SpecialBuildingInfo
                         auto info = GetSpecialBuildingInfo(m_SelectedSpecialBuilding);
-                        SpawnBuilding(ctx, BuildingType::Special, placeTeam, worldPos,
-                                      1, "assets/cube.glb", m_SelectedSpecialBuilding);
+                        if (!teamInv || CanAfford(*teamInv, info.buildCost)) {
+                            if (teamInv) Deduct(*teamInv, info.buildCost);
+                            SpawnBuilding(ctx, BuildingType::Special, placeTeam, worldPos,
+                                          1, "assets/cube.glb", m_SelectedSpecialBuilding);
+                        } else {
+                            spdlog::warn("GameScene: zu wenig Ressourcen fuer Spezialgebaeude");
+                        }
                     }
                 }
 
@@ -2211,15 +2346,28 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
         };
 
         ImGui::Text("Gebaeude platzieren:");
+        auto* teamInvBld = ctx.network.IsHosting()
+                           ? GetTeamInventory(ctx.serverRegistry, m_MyPlayerId) : nullptr;
         for (int i = 0; i < (int)(sizeof(placeableBlds)/sizeof(placeableBlds[0])); i++) {
+            auto cost = GetBuildingBaseCost(placeableBlds[i].type);
+            bool affordable = !teamInvBld || CanAfford(*teamInvBld, cost);
             bool active = (m_PlacementActive &&
                            m_SelectedBuildingType == static_cast<int>(placeableBlds[i].type));
-            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
+            if      (active)      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.f));
+            else if (!affordable) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.2f, 0.2f, 1.f));
             if (ImGui::Button(placeableBlds[i].name)) {
                 if (active) CancelPlacement(ctx);
                 else        EnterPlacementMode(ctx, placeableBlds[i].type);
             }
-            if (active) ImGui::PopStyleColor();
+            if (active || !affordable) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) {
+                char tipBuf[128];
+                snprintf(tipBuf, sizeof(tipBuf),
+                         "Kosten: %dP  %dB  %dN  %dS  %dI  %dF",
+                         cost.pilze, cost.beeren, cost.nektar,
+                         cost.samen, cost.insekten, cost.fleisch);
+                ImGui::SetTooltip("%s", tipBuf);
+            }
             if ((i + 1) % 3 != 0) ImGui::SameLine();
         }
 
@@ -2334,19 +2482,37 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                     float pct = 1.f - (job.total > 0.f ? job.timer / job.total : 0.f);
                     ImGui::ProgressBar(pct, ImVec2(180, 0));
                 }
-                if (ImGui::Button("Ausbilden")) {
-                    if (barr.queue.size() < barr.maxQueueSize) {
-                        BarracksComponent::SpawnJob j;
-                        j.tier  = 1;
-                        j.total = 4.f;      // 4 s to produce
-                        j.timer = j.total;
-                        barr.queue.push_back(j);
+                {
+                    auto* inv = GetTeamInventory(ctx.serverRegistry, myTeam);
+                    // Kampfeinheit: 8 Fleisch + 4 Nektar
+                    ResourceInventory unitCost{}; unitCost.fleisch = 8; unitCost.nektar = 4;
+                    bool canUnit = !inv || CanAfford(*inv, unitCost);
+                    if (!canUnit) ImGui::BeginDisabled();
+                    if (ImGui::Button("Ausbilden (8F+4N)")) {
+                        if (barr.queue.size() < barr.maxQueueSize) {
+                            if (inv) Deduct(*inv, unitCost);
+                            BarracksComponent::SpawnJob j;
+                            j.tier  = 1;
+                            j.total = 4.f;
+                            j.timer = j.total;
+                            barr.queue.push_back(j);
+                        }
                     }
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Sofort (Cheat)")) {
-                    // Bypass the queue: spawn one unit immediately at the building.
-                    SpawnUnit(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f), bc.ownerClass);
+                    if (!canUnit) ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    // Sammler: 5 Pilze + 3 Samen
+                    ResourceInventory collCost{}; collCost.pilze = 5; collCost.samen = 3;
+                    bool canColl = !inv || CanAfford(*inv, collCost);
+                    if (!canColl) ImGui::BeginDisabled();
+                    if (ImGui::Button("Sammler (5P+3S)")) {
+                        if (inv) Deduct(*inv, collCost);
+                        SpawnCollector(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f));
+                    }
+                    if (!canColl) ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    if (ImGui::Button("Sofort (Cheat)")) {
+                        SpawnUnit(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f), bc.ownerClass);
+                    }
                 }
                 ImGui::PopID();
             }
@@ -3548,7 +3714,7 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
                     }
                 }
             }
-            
+
             // Check for Totenkopfschwärmer triggering a heal or pollen visual
             auto* uc = ctx.clientRegistry.try_get<UnitComponent>(entity);
             auto* tf = ctx.clientRegistry.try_get<TransformComponent>(entity);
@@ -3580,6 +3746,9 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
 
             hc->hp = pkt->hp;
         }
+        // Sync HP on buildings (newest-version addition)
+        if (auto* bc = ctx.clientRegistry.try_get<BuildingComponent>(entity))
+            bc->hp = pkt->hp;
     }
 
     // Territory snapshot
@@ -3702,11 +3871,23 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
         float startY  = targetY - 0.5f;
         auto bType = static_cast<BuildingType>(pkt->buildingType);
         auto sType = static_cast<SpecialBuildingType>(pkt->specialType);
+        BugClass ownerClass = BugClass::Termites;
+        {
+            auto pView = ctx.clientRegistry.view<PlayerComponent>();
+            for (auto pe : pView) {
+                const auto& pc = pView.get<PlayerComponent>(pe);
+                if (pc.playerId == pkt->teamId && pc.bugClass != BugClass::None) {
+                    ownerClass = pc.bugClass;
+                    break;
+                }
+            }
+        }
         ctx.clientRegistry.emplace<TransformComponent>(entity, glm::vec3{pkt->x, startY, pkt->z});
         ctx.clientRegistry.emplace<NetworkedComponent>(entity, pkt->netId);
         ctx.clientRegistry.emplace<ModelComponent>(entity, std::string("assets/cube.glb"));
-        ctx.clientRegistry.emplace<BuildingComponent>(entity,
+        auto& bld = ctx.clientRegistry.emplace<BuildingComponent>(entity,
             BuildingComponent{bType, pkt->teamId, pkt->tier, sType, pkt->hp, pkt->maxHp, false});
+        bld.ownerClass = ownerClass;
         if (bType == BuildingType::Special)
             ctx.clientRegistry.emplace<SpecialBuildingComponent>(entity, sType);
         ctx.clientRegistry.emplace<ConstructionComponent>(entity,
@@ -4042,6 +4223,10 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
         speed *= 0.6f;
     }
 
+    // Scale stats by completed upgrades for this team
+    dmg *= UpgradeSystem::GetUnitDamageMul(teamId);
+    hp  *= UpgradeSystem::GetUnitDefenseMul(teamId);
+
     const uint32_t netId = m_NextNetId++;
     auto e = ctx.serverRegistry.create();
     
@@ -4228,20 +4413,18 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
 
     // Attach type-specific components
     switch (type) {
-        case BuildingType::Main:
-        case BuildingType::Storage: {
+        case BuildingType::Main: {
             auto& inv = ctx.serverRegistry.emplace<ResourceInventory>(e);
-            // Tag the Main (and Storage) as a deposit destination for collectors.
-            ctx.serverRegistry.emplace<BaseComponent>(e, BaseComponent{teamId});
-            if (type == BuildingType::Main) {
-                // Starting stockpile: 20 Holz + 20 of the team's signature resource.
-                // 20 Holz lets the player upgrade their base once before chopping;
-                // 20 signature lets them buy 4 extra workers right away (cost 5 each).
-                inv.holz = 20;
-                inv.Add(GetSignatureResource(ownerClass), 20);
-            }
-            if (type == BuildingType::Storage)
-                ctx.serverRegistry.emplace<StorageComponent>(e);
+            // BaseComponent marks this as the deposit target for collectors
+            ctx.serverRegistry.emplace<BaseComponent>(e, teamId);
+            // Starting stockpile: 20 Holz + 20 of the team's signature resource.
+            inv.holz = 20;
+            inv.Add(GetSignatureResource(ownerClass), 20);
+            break;
+        }
+        case BuildingType::Storage: {
+            ctx.serverRegistry.emplace<ResourceInventory>(e);
+            ctx.serverRegistry.emplace<StorageComponent>(e);
             break;
         }
         case BuildingType::Barracks:
@@ -4251,6 +4434,23 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
             // Diet-aware default conversion recipe
             auto conv = BuildingSystem::GetDefaultConversion(ownerClass);
             ctx.serverRegistry.emplace<ConversionComponent>(e, conv);
+            break;
+        }
+        case BuildingType::Defense:
+            // Defensive turret: tanky, moderate damage, slow fire rate
+            ctx.serverRegistry.emplace<CombatComponent>(e,
+                CombatComponent{10.f, 20.f * data.attackDmgMul, 0.f, 3.f, entt::null, false});
+            break;
+        case BuildingType::Attack:
+            // Offensive turret: shorter range, higher damage, faster fire rate
+            ctx.serverRegistry.emplace<CombatComponent>(e,
+                CombatComponent{8.f, 30.f * data.attackDmgMul, 0.f, 2.f, entt::null, false});
+            break;
+        case BuildingType::Outpost: {
+            // Reveal fog for the owning team in a wide radius
+            auto fogIt = m_TeamFogs.find(teamId);
+            if (fogIt != m_TeamFogs.end())
+                fogIt->second.Reveal(pos, 30.f);
             break;
         }
         case BuildingType::Special:
@@ -4289,6 +4489,7 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
         ctx.clientRegistry.emplace<ModelComponent>(ce, model);
         ctx.clientRegistry.emplace<BuildingComponent>(ce,
             BuildingComponent{type, teamId, tier, specialType, hp, hp, false});
+        ctx.clientRegistry.get<BuildingComponent>(ce).ownerClass = ownerClass;
         if (type == BuildingType::Special)
             ctx.clientRegistry.emplace<SpecialBuildingComponent>(ce, specialType);
         ctx.clientRegistry.emplace<ConstructionComponent>(ce,
@@ -5535,6 +5736,52 @@ void GameScene::UpdateCombat(SceneContext& ctx, float dt)
         }
     }
 
+    // Defense and Attack buildings auto-attack the nearest enemy unit in range (turret logic).
+    {
+        auto turretView = ctx.serverRegistry.view<TransformComponent, BuildingComponent, CombatComponent>();
+        for (auto e : turretView) {
+            auto& bc = turretView.get<BuildingComponent>(e);
+            auto& tf = turretView.get<TransformComponent>(e);
+            auto& cc = turretView.get<CombatComponent>(e);
+            if (bc.destroyed) continue;
+
+            if (cc.attackCooldown > 0.f) { cc.attackCooldown -= dt; continue; }
+
+            // Find nearest enemy unit in range
+            float    bestDist   = cc.attackRange;
+            entt::entity bestTarget = entt::null;
+            for (const auto& info : unitInfos) {
+                if (info.team == bc.teamId) continue;
+                float d = glm::length(info.pos - tf.position);
+                if (d < bestDist) { bestDist = d; bestTarget = info.e; }
+            }
+            if (bestTarget == entt::null) continue;
+
+            // Fire
+            cc.attackCooldown = cc.attackRate;
+            auto* thc = ctx.serverRegistry.try_get<HealthComponent>(bestTarget);
+            if (!thc || thc->dead) continue;
+
+            thc->hp -= cc.attackDamage;
+            spdlog::debug("Turret {} fires at unit {} for {:.0f}dmg (hp left={:.0f})",
+                          (uint32_t)e, (uint32_t)bestTarget, cc.attackDamage, thc->hp);
+
+            auto* tnc = ctx.serverRegistry.try_get<NetworkedComponent>(bestTarget);
+            if (tnc) {
+                UnitHpUpdatePacket hp_pkt;
+                hp_pkt.netId = tnc->netId;
+                hp_pkt.hp    = thc->hp;
+                ctx.network.BroadcastToAll(hp_pkt);
+            }
+
+            if (thc->hp <= 0.f) {
+                thc->dead = true;
+                uint32_t dnetId = tnc ? tnc->netId : 0;
+                toKill.push_back({bestTarget, dnetId, bc.teamId});
+            }
+        }
+    }
+
     // Process kills
     for (auto& kr : toKill) {
         UpgradeSystem::AddKill(kr.killerTeam);
@@ -6298,6 +6545,46 @@ void GameScene::HandleTerritorySnapshot(const TerritorySnapshotPacket& pkt)
         cz.center          = glm::vec3{src.centerX, src.centerY, src.centerZ};
         m_ClientTerritories.push_back(cz);
     }
+}
+
+// ---------------------------------------------------------------------------
+// SpawnCollector
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Spawns a regular unit and promotes it to a resource collector.
+ *
+ * Internally calls SpawnUnit (which broadcasts UnitSpawnedPacket), then adds
+ * CollectorComponent and a carry ResourceInventory to the server-side entity.
+ * The ResourceSystem will then autonomously seek nearby resources and deposit
+ * them at the team's Main building.
+ */
+void GameScene::SpawnCollector(SceneContext& ctx, uint32_t teamId, glm::vec3 pos)
+{
+    if (!ctx.network.IsHosting()) return;
+
+    // Look up this team's BugClass so SpawnUnit can derive correct unit stats
+    BugClass bc = BugClass::None;
+    auto pView = ctx.serverRegistry.view<PlayerComponent>();
+    for (auto pe : pView) {
+        const auto& pc = pView.get<PlayerComponent>(pe);
+        if (pc.playerId == teamId) { bc = pc.bugClass; break; }
+    }
+
+    // Capture the next netId before SpawnUnit increments it
+    uint32_t unitNetId = m_NextNetId;
+    SpawnUnit(ctx, teamId, pos, bc);
+
+    // Promote the new entity to a collector on the server
+    auto it = m_ServerNetMap.find(unitNetId);
+    if (it != m_ServerNetMap.end()) {
+        entt::entity ce = it->second;
+        ctx.serverRegistry.emplace<CollectorComponent>(ce);
+        // Give the unit its own carry inventory (separate from the base stockpile)
+        ctx.serverRegistry.emplace_or_replace<ResourceInventory>(ce);
+    }
+
+    spdlog::info("GameScene: spawned collector netId={} team={}", unitNetId, teamId);
 }
 
 void GameScene::HandleFogSnapshot(const FogSnapshotPacket& pkt)
