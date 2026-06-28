@@ -2629,7 +2629,7 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
             toggleAutoAttack();
 
         // S: stop / unassign selected workers (WORKER_ASSIGN with resourceNetId=0).
-        if ((ImGui::IsKeyPressed(ImGuiKey_S) || Input::IsKeyPressed(SDLK_S)) && !m_SelectedUnits.empty()) {
+        if ((ImGui::IsKeyPressed(ImGuiKey_S, false) || Input::IsKeyPressed(SDLK_S)) && !m_SelectedUnits.empty()) {
             for (uint32_t wNetId : m_SelectedUnits) {
                 auto cit = m_ClientNetMap.find(wNetId);
                 if (cit == m_ClientNetMap.end()) continue;
@@ -3155,6 +3155,7 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
             if (anyChanged) {
                 m_ScatterBatchesDirty = true;
                 m_MapTextureDirty     = true;
+                m_FogTextureDirty     = true;
             }
         }
         TerritorySystem::Update(ctx.serverRegistry, dt);
@@ -3776,6 +3777,7 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
             if (m_ClientFog.ApplyDelta(pkt->cells, pkt->count)) {
                 m_ScatterBatchesDirty = true;
                 m_MapTextureDirty     = true;
+                m_FogTextureDirty     = true;
             }
         }
     }
@@ -3786,6 +3788,7 @@ void GameScene::PollServerPackets(SceneContext& ctx) {
             HandleFogSnapshot(*pkt);
             m_ScatterBatchesDirty = true;
             m_MapTextureDirty     = true;
+            m_FogTextureDirty     = true;
         }
     }
 
@@ -4078,6 +4081,30 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
     pos.x += spawnOffset(spawnRng);
     pos.z += spawnOffset(spawnRng);
 
+    // Snap to nearest walkable tile if spawn lands on impassable terrain (cliff/water).
+    if (!IsFlying(bc, tier)) {
+        bool isCl = IsClimber(bc);
+        if (!IsWalkableAt(m_World, pos.x, pos.z, -1, false, isCl)) {
+            int sx, sz;
+            m_World.WorldToTile(pos.x, pos.z, sx, sz);
+            const int gsize = m_World.GetGridSize();
+            bool found = false;
+            for (int r = 1; r <= 10 && !found; ++r) {
+                for (int dz = -r; dz <= r && !found; ++dz) {
+                    for (int dx = -r; dx <= r && !found; ++dx) {
+                        if (std::max(std::abs(dx), std::abs(dz)) != r) continue;
+                        int cx = sx + dx, cz = sz + dz;
+                        if (cx < 0 || cx >= gsize || cz < 0 || cz >= gsize) continue;
+                        glm::vec2 wxz = m_World.TileToWorld(cx, cz);
+                        if (IsWalkableAt(m_World, wxz.x, wxz.y, -1, false, isCl)) {
+                            pos.x = wxz.x; pos.z = wxz.y; found = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Position: ground units sit on terrain, flying units hover above it.
     pos.y = GroundHeightAt(m_World, pos.x, pos.z);
     if (IsFlying(bc, tier))
@@ -4299,6 +4326,30 @@ void GameScene::SpawnUnit(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, Bug
 void GameScene::SpawnWorker(SceneContext& ctx, uint32_t teamId, glm::vec3 pos, BugClass bc, float hp)
 {
     if (!ctx.network.IsHosting()) return;
+
+    // Snap to nearest walkable tile if spawn lands on impassable terrain (cliff/water).
+    if (!IsFlying(bc)) {
+        bool isCl = IsClimber(bc);
+        if (!IsWalkableAt(m_World, pos.x, pos.z, -1, false, isCl)) {
+            int sx, sz;
+            m_World.WorldToTile(pos.x, pos.z, sx, sz);
+            const int gsize = m_World.GetGridSize();
+            bool found = false;
+            for (int r = 1; r <= 10 && !found; ++r) {
+                for (int dz = -r; dz <= r && !found; ++dz) {
+                    for (int dx = -r; dx <= r && !found; ++dx) {
+                        if (std::max(std::abs(dx), std::abs(dz)) != r) continue;
+                        int cx = sx + dx, cz = sz + dz;
+                        if (cx < 0 || cx >= gsize || cz < 0 || cz >= gsize) continue;
+                        glm::vec2 wxz = m_World.TileToWorld(cx, cz);
+                        if (IsWalkableAt(m_World, wxz.x, wxz.y, -1, false, isCl)) {
+                            pos.x = wxz.x; pos.z = wxz.y; found = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     pos.y = GroundHeightAt(m_World, pos.x, pos.z);
     if (IsFlying(bc)) pos.y += 4.f;
@@ -4790,7 +4841,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
                 // Face movement or attack target
                 if (glm::length(dir) > 0.0001f) {
-                    float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                    float targetYaw = glm::degrees(std::atan2(dir.x, -dir.y));
                     float currentYaw = tf.rotation.y;
                     float diff = targetYaw - currentYaw;
                     while (diff < -180.f) diff += 360.f;
@@ -4801,7 +4852,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                     if (ttf) {
                         glm::vec2 toTarget(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z);
                         if (glm::length(toTarget) > 0.0001f) {
-                            float targetYaw = glm::degrees(std::atan2(toTarget.x, toTarget.y));
+                            float targetYaw = glm::degrees(std::atan2(toTarget.x, -toTarget.y));
                             float currentYaw = tf.rotation.y;
                             float diff = targetYaw - currentYaw;
                             while (diff < -180.f) diff += 360.f;
@@ -4849,7 +4900,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
                 // Face movement or attack target
                 if (glm::length(dir) > 0.0001f) {
-                    float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                    float targetYaw = glm::degrees(std::atan2(dir.x, -dir.y));
                     float currentYaw = tf.rotation.y;
                     float diff = targetYaw - currentYaw;
                     while (diff < -180.f) diff += 360.f;
@@ -4866,7 +4917,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                     if (ttf) {
                         glm::vec2 toTarget(ttf->position.x - tf.position.x, ttf->position.z - tf.position.z);
                         if (glm::length(toTarget) > 0.0001f) {
-                            float targetYaw = glm::degrees(std::atan2(toTarget.x, toTarget.y));
+                            float targetYaw = glm::degrees(std::atan2(toTarget.x, -toTarget.y));
                             float currentYaw = tf.rotation.y;
                             float diff = targetYaw - currentYaw;
                             while (diff < -180.f) diff += 360.f;
@@ -4974,7 +5025,9 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
             path.waypoints   = std::move(result.waypoints);
             path.partialPath = !result.goalReached;
-            path.current     = 0;
+            // Skip waypoint[0]: it's the tile the unit is already standing on.
+            // Starting at index 0 would make the unit step back to the tile centre first.
+            path.current     = (path.waypoints.size() > 1) ? 1 : 0;
             path.dirty       = false;
             path.recalcTimer = 0.f;
 
@@ -5074,6 +5127,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
         glm::vec2 dir = distToWp > 0.001f ? toWp / distToWp : glm::vec2(0.f);
         glm::vec2 step = dir * (currentSpeed * dt);
+        glm::vec2 pureStep = step; // save before repulsion blend
 
         // Blend the waypoint direction with unit‑unit repulsion so
         // units spread apart.
@@ -5135,7 +5189,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             float distToDest = glm::length(toDest);
             if (distToDest > 0.15f) {
                 glm::vec2 destDir = toDest / distToDest;
-                float targetYaw = glm::degrees(std::atan2(destDir.x, destDir.y));
+                float targetYaw = glm::degrees(std::atan2(destDir.x, -destDir.y));
                 float currentYaw = tf.rotation.y;
                 float diff = targetYaw - currentYaw;
                 while (diff < -180.f) diff += 360.f;
@@ -5148,11 +5202,15 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             int currentTier = (int)m_World.GetTile(curTx, curTz).tier;
 
             // Slide along X / Z if the full step is blocked.
+            // If repulsion deflected into terrain, fall back to the pure waypoint direction.
             glm::vec2 chosen{0.f};
-            if      (canStand(curXZ + step,                       currentTier, isClimber)) chosen = step;
-            else if (canStand(curXZ + glm::vec2(step.x, 0.f),     currentTier, isClimber)) chosen = {step.x, 0.f};
-            else if (canStand(curXZ + glm::vec2(0.f,    step.y),  currentTier, isClimber)) chosen = {0.f,    step.y};
-            else                                                                           chosen = {0.f, 0.f};
+            if      (canStand(curXZ + step,                        currentTier, isClimber)) chosen = step;
+            else if (canStand(curXZ + glm::vec2(step.x, 0.f),      currentTier, isClimber)) chosen = {step.x, 0.f};
+            else if (canStand(curXZ + glm::vec2(0.f,    step.y),   currentTier, isClimber)) chosen = {0.f,    step.y};
+            else if (canStand(curXZ + pureStep,                     currentTier, isClimber)) chosen = pureStep;
+            else if (canStand(curXZ + glm::vec2(pureStep.x, 0.f),  currentTier, isClimber)) chosen = {pureStep.x, 0.f};
+            else if (canStand(curXZ + glm::vec2(0.f, pureStep.y),  currentTier, isClimber)) chosen = {0.f, pureStep.y};
+            else                                                                            chosen = {0.f, 0.f};
 
             auto* physComp = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e);
             bool hasPhysics = (physComp && physComp->handle.IsValid() && ctx.physics);
@@ -5185,7 +5243,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
             // Ground units face the current waypoint direction smoothly.
             if (distToWp > 0.15f) {
-                float targetYaw = glm::degrees(std::atan2(dir.x, dir.y));
+                float targetYaw = glm::degrees(std::atan2(dir.x, -dir.y));
                 float currentYaw = tf.rotation.y;
                 float diff = targetYaw - currentYaw;
                 while (diff < -180.f) diff += 360.f;

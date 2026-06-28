@@ -376,7 +376,7 @@ private:
 
     /// Accumulator for fog delta broadcasting (now used for FOG_DELTA packets).
     float m_FogSnapAccum = 0.f;
-    static constexpr float FOG_SNAP_RATE = 1.f / 4.f; ///< Fog delta rate (4 Hz).
+    static constexpr float FOG_SNAP_RATE = 1.f / 10.f; ///< Fog delta rate (10 Hz).
 
     /// Accumulator for inventory snapshot broadcasting (2 Hz, per-base stockpile).
     float m_InventorySnapAccum = 0.f;
@@ -469,7 +469,7 @@ private:
     bool m_ScatterBatchesDirty = false;
     /// Separate timer for scatter batch rebuilds (avoids sharing with fog cover).
     float        m_ScatterBatchTimer = 0.f;
-    static constexpr float SCATTER_BATCH_REBUILD_DELAY = 0.4f; ///< Throttle: rebuild scatter batches after fog change.
+    static constexpr float SCATTER_BATCH_REBUILD_DELAY = 2.0f; ///< Throttle: rebuild scatter batches after fog change.
 
     // --- Map Texture (top-down view of the world from generator data) ---
     std::unique_ptr<class Texture> m_MapTexture;
