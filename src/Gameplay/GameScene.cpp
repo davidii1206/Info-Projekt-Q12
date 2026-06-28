@@ -562,22 +562,9 @@ void GameScene::OnEnter(SceneContext& ctx) {
         spdlog::info("GameScene: skipping terrain MeshShape build (too expensive on chunked terrain)");
         (void)terrainMesh;
 
-        // Initialize resource system. The default placeholder spawn points
-        // would all cluster around the origin; instead, procedurally scatter
-        // ~240 nodes (Holz-heavy) across the full map extent so workers have
-        // somewhere to walk to from their respective MainBase.
-        m_ResourceManager.GenerateForWorld(m_World, m_WorldSeed);
+        // Initialize resource system
+        m_ResourceManager.Init();
         m_ResourceManager.SpawnPermanentResources(ctx.serverRegistry);
-
-        // Snap every freshly-spawned resource node onto the terrain surface
-        // (the generator left Y=0 since it doesn't know the WorldManager).
-        {
-            auto rView = ctx.serverRegistry.view<TransformComponent, ResourceComponent>();
-            for (auto e : rView) {
-                auto& tf = rView.get<TransformComponent>(e);
-                tf.position.y = GroundHeightAt(m_World, tf.position.x, tf.position.z);
-            }
-        }
 
         // Assign netIds to all permanent resources and broadcast to clients
         SyncResourceSpawns(ctx);
