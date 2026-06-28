@@ -255,7 +255,9 @@ struct PathComponent {
     int                    current = 0;  ///< Index of the next waypoint.
     bool                   dirty   = false; ///< Set to true when the path needs recalculation.
     float                  recalcTimer = 0.f; ///< Accumulator for periodic recalc.
-    static constexpr float RECALC_INTERVAL = 0.5f; ///< Recalculate every 0.5s.
+    bool                   partialPath = false; ///< True when A* returned a partial path (goal unreachable).
+    static constexpr float RECALC_INTERVAL        = 5.0f; ///< Normal recalc interval (seconds).
+    static constexpr float RECALC_INTERVAL_PARTIAL = 3.0f; ///< Slower recalc when goal was unreachable.
 };
 
 /**
@@ -328,20 +330,21 @@ struct ConstructionComponent {
  * units over time.
  */
 struct BarracksComponent {
-    /// Units queued for production (each entry = unit type / tier).
+    /// Units queued for production (each entry = unit type / tier / role).
     struct SpawnJob {
-        uint8_t  tier    = 1;   ///< 1–5 unit tier
-        float    timer   = 0.f; ///< Remaining production time
-        float    total   = 5.f; ///< Total time for this job
+        uint8_t  tier    = 1;                  ///< 1–5 unit tier
+        float    timer   = 0.f;                ///< Remaining production time
+        float    total   = 5.f;                ///< Total time for this job
+        UnitRole role    = UnitRole::Combat;   ///< Combat unit or Worker
     };
 
     std::vector<SpawnJob> queue;        ///< FIFO spawn queue
     float                 productionSpeed = 1.f; ///< Multiplier from tribe bonuses
     uint32_t              maxQueueSize    = 5;   ///< Max queued spawns
-    /// Set by BuildingSystem::UpdateBarracks when a job's timer elapses;
-    /// drained by GameScene each tick to actually spawn the unit at the
-    /// barracks position (and broadcast it).
-    int                   completedSpawns = 0;
+    /// Mailbox counters set by BuildingSystem::UpdateBarracks when jobs finish;
+    /// drained by GameScene each tick to create + broadcast the unit entities.
+    int                   completedSpawns       = 0; ///< Combat units ready to spawn
+    int                   completedWorkerSpawns = 0; ///< Workers ready to spawn
 };
 
 /**

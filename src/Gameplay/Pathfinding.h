@@ -6,31 +6,40 @@
 
 namespace Pathfinding {
 
-    /// Maximum tiles A* will search before giving up.
-    constexpr int MAX_SEARCH_TILES = 50000;
+    /// Maximum tiles A* will search — scales with grid size at call time.
+    /// Use the inline helper below; this constant is the per-tile fallback cap.
+    constexpr int MAX_SEARCH_TILES = 50000; // kept for ABI, prefer dynamic budget
+
+    /// Result of a FindPath call.
+    struct PathResult {
+        std::vector<glm::vec2> waypoints; ///< World XZ tile centres (empty = no path).
+        bool goalReached = false;          ///< True only when A* reached the exact destination.
+    };
 
     /// Finds a path from start to end on the terrain tile grid.
-    /// @param world  Terrain data (tile grid, tiers, surfaces).
-    /// @param start  World XZ start position.
-    /// @param end    World XZ destination.
-    /// @param fog    Optional fog grid — undiscovered tiles are blocked.
-    /// @param maxTierDiff  Maximum tier climb allowed per step (0 = same tier only).
-    /// @param occupiedTiles  Optional per-tile bool array (gridSize², row-major).
-    ///        Tiles marked true are treated as blocked (e.g. by buildings).
-    /// @param isFlying  If true, the unit ignores terrain tier differences, water, and cliffs.
-    /// @param isClimber If true, the unit can climb cliff faces directly
-    ///                  (skips both the tier-difference and cliff-surface checks)
-    ///                  but still respects water and occupied tiles.
-    /// @return Waypoints in world XZ (tile centres), empty if no path found.
-    std::vector<glm::vec2> FindPath(
+    /// Fog-of-war is intentionally NOT a constraint — fog affects visibility,
+    /// not terrain traversability. Only hard terrain (water, cliffs, buildings)
+    /// and tier differences block movement.
+    /// @param world         Terrain data (tile grid, tiers, surfaces).
+    /// @param start         World XZ start position.
+    /// @param end           World XZ destination.
+    /// @param maxTierDiff   Maximum tier climb allowed per step (1 = one tier at a time).
+    /// @param occupiedTiles Optional per-tile bool array (gridSize², row-major).
+    ///                      Tiles marked true are treated as blocked (buildings).
+    /// @param isFlying      Ignores terrain tier differences, water, and cliffs.
+    /// @param isClimber     Can climb cliff faces (skips cliff and tier-diff checks).
+    /// @return PathResult with waypoints and a flag indicating whether the goal was reached.
+    /// @param warnOnLimit  Emit a log message when the search budget is exhausted.
+    ///                     Pass false for periodic recalcs to avoid repeated spam.
+    PathResult FindPath(
         const WorldManager& world,
         glm::vec2 start,
         glm::vec2 end,
-        const FogGrid* fog = nullptr,
-        int maxTierDiff = 0,
+        int maxTierDiff = 1,
         const std::vector<bool>* occupiedTiles = nullptr,
         bool isFlying = false,
-        bool isClimber = false);
+        bool isClimber = false,
+        bool warnOnLimit = true);
 
     /// Checks whether a tile at (tx, tz) is walkable.
     bool IsTileWalkable(

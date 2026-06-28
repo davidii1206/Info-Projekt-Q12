@@ -161,9 +161,14 @@ void UpdateBarracks(entt::registry& registry, float dt) {
             // Mark the job as completed so the GameScene tick can pick it up
             // and actually create + broadcast the unit entity (BuildingSystem
             // doesn't know about networking).
-            spdlog::debug("[BuildingSystem] Barracks completed spawn job (tier {})", job.tier);
+            spdlog::debug("[BuildingSystem] Barracks completed spawn job (tier {}, role {})",
+                          job.tier, static_cast<int>(job.role));
+            UnitRole completedRole = job.role;
             barracks.queue.erase(barracks.queue.begin());
-            ++barracks.completedSpawns;
+            if (completedRole == UnitRole::Worker)
+                ++barracks.completedWorkerSpawns;
+            else
+                ++barracks.completedSpawns;
         }
     }
 }

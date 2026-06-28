@@ -2487,16 +2487,6 @@ void GameScene::UIUpdate(SceneContext& ctx, float dt) {
                     }
                     if (!canUnit) ImGui::EndDisabled();
                     ImGui::SameLine();
-                    // Sammler: 5 Pilze + 3 Samen
-                    ResourceInventory collCost{}; collCost.pilze = 5; collCost.samen = 3;
-                    bool canColl = !inv || CanAfford(*inv, collCost);
-                    if (!canColl) ImGui::BeginDisabled();
-                    if (ImGui::Button("Sammler (5P+3S)")) {
-                        if (inv) Deduct(*inv, collCost);
-                        SpawnCollector(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f));
-                    }
-                    if (!canColl) ImGui::EndDisabled();
-                    ImGui::SameLine();
                     if (ImGui::Button("Sofort (Cheat)")) {
                         SpawnUnit(ctx, bc.teamId, tf.position + glm::vec3(2.f, 0.f, 0.f), bc.ownerClass);
                     }
@@ -3080,19 +3070,37 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                              teamId, kWorkerCost, ResourceTypeName(sig));
                 continue;
             }
+            // Route through the Main building's worker queue — resources are
+            // spent on buildings/upgrades only; buildings then spawn units.
+            entt::entity mainBuilding = entt::null;
+            {
+                auto mainView = ctx.serverRegistry.view<BuildingComponent, BarracksComponent>();
+                for (auto me : mainView) {
+                    auto& mbc = mainView.get<BuildingComponent>(me);
+                    if (mbc.teamId == teamId && mbc.type == BuildingType::Main && !mbc.destroyed) {
+                        mainBuilding = me;
+                        break;
+                    }
+                }
+            }
+            if (mainBuilding == entt::null) {
+                spdlog::info("WORKER_BUY: team {} has no Main building", teamId);
+                continue;
+            }
+            auto& mainBarr = ctx.serverRegistry.get<BarracksComponent>(mainBuilding);
+            if (static_cast<uint32_t>(mainBarr.queue.size()) >= mainBarr.maxQueueSize) {
+                spdlog::info("WORKER_BUY: team {} Main building queue full", teamId);
+                continue;
+            }
             baseInv.Add(sig, -kWorkerCost);
-
-            // Spawn near commander.
-            auto& playerTf = ctx.serverRegistry.get<TransformComponent>(playerEnt);
-            float ang = (float)(workerCount % 8) * (6.2831853f / 8.f);
-            glm::vec3 spawnPos{
-                playerTf.position.x + std::cos(ang) * 4.f,
-                0.f,
-                playerTf.position.z + std::sin(ang) * 4.f
-            };
-            SpawnWorker(ctx, teamId, spawnPos, bc);
-            spdlog::info("WORKER_BUY: team {} bought worker ({}/{}) cost 5 {}",
-                         teamId, workerCount + 1, kWorkerCap, ResourceTypeName(sig));
+            BarracksComponent::SpawnJob wj;
+            wj.tier  = 1;
+            wj.total = 8.f;
+            wj.timer = wj.total;
+            wj.role  = UnitRole::Worker;
+            mainBarr.queue.push_back(wj);
+            spdlog::info("WORKER_BUY: team {} queued worker in Main building (queue {}/{}) cost 5 {}",
+                         teamId, mainBarr.queue.size(), mainBarr.maxQueueSize, ResourceTypeName(sig));
         }
     }
 
@@ -3118,16 +3126,23 @@ void GameScene::FixedUpdate(SceneContext& ctx, float dt) {
                                               BarracksComponent>();
             for (auto e : bv) {
                 auto& barr = bv.get<BarracksComponent>(e);
-                if (barr.completedSpawns <= 0) continue;
+                if (barr.completedSpawns <= 0 && barr.completedWorkerSpawns <= 0) continue;
                 const auto& tf = bv.get<TransformComponent>(e);
                 const auto& bc = bv.get<BuildingComponent>(e);
+                // Combat units — spawned by Barracks buildings.
                 for (int i = 0; i < barr.completedSpawns; ++i) {
-                    // Spawn just in front of the barracks (offset on X) so units
-                    // don't pile up exactly on top of the building.
                     glm::vec3 p = tf.position + glm::vec3((float)i * 1.4f + 2.f, 0.f, 0.f);
                     SpawnUnit(ctx, bc.teamId, p, bc.ownerClass);
                 }
                 barr.completedSpawns = 0;
+                // Workers — spawned by the Main building's worker queue.
+                for (int i = 0; i < barr.completedWorkerSpawns; ++i) {
+                    float ang = static_cast<float>(i) * 0.7f;
+                    glm::vec3 p = tf.position + glm::vec3(
+                        std::cos(ang) * 3.f, 0.f, std::sin(ang) * 3.f);
+                    SpawnWorker(ctx, bc.teamId, p, bc.ownerClass);
+                }
+                barr.completedWorkerSpawns = 0;
             }
         }
         // Update fog for each team separately (units reveal only for their own team)
@@ -4407,6 +4422,11 @@ entt::entity GameScene::SpawnBuilding(SceneContext& ctx, BuildingType type,
             // Starting stockpile: 20 Holz + 20 of the team's signature resource.
             inv.holz = 20;
             inv.Add(GetSignatureResource(ownerClass), 20);
+            // Main building queues worker production (max 3 slots).
+            {
+                auto& workerQueue = ctx.serverRegistry.emplace<BarracksComponent>(e);
+                workerQueue.maxQueueSize = 3;
+            }
             break;
         }
         case BuildingType::Storage: {
@@ -4914,29 +4934,17 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
 
         // When a new order arrives (destination changed), compute a fresh path.
         if (path.waypoints.empty() || path.dirty) {
-            // Use the unit's team fog grid for pathfinding
-            auto fit = m_TeamFogs.find(uc.teamId);
-            const FogGrid* fog = (fit != m_TeamFogs.end() && fit->second.IsInitialised())
-                                 ? &fit->second : nullptr;
             const glm::vec2 startXZ(tf.position.x, tf.position.z);
             glm::vec2       goalXZ (mo.destination.x, mo.destination.z);
 
-            path.waypoints = Pathfinding::FindPath(
-                m_World, startXZ, goalXZ, fog, 1, &occupiedTiles, isFlying, isClimber);
+            // Pathfinding ignores fog-of-war: fog is a visibility constraint,
+            // not a terrain constraint. Units may walk through uncharted tiles.
+            auto result = Pathfinding::FindPath(
+                m_World, startXZ, goalXZ, 1, &occupiedTiles, isFlying, isClimber);
 
-            // Fallback 1: drop the fog constraint. Players often click into
-            // uncharted territory; the path is geometrically valid, fog just
-            // hides it from them. Let the unit walk into the unknown.
-            if (path.waypoints.empty() && fog != nullptr) {
-                path.waypoints = Pathfinding::FindPath(
-                    m_World, startXZ, goalXZ, nullptr, 1, &occupiedTiles, isFlying, isClimber);
-            }
-
-            // Fallback 2: the destination tile itself is unreachable (water,
-            // cliff face, building footprint). Snap to the nearest walkable
-            // tile within ~12 tiles and retry. Spiral outward by Chebyshev
-            // distance so the closest valid spot is found first.
-            if (path.waypoints.empty()) {
+            // If the destination tile itself is unreachable (water, cliff, building),
+            // spiral outward up to 12 tiles to find the nearest walkable neighbour.
+            if (result.waypoints.empty()) {
                 int gx, gz;
                 m_World.WorldToTile(goalXZ.x, goalXZ.y, gx, gz);
                 const int kMax = 12;
@@ -4950,7 +4958,7 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                             if (cx < 0 || cx >= gs || cz < 0 || cz >= gs) continue;
                             if (occupiedTiles[(size_t)cz * gs + (size_t)cx]) continue;
                             glm::vec2 wxz = m_World.TileToWorld(cx, cz);
-                            if (IsWalkableAt(m_World, wxz.x, wxz.y, /*currentTier=*/-1, isFlying, isClimber)) {
+                            if (IsWalkableAt(m_World, wxz.x, wxz.y, -1, isFlying, isClimber)) {
                                 snapped = wxz;
                                 found = true;
                             }
@@ -4959,13 +4967,15 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
                 }
                 if (found) {
                     mo.destination = glm::vec3(snapped.x, mo.destination.y, snapped.y);
-                    path.waypoints = Pathfinding::FindPath(
-                        m_World, startXZ, snapped, nullptr, 1, &occupiedTiles, isFlying, isClimber);
+                    result = Pathfinding::FindPath(
+                        m_World, startXZ, snapped, 1, &occupiedTiles, isFlying, isClimber);
                 }
             }
 
-            path.current   = 0;
-            path.dirty     = false;
+            path.waypoints   = std::move(result.waypoints);
+            path.partialPath = !result.goalReached;
+            path.current     = 0;
+            path.dirty       = false;
             path.recalcTimer = 0.f;
 
             if (path.waypoints.empty()) {
@@ -4980,31 +4990,37 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
             }
         }
 
-        // Periodic recalculation so the path adapts to newly discovered fog
-        // tiles or changes in building placement.
-        path.recalcTimer += dt;
-        if (path.recalcTimer >= PathComponent::RECALC_INTERVAL) {
-            auto fit = m_TeamFogs.find(uc.teamId);
-            const FogGrid* fog = (fit != m_TeamFogs.end() && fit->second.IsInitialised())
-                                 ? &fit->second : nullptr;
-            path.waypoints = Pathfinding::FindPath(
-                m_World,
-                glm::vec2(tf.position.x, tf.position.z),
-                glm::vec2(mo.destination.x, mo.destination.z),
-                fog,
-                1,
-                &occupiedTiles,
-                isFlying,
-                isClimber);
-            path.current   = 0;
-            path.recalcTimer = 0.f;
-            if (path.waypoints.empty()) {
-                mo.active   = false;
-                mv.velocity = {0.f, 0.f, 0.f};
-                if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
-                    if (phys->handle.IsValid() && ctx.physics)
-                        ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
-                continue;
+        // Periodic recalculation so the path adapts to building placement changes.
+        // Partial paths don't recalc on a timer — they retry when the unit has
+        // walked to the end of the partial path (see waypoint-advance block below).
+        if (!path.partialPath) {
+            path.recalcTimer += dt;
+            if (path.recalcTimer >= PathComponent::RECALC_INTERVAL) {
+                // Silent recalc — no warning if the goal is still unreachable.
+                auto result = Pathfinding::FindPath(
+                    m_World,
+                    glm::vec2(tf.position.x, tf.position.z),
+                    glm::vec2(mo.destination.x, mo.destination.z),
+                    1,
+                    &occupiedTiles,
+                    isFlying,
+                    isClimber,
+                    /*warnOnLimit=*/false);
+                path.waypoints   = std::move(result.waypoints);
+                path.partialPath = !result.goalReached;
+                // Skip waypoint[0]: it's the tile the unit is already standing on.
+                // Setting current=0 here would make the unit step back to the tile
+                // centre before continuing forward.
+                path.current     = (path.waypoints.size() > 1) ? 1 : 0;
+                path.recalcTimer = 0.f;
+                if (path.waypoints.empty()) {
+                    mo.active   = false;
+                    mv.velocity = {0.f, 0.f, 0.f};
+                    if (auto* phys = ctx.serverRegistry.try_get<PhysicsBodyComponent>(e))
+                        if (phys->handle.IsValid() && ctx.physics)
+                            ctx.physics->SetLinearVelocity(phys->handle, JPH::Vec3::sZero());
+                    continue;
+                }
             }
         }
 
@@ -5017,6 +5033,26 @@ void GameScene::UpdateUnitMovement(SceneContext& ctx, float dt)
         if (distToWp < 0.5f) {
             ++path.current;
             if (path.current >= (int)path.waypoints.size()) {
+                if (path.partialPath) {
+                    // Partial path exhausted — retry from current position.
+                    // The destination may now be reachable (obstacles removed) or
+                    // we may be close enough for a shorter search to succeed.
+                    auto result = Pathfinding::FindPath(
+                        m_World,
+                        glm::vec2(tf.position.x, tf.position.z),
+                        glm::vec2(mo.destination.x, mo.destination.z),
+                        1,
+                        &occupiedTiles,
+                        isFlying,
+                        isClimber,
+                        /*warnOnLimit=*/false);
+                    path.waypoints   = std::move(result.waypoints);
+                    path.partialPath = !result.goalReached;
+                    path.current     = (path.waypoints.size() > 1) ? 1 : 0;
+                    path.recalcTimer = 0.f;
+                    if (!path.waypoints.empty()) continue;
+                    // Still no path — stop the unit.
+                }
                 // All waypoints reached — order complete.
                 mo.active   = false;
                 mv.velocity = {0.f, 0.f, 0.f};
